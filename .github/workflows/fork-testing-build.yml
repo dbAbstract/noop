@@ -302,8 +302,41 @@ jobs:
           # provisions the shared container instead of treating both executables as entitlement-free.
           Tools/prepare-ios-sideload-app.sh "$APP"
           rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
-          zip -qr "NOOP-ios-unsigned-v${VER}.ipa" Payload
-          gh release upload "${{ needs.meta.outputs.tag }}" "NOOP-ios-unsigned-v${VER}.ipa" --repo "$GITHUB_REPOSITORY" --clobber
+
+          # FORK-LOCAL: the BUILD NUMBER goes in the filename, so every build gets its own URL.
+          #
+          # It used to carry only MARKETING_VERSION, which does not move between builds, so each build
+          # overwrote the same asset URL while the source JSON's `buildVersion` kept changing. SideStore
+          # caches the JSON (as does raw.githubusercontent, ~5 min), so an install fired against a stale
+          # copy downloaded a file whose contents had moved underneath it and failed the version check:
+          # "expected 430, got 1003". Rare with hand-dispatched builds; constant once a push triggers one.
+          #
+          # With the build number in the name, a stale JSON resolves to a URL that still serves exactly
+          # the build it declared. The worst case becomes installing a slightly older build, which is
+          # correct behaviour rather than a failure.
+          #
+          # Read from the BUILT Info.plist rather than recomputing from the run number: that value is set
+          # in the previous step and reading it back is what makes the filename, the JSON and the binary
+          # provably the same build instead of three independent derivations.
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist")"
+          IPA="NOOP-ios-unsigned-v${VER}-${BUILD}.ipa"
+          zip -qr "$IPA" Payload
+          gh release upload "${{ needs.meta.outputs.tag }}" "$IPA" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "IPA_NAME=$IPA" >> "$GITHUB_ENV"
+
+          # Unique names mean assets accumulate on the rolling release, which the old overwrite-in-place
+          # naming never had to think about. Keep the newest few so a phone pinned to a slightly stale
+          # JSON can still install, and drop the rest.
+          # while-read rather than `mapfile`: the macOS runner's /bin/bash is 3.2, which has no mapfile,
+          # and this step would fail only in CI after everything expensive had already succeeded.
+          gh release view "${{ needs.meta.outputs.tag }}" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets | map(select(.name | startswith("NOOP-ios-unsigned-")))
+                                | sort_by(.createdAt) | reverse | .[5:] | .[].name' \
+          | while IFS= read -r a; do
+              [ -n "$a" ] || continue
+              echo "pruning old asset: $a"
+              gh release delete-asset "${{ needs.meta.outputs.tag }}" "$a" --repo "$GITHUB_REPOSITORY" --yes || true
+            done
 
       # FORK-LOCAL: point the SideStore source at the build that was just published, and commit it back to
       # the serve branch. Without this the loop stops one step short — the IPA is new, the JSON still
@@ -320,7 +353,9 @@ jobs:
           TAG: ${{ needs.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          IPA="NOOP-ios-unsigned-v${VER}.ipa"
+          # Named by the packaging step above and handed over through the environment, so the JSON can
+          # only ever describe the artifact that was actually uploaded.
+          IPA="${IPA_NAME}"
           # Read the identity out of the ARTIFACT rather than recomputing it. The build number is derived
           # from the run number a few steps above, and a second derivation here would be a second source
           # of truth for the same value — free to disagree the moment either changes.
