@@ -54,6 +54,29 @@ jobs:
           SHA="${GITHUB_SHA:0:7}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+          # FORK-LOCAL: on an AUTO build, keep the existing release standing.
+          #
+          # The recreate below deletes the release at the START of a run, and the ipa is only uploaded at
+          # the END — a ~15 minute window in which testing-latest has NO assets. SideStore reads the
+          # download URL from altstore-fork.json, so during that window an install fails with
+          # "NOOP-ios-unsigned-v<ver>.ipa doesn't exist". That was rare and self-inflicted while builds
+          # were dispatched by hand; once a push to `fork` started triggering them it became a guaranteed
+          # outage on every merge, at exactly the moment someone is most likely to reach for the phone.
+          #
+          # The upload already passes --clobber, so overwriting in place needs no delete. What the delete
+          # buys is removing assets whose FILENAME carries an old MARKETING_VERSION, which --clobber
+          # cannot replace because the name no longer matches. That is a real but occasional concern, so
+          # it stays on the manual path: a dispatch still gets the clean slate, and a version bump is a
+          # deliberate act anyway.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "auto build: keeping the existing $TAG release, assets are replaced in place"
+              exit 0
+            fi
+            echo "auto build: no $TAG release yet, creating one"
+          fi
+
           # ROLLING release: recreate the single tag so stale (incl. old-version) assets never linger —
           # one stable URL, always the newest build, zero cleanup. (To KEEP a build, cut a one-off tag.)
           #
@@ -242,6 +265,16 @@ jobs:
         # downgrade against an already-installed one. The override is passed on the command line, which
         # applies it to every target in the build — so the app and its widget extension keep the MATCHING
         # CFBundleVersion iOS requires (see the CURRENT_PROJECT_VERSION note in project.yml).
+        #
+        # DEPLOYMENT_POSTPROCESSING=YES is what actually STRIPS the binary. The Release config already sets
+        # STRIP_INSTALLED_PRODUCT=YES and STRIP_STYLE=all, but neither does anything under a plain `build`
+        # action — stripping runs at INSTALL time, which is why an archive is stripped and this was not.
+        # Measured on build 430: 64.0 MB → 24.0 MB, symbols 167,590 → 4,326.
+        #
+        # That is 40 MB fewer pages for iOS to fault in and code-sign-validate on FIRST launch, which is
+        # the phase a sideloaded build is slowest in and the one an earlier SIGKILL landed in
+        # (dyld4::prepare). Symbols are not lost for debugging: DEBUG_INFORMATION_FORMAT is
+        # dwarf-with-dsym, so the .dSYM still carries them.
         run: |
           BUILD=$((1000 + GITHUB_RUN_NUMBER))
           echo "CFBundleVersion for this build: $BUILD"
@@ -249,6 +282,7 @@ jobs:
             -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             CURRENT_PROJECT_VERSION="$BUILD" \
+            DEPLOYMENT_POSTPROCESSING=YES \
             build
       - name: Package sideload .ipa (strip watch, preserve app/widget capabilities) + attach
         env:
