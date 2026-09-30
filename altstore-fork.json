@@ -1,7 +1,7 @@
 {
   "name": "NOOP (dbAbstract fork)",
   "identifier": "com.takienari.noop.altstore.fork",
-  "sourceURL": "https://raw.githubusercontent.com/dbAbstract/noop/food-log/altstore-fork.json",
+  "sourceURL": "https://raw.githubusercontent.com/dbAbstract/noop/fork/altstore-fork.json",
   "subtitle": "Personal fork builds — food log, strap-first calories.",
   "description": "A private AltStore / SideStore source for a personal fork of NOOP, the independent open-source WHOOP companion. Points at this fork's rolling `testing-latest` release, so each CI testing build appears here as an update.\n\nNOOP is not affiliated with WHOOP. It reads a strap you own, directly over Bluetooth, on your own device — no WHOOP app, no subscription, no cloud.",
   "iconURL": "https://github.com/ryanbr/noop/raw/main/Strand/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png",

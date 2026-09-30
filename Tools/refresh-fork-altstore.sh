@@ -16,6 +16,10 @@ set -euo pipefail
 
 REPO="${FORK_REPO:-dbAbstract/noop}"
 TAG="${FORK_TAG:-testing-latest}"
+# The branch the source JSON is SERVED from. `fork` is the long-lived integration branch, deliberately
+# not a feature branch: the URL is pasted into SideStore once and should outlive whatever is being worked
+# on. Only used to sanity-check that this file is being refreshed on the branch that actually serves it.
+SERVE_BRANCH="${FORK_SERVE_BRANCH:-fork}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/../altstore-fork.json"
 NOTES="${1:-}"
@@ -25,6 +29,15 @@ command -v jq >/dev/null || { echo "✗ jq is required (brew install jq)" >&2; e
 [ -f "$SRC" ] || { echo "✗ $SRC not found" >&2; exit 1; }
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+
+# Refreshing this file on a branch nobody serves produces a green run and a source that never changes,
+# which is indistinguishable from "no new build" on the phone. Warn rather than fail: refreshing it on a
+# feature branch before merging to the serve branch is a legitimate order of operations.
+CUR_BRANCH="$(git -C "$HERE/.." rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+if [ "$CUR_BRANCH" != "$SERVE_BRANCH" ]; then
+  echo "⚠ on branch '$CUR_BRANCH' but SideStore reads '$SERVE_BRANCH'." >&2
+  echo "  Merge this into $SERVE_BRANCH and push, or the phone will not see the change." >&2
+fi
 
 echo "→ downloading the $TAG IPA from $REPO"
 gh release download "$TAG" --repo "$REPO" --pattern '*.ipa' --dir "$TMP" --clobber

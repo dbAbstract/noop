@@ -201,11 +201,26 @@ jobs:
         # #53: build RELEASE, not Debug. A Debug build carries get-task-allow + debug artifacts that make a
         # re-signed sideload fail "integrity could not be verified" on modern iOS; Release (the correct config
         # for a distributed app) installs clean — confirmed by the reporter's own Release build.
-        run: >-
-          xcodebuild -scheme NOOPiOS -configuration Release -destination 'generic/platform=iOS'
-          -derivedDataPath build/dd
-          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
-          build
+        #
+        # FORK-LOCAL: CFBundleVersion comes from the CI run number rather than the committed
+        # CURRENT_PROJECT_VERSION. AltStore/SideStore decide whether an update exists purely from
+        # version + buildVersion, so a rebuild at the same number is invisible no matter what changed in
+        # the binary — and committing a bump per build means a commit per build AND a conflict whenever
+        # two feature branches bump the same line. Deriving it here makes every run distinct and
+        # monotonic with neither.
+        #
+        # The offset keeps it above the last hand-committed number (430) so a CI build never reads as a
+        # downgrade against an already-installed one. The override is passed on the command line, which
+        # applies it to every target in the build — so the app and its widget extension keep the MATCHING
+        # CFBundleVersion iOS requires (see the CURRENT_PROJECT_VERSION note in project.yml).
+        run: |
+          BUILD=$((1000 + GITHUB_RUN_NUMBER))
+          echo "CFBundleVersion for this build: $BUILD"
+          xcodebuild -scheme NOOPiOS -configuration Release -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="$BUILD" \
+            build
       - name: Package sideload .ipa (strip watch, preserve app/widget capabilities) + attach
         env:
           GH_TOKEN: ${{ github.token }}
