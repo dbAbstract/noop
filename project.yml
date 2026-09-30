@@ -336,7 +336,19 @@ targets:
         com.apple.developer.healthkit: true
         # Required by HealthKit on iOS 15+ for the observer queries registered by HealthKitBridge.
         com.apple.developer.healthkit.background-delivery: true
-        com.apple.developer.healthkit.access: []
+        # com.apple.developer.healthkit.access: [] — REMOVED for personal-team builds.
+        #
+        # This key requests the HealthKit Access (Verifiable Health Records) capability, which a free
+        # personal Apple Developer team cannot provision: Xcode refuses with "Personal development teams
+        # ... do not support the HealthKit Access (Verifiable Health Records) capability" and no profile
+        # is created, so the app cannot be installed on a device at all.
+        #
+        # Dropping it costs nothing here. The array is EMPTY, so it requests no clinical record types,
+        # and nothing in the tree reads any (no HKClinicalType / clinicalType / healthRecords usage
+        # anywhere). Ordinary HealthKit sample access comes from `com.apple.developer.healthkit` above,
+        # which personal teams DO support, and background delivery is a separate key that is kept.
+        #
+        # Restore this line if building under a paid team that has the capability enabled.
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
     settings:
@@ -450,7 +462,12 @@ targets:
       path: NOOPWatch/NOOPWatch.entitlements
       properties:
         com.apple.developer.healthkit: true
-        com.apple.developer.healthkit.access: []
+        # com.apple.developer.healthkit.access: [] — REMOVED for personal-team builds, same reason and
+        # same safety argument as the NOOPiOS target above. The watch app reads live HR and records a
+        # workout session through ordinary HealthKit; it touches no clinical records either.
+        #
+        # Both targets must drop it together: the embedded watch app is provisioned separately, so
+        # fixing only the phone moves the failure here rather than resolving it.
         com.apple.security.application-groups:
           - $(APP_GROUP_ID)
     settings:
