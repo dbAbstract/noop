@@ -21,11 +21,11 @@
       "versions": [
         {
           "version": "11.8.0",
-          "buildVersion": "1003",
+          "buildVersion": "1005",
           "date": "2026-09-30",
-          "localizedDescription": "ci: build and publish the fork source automatically on a push to `fork`",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0.ipa",
-          "size": 22076878,
+          "localizedDescription": "ci: put the build number in the ipa filename so each build has its own URL",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1005.ipa",
+          "size": 16059236,
           "minOSVersion": "17.0"
         }
       ]
