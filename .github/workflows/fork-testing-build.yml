@@ -9,6 +9,25 @@ name: Testing build (fork)
 
 on:
   workflow_dispatch:
+  # FORK-LOCAL: build automatically when work lands on the long-lived integration branch, so merging a
+  # feature is the whole action and the phone update follows on its own.
+  #
+  # An auto-run builds the iOS leg ONLY (see the `if:` on the android/macos jobs): iOS is the leg that
+  # feeds SideStore, and rebuilding two artifacts nobody installs on every merge just spends wall-clock
+  # before the one that matters. A manual dispatch still builds all three.
+  push:
+    branches: [fork]
+    paths-ignore:
+      # The "point the source at the new build" step below commits altstore-fork.json back to THIS
+      # branch. Without this, that commit would trigger another build, which would rewrite the file
+      # again — an endless loop, each iteration burning a macOS runner. GITHUB_TOKEN-authored pushes do
+      # not normally retrigger workflows, but this does not rely on that: the guard is the path itself,
+      # which is also correct for a human editing the description by hand.
+      - 'altstore-fork.json'
+      # Docs and the Android tree cannot change the iOS artifact this workflow publishes.
+      - '**/*.md'
+      - 'docs/**'
+      - 'android/**'
 
 permissions:
   contents: write
@@ -108,6 +127,9 @@ jobs:
 
   android:
     needs: meta
+    # FORK-LOCAL: manual dispatch only. An auto-run on a push to `fork` exists to get a new build onto the
+    # phone, and this artifact plays no part in that.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -141,6 +163,8 @@ jobs:
 
   macos:
     needs: meta
+    # FORK-LOCAL: manual dispatch only — same reasoning as the android job above.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -193,6 +217,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
+        with:
+          # FORK-LOCAL: full history. The source-update step at the end of this job rebases before
+          # pushing, and `git pull --rebase` has nothing to replay onto in checkout's default shallow
+          # clone. Only this job needs it — the others never write back.
+          fetch-depth: 0
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -241,6 +270,60 @@ jobs:
           rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
           zip -qr "NOOP-ios-unsigned-v${VER}.ipa" Payload
           gh release upload "${{ needs.meta.outputs.tag }}" "NOOP-ios-unsigned-v${VER}.ipa" --repo "$GITHUB_REPOSITORY" --clobber
+
+      # FORK-LOCAL: point the SideStore source at the build that was just published, and commit it back to
+      # the serve branch. Without this the loop stops one step short — the IPA is new, the JSON still
+      # describes the previous one, and the phone is offered nothing.
+      #
+      # Runs ONLY on a push to `fork`. A manual dispatch can be aimed at any ref (a feature branch, a
+      # one-off tag), and rewriting the published source to describe a build from some side branch is
+      # exactly what the serve-branch guard in Tools/refresh-fork-altstore.sh exists to warn about.
+      - name: Point the fork's AltStore source at this build
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ needs.meta.outputs.ver }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          IPA="NOOP-ios-unsigned-v${VER}.ipa"
+          # Read the identity out of the ARTIFACT rather than recomputing it. The build number is derived
+          # from the run number a few steps above, and a second derivation here would be a second source
+          # of truth for the same value — free to disagree the moment either changes.
+          rm -rf srccheck && mkdir srccheck && unzip -qq "$IPA" -d srccheck
+          PLIST="$(find srccheck/Payload -maxdepth 2 -name Info.plist | head -1)"
+          BUNDLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")"
+          SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+          SIZE="$(/usr/bin/stat -f%z "$IPA")"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${IPA}"
+          # The triggering commit's subject is the most honest "what changed" available here; a generic
+          # line would tell the reader on the phone nothing.
+          SUBJECT="$(git log -1 --pretty=%s)"
+          rm -rf srccheck
+
+          jq --arg v "$SHORT" --arg b "$BUILD" --arg d "$(date -u +%Y-%m-%d)" --arg desc "$SUBJECT" \
+             --arg url "$URL" --argjson size "$SIZE" --arg bundle "$BUNDLE" \
+             '.apps[0].bundleIdentifier = $bundle
+              | .apps[0].versions = [{
+                  version: $v, buildVersion: $b, date: $d, localizedDescription: $desc,
+                  downloadURL: $url, size: $size, minOSVersion: "17.0"
+                }]' altstore-fork.json > altstore-fork.json.tmp
+          mv altstore-fork.json.tmp altstore-fork.json
+
+          if git diff --quiet -- altstore-fork.json; then
+            echo "source already describes $SHORT ($BUILD) — nothing to commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add altstore-fork.json
+          git commit -m "chore: point fork source at build ${BUILD}"
+          # Rebase rather than force: a merge landing while this job ran is a real commit, and this step
+          # publishing a JSON edit is never worth discarding it.
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "✓ source now points at $SHORT ($BUILD)"
 
   # Fork-only housekeeping: the disposable `noop-staging` branch exists ONLY to feed this build. Once every
   # platform job has finished (pass OR fail — always()), delete it so GitHub's "Compare & pull request"
