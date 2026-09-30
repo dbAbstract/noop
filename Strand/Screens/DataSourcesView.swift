@@ -54,6 +54,9 @@ struct DataSourcesView: View {
     // (0x180D / 0x2A37) so a gym treadmill / Zwift / Peloton can read the live strap HR NOOP receives.
     // LOCAL Bluetooth only — nothing leaves the device. The toggle is persisted; the broadcaster is owned
     // here (a pure consumer of LiveState, isolated from the WHOOP/central path).
+    /// Calorie source precedence (see `appleHealthCard`). Default OFF preserves imported-first behaviour.
+    @AppStorage(MetricCatalog.preferStrapCaloriesKey) private var preferStrapCalories = false
+
     @AppStorage(HrBroadcaster.defaultsKey) private var broadcastHrEnabled = false
     @AppStorage(PuffinExperiment.broadcastHrKey) private var strapBroadcastHrEnabled = false
 
@@ -197,6 +200,32 @@ struct DataSourcesView: View {
                 Text(s).font(StrandFont.subhead)
                     .foregroundStyle(StrandPalette.statusPositive)
             }
+
+            // Calorie source precedence. Default OFF, which keeps the long-standing imported-first
+            // behaviour for anyone whose Apple active energy comes from a worn Apple Watch. A user whose
+            // Health data is written by an iPhone they do not carry turns this ON, because for them the
+            // strap is the better sensor and the phone figure is an undercount.
+            //
+            // This lives on the Apple Health card rather than in Settings because it is a statement about
+            // how far to TRUST this source, and the destructive "Remove imported data" action it sits
+            // beside is the other half of that same judgement. Steps already prefer the measured strap
+            // count (`MetricCatalog.todayStepsMetric`); calories were the one metric that did not.
+            Divider().overlay(StrandPalette.hairline)
+            Toggle(isOn: $preferStrapCalories) {
+                Text("Prefer strap calories")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textPrimary)
+            }
+            .toggleStyle(.switch)
+            .tint(StrandPalette.accent)
+            .accessibilityHint("Show NOOP's own calorie estimate instead of Apple Health's")
+
+            // Names the QUANTITY difference, not just the provenance — the two figures are not the same
+            // measurement, and the on-device one is the larger of the two because it includes rest.
+            Text("Show NOOP's on-device estimate (resting + active, from your strap's heart rate) instead of Apple Health's active-only figure. Turn this on if your Health data comes from an iPhone you don't carry rather than an Apple Watch.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

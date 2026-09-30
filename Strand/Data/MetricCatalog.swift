@@ -188,6 +188,21 @@ enum MetricCatalog {
         d("carbs_g", String(localized: "Carbs"), "Nutrition", "g", "nutrition-csv", "c.circle", 0, nil),
         d("fat_g", String(localized: "Fat"), "Nutrition", "g", "nutrition-csv", "f.circle", 0, nil),
 
+        // ── Nutrition (hand-logged in the food log). Deliberately SEPARATE rows from the CSV import above
+        // rather than the same key under a second source: a CSV row is another app's whole-day total, so
+        // showing both in one series would read as one number while being two attempts at the same day.
+        // `metricSeries` is keyed (deviceId, day, key), so these never collide with the imported rows.
+        d("calories_in", String(localized: "Calories In"), "Nutrition", "kcal", FoodLogStore.sourceId, "fork.knife", 0, nil),
+        d("protein_g", String(localized: "Protein"), "Nutrition", "g", FoodLogStore.sourceId, "p.circle", 0, nil),
+        d("carbs_g", String(localized: "Carbs"), "Nutrition", "g", FoodLogStore.sourceId, "c.circle", 0, nil),
+        d("fat_g", String(localized: "Fat"), "Nutrition", "g", FoodLogStore.sourceId, "f.circle", 0, nil),
+        // Fibre has no CSV twin — `NutritionCsvImport` carries no fibre column — so this is its only row.
+        d("fiber_g", String(localized: "Fibre"), "Nutrition", "g", FoodLogStore.sourceId, "leaf", 0, nil),
+
+        // ── Body (hand-logged weigh-in). Its own source so it never collides with Apple Health's `weight`
+        // series above, which is written by the import and owned by whatever app recorded it.
+        d("weight", String(localized: "Weight"), "Health", "kg", WeightLogStore.sourceId, "scalemass", 1, nil),
+
         // ── Mind (daily mood check-in, 1–5; non-clinical self-tracking)
         d("mood", String(localized: "Mood"), "Mind", "/5", "noop-mood", "face.smiling", 0, true),
 
@@ -232,13 +247,30 @@ enum MetricCatalog {
         return metric(key: "steps_est", source: "my-whoop")
     }
 
+    /// Opt-in: prefer NOOP's own on-device calorie estimate over the phone's imported figure. Default OFF,
+    /// so an Apple Watch owner — whose imported active energy comes from a worn sensor — keeps the existing
+    /// imported-first behaviour. A user whose Apple Health data comes from a phone they do not reliably
+    /// carry turns this ON, because for them the strap is the better sensor and the phone figure is an
+    /// undercount of an unrelated quantity.
+    static let preferStrapCaloriesKey = "noop.preferStrapCalories"
+
     /// #616: the calorie twin of `todayStepsMetric` — route the tapped detail to the source that MATCHES
-    /// the value the tile shows (imported-first, like Android). The imported Apple-Health detail
-    /// (`active_kcal` / apple-health) when the day has an imported value, else NOOP's on-device HR-estimate
-    /// detail (`energy_kcal` / my-whoop, which `exploreSeries` fuses from `activeKcalEst`). Without this the
-    /// Calories card always opened the imported-only detail, so an on-device (WHOOP 5.0) user with no import
-    /// saw an empty/disagreeing chart. Defaults to the on-device detail when no import is present.
-    static func todayCaloriesMetric(hasImportedKcal: Bool, hasOnDeviceKcal: Bool = false) -> MetricDescriptor? {
+    /// the value the tile shows, so the number, its sparkline and the chart it opens all agree. The imported
+    /// Apple-Health detail (`active_kcal` / apple-health) when the day has an imported value, else NOOP's
+    /// on-device HR-estimate detail (`energy_kcal` / my-whoop, which `exploreSeries` fuses from
+    /// `activeKcalEst`). Without this the Calories card always opened the imported-only detail, so an
+    /// on-device (WHOOP 5.0) user with no import saw an empty/disagreeing chart.
+    ///
+    /// `preferStrap` flips the first branch for a user who has said their phone is not a trustworthy
+    /// activity sensor (see `preferStrapCaloriesKey`). It mirrors `todayStepsMetric` directly above, which
+    /// ALREADY prefers the measured strap count over the imported one — calories were the odd one out.
+    ///
+    /// NOTE the two branches do not return the same QUANTITY: Apple's `active_kcal` is active energy only,
+    /// while `activeKcalEst` is resting + active (Harris–Benedict + Keytel, a partial day TDEE). Callers
+    /// must caption which one is on screen rather than letting one "Calories" label stand for both.
+    static func todayCaloriesMetric(hasImportedKcal: Bool, hasOnDeviceKcal: Bool = false,
+                                    preferStrap: Bool = false) -> MetricDescriptor? {
+        if preferStrap && hasOnDeviceKcal { return metric(key: "energy_kcal", source: "my-whoop") }
         if hasImportedKcal { return metric(key: "active_kcal", source: "apple-health") }
         if hasOnDeviceKcal { return metric(key: "energy_kcal", source: "my-whoop") }
         return metric(key: "energy_kcal", source: "my-whoop")

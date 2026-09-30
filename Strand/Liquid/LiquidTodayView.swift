@@ -46,9 +46,16 @@ struct LiquidTodayView: View {
     /// Today launcher card here; the tab and the daily brief read the same key.
     @AppStorage("noop.coachEnabled") private var coachEnabled = true
     @AppStorage(HydrationStore.enabledKey) private var hydrationEnabled = false
+    @AppStorage(FoodLogStore.enabledKey) private var foodEnabled = false
+    /// Opt-in strap-first calories (default OFF — see `MetricCatalog.preferStrapCaloriesKey`). Drives
+    /// `caloriesReadout`, which resolves the tile value, its detail route and its caption together.
+    @AppStorage(MetricCatalog.preferStrapCaloriesKey) private var preferStrapCalories = false
     /// Today's hydration total + goal (ml), resolved in `load()`. nil → the card shows "—".
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
+    /// Today's logged calories-in (v0 food log). nil while the feature is off, so the card can never show a
+    /// stale total after it is switched back off — the same contract the hydration pair above holds.
+    @State private var foodKcalToday: Double?
 
     // async-loaded via the confirmed Repository accessors
     @State private var restScore: Double?          // sleep_performance, day-keyed
@@ -448,7 +455,7 @@ struct LiquidTodayView: View {
         .liquidMediumHaptic(trigger: pullHaptic)
         // hydrationSeq joins the id so logging a drink re-reads the card immediately, the same trigger set
         // classic TodayView's reloadHydration() uses.
-        .task(id: "\(repo.refreshSeq)-\(selectedDayOffset)-\(repo.hydrationSeq)-\(hydrationEnabled)-\(dayCycleModeRaw)") {
+        .task(id: "\(repo.refreshSeq)-\(selectedDayOffset)-\(repo.hydrationSeq)-\(hydrationEnabled)-\(repo.foodSeq)-\(foodEnabled)-\(dayCycleModeRaw)") {
             DashboardCardPrefs.migrateLegacyStepsAverage()
             await load()
         }
@@ -769,6 +776,7 @@ struct LiquidTodayView: View {
             // TodayView's `enabledDashboardCards` and Android's `it != HYDRATION || hydrationEnabled`.
             ForEach(DashboardCardPrefs.decodeEnabled(dashboardCardsRaw)
                         .filter { hydrationEnabled || $0 != .hydration }
+                        .filter { foodEnabled || $0 != .food }
                         // Coach off means the AI is off, so the launcher card goes with the tab: leaving it
                         // on Today would offer a feature the wearer has just switched off. Same gate shape
                         // as hydration, so a card they had added keeps its place and returns on re-enable.
@@ -1073,6 +1081,12 @@ struct LiquidTodayView: View {
                      frac: hydrationGoalML.map {
                          HydrationGoal.fraction(totalML: hydrationTotalML ?? 0, goalML: $0)
                      })
+        case .food:
+            // Today's logged intake. The ring fraction is deliberately left nil rather than drawn against
+            // a target: v0 has no calorie goal, and filling a ring against an invented one would be the
+            // fabrication the rest of this screen avoids. It fills in when targets arrive.
+            cardLink(.food, title: card.title, sub: card.subtitle,
+                     value: intText(foodKcalToday), tint: StrandPalette.metricAmber, frac: nil)
         case .coupled:
             // A tap-through to the full Coupled day screen. No value.
             cardLink(.coupled, title: card.title, sub: card.subtitle,
@@ -1412,10 +1426,13 @@ struct LiquidTodayView: View {
             let (val, cap) = weightTile(weightKg)
             ktile(String(localized: "Weight"), icon: keyMetricIcon(metric), val, "", StrandPalette.metricAmber, nil, key: "weight", caption: cap)
         case .calories:
-            // #616: imported-first value (imported ?: activeKcalEst) + route the tap to the matching
-            // detail source, so the number, its sparkline and the chart it opens all agree.
-            ktile(String(localized: "Calories"), icon: keyMetricIcon(metric), intText(caloriesCount), "kcal", StrandPalette.metricAmber,
-                  fracOver(caloriesCount, 800), key: "energy_kcal", detailMetric: caloriesDetailMetric)
+            // #616: value + detail route resolved together so the number, its sparkline and the chart it
+            // opens all agree. The caption comes from the SAME resolution, because the imported and
+            // on-device figures are different quantities (active-only vs resting + active).
+            let calories = caloriesReadout
+            ktile(String(localized: "Calories"), icon: keyMetricIcon(metric), intText(calories.value), "kcal", StrandPalette.metricAmber,
+                  fracOver(calories.value, 800), key: "energy_kcal", detailMetric: calories.metric,
+                  caption: calories.caption)
         case .skinTemp:
             // Added 2026-08-24 (queue 11c follow-up): first Key Metrics appearance for Skin Temp — was
             // already a "Your Cards" tile (`DashboardCard.skinTemp`), never a Key Metrics one. Same
@@ -1617,6 +1634,9 @@ struct LiquidTodayView: View {
             hydrationTotalML = nil
             hydrationGoalML = nil
         }
+        // Today's intake. A pure UserDefaults read of the day's entry list — no store round-trip — so it is
+        // cheap enough to sit on the same pass as hydration.
+        foodKcalToday = foodEnabled ? repo.foodTotals(day: Repository.localDayKey(Date())).kcal : nil
         // Resolve the O(days) lookups ONCE here (not on every body re-render): the selected day and the
         // readiness verdict. Both scan repo.days (up to 599 rows); doing it per-render was the stutter.
         let day = resolveDisplayDay()
@@ -1959,14 +1979,53 @@ struct LiquidTodayView: View {
     // #616: calories resolved IMPORTED-FIRST (the day's imported Apple active energy — the figure these
     // surfaces already showed — else NOOP's on-device HR estimate `activeKcalEst`) — one number across the
     // tile, card and the detail it taps to. Mirrors the steps precedence above.
-    private var caloriesCount: Double? {
-        importedActiveKcalDay ?? displayDay?.activeKcalEst
+    //
+    // The opt-in `preferStrapCalories` flips that order for a user whose Apple Health data comes from a
+    // phone they do not carry, for whom the strap is the better sensor.
+    //
+    // The value, the detail route AND the caption are resolved TOGETHER in `caloriesReadout` below, because
+    // the two sources are not the same quantity — Apple's `active_kcal` is active energy only, NOOP's
+    // `activeKcalEst` is resting + active. Resolving them separately is how one surface ends up captioned
+    // as the other one's number.
+    private struct CaloriesReadout {
+        let value: Double?
+        let metric: MetricDescriptor?
+        let caption: String?
     }
 
-    private var caloriesDetailMetric: MetricDescriptor? {
-        MetricCatalog.todayCaloriesMetric(hasImportedKcal: importedActiveKcalDay != nil,
-                                          hasOnDeviceKcal: displayDay?.activeKcalEst != nil)
+    private var caloriesReadout: CaloriesReadout {
+        let imported = importedActiveKcalDay
+        let onDevice = displayDay?.activeKcalEst
+        // Captions name the QUANTITY, not just the provenance: "Calories" alone would read as the same
+        // figure in both cases, and the on-device one is roughly 1,700 kcal larger because it includes rest.
+        let onDeviceCaption = String(localized: "resting + active, on device")
+        let importedCaption = String(localized: "active only, Apple Health")
+
+        if preferStrapCalories, let v = onDevice {
+            return CaloriesReadout(
+                value: v,
+                metric: MetricCatalog.todayCaloriesMetric(hasImportedKcal: imported != nil,
+                                                          hasOnDeviceKcal: true, preferStrap: true),
+                caption: onDeviceCaption)
+        }
+        if let v = imported {
+            return CaloriesReadout(
+                value: v,
+                metric: MetricCatalog.todayCaloriesMetric(hasImportedKcal: true,
+                                                          hasOnDeviceKcal: onDevice != nil, preferStrap: false),
+                caption: importedCaption)
+        }
+        return CaloriesReadout(
+            value: onDevice,
+            metric: MetricCatalog.todayCaloriesMetric(hasImportedKcal: false,
+                                                      hasOnDeviceKcal: onDevice != nil,
+                                                      preferStrap: preferStrapCalories),
+            caption: onDevice == nil ? nil : onDeviceCaption)
     }
+
+    private var caloriesCount: Double? { caloriesReadout.value }
+
+    private var caloriesDetailMetric: MetricDescriptor? { caloriesReadout.metric }
 
     private var caloriesDetailKey: String { caloriesDetailMetric?.key ?? "energy_kcal" }
     private var caloriesDetailSource: String { caloriesDetailMetric?.source ?? "my-whoop" }

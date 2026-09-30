@@ -76,6 +76,9 @@ extension DashboardCard {
         case .restingHr: return StrandPalette.metricRose
         case .steps, .stepsAverage30, .bloodOxygen, .hydration: return StrandPalette.metricCyan
         case .skinTemp, .calories: return StrandPalette.metricAmber
+        // Intake sits beside Calories on the amber "energy" side on purpose — the two are the same
+        // quantity read in opposite directions, and tinting them apart would suggest otherwise.
+        case .food: return StrandPalette.metricAmber
         case .sleep: return StrandPalette.restColor
         case .coupled: return StrandPalette.chargeColor
         case .coach: return StrandPalette.accent

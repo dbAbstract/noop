@@ -281,6 +281,7 @@ struct TodayView: View {
     /// Today launcher card here; the tab and the daily brief read the same key.
     @AppStorage("noop.coachEnabled") private var coachEnabled = true
     @AppStorage(HydrationStore.enabledKey) private var hydrationEnabled = false
+    @AppStorage(FoodLogStore.enabledKey) private var foodEnabled = false
     /// Today's hydration total + goal (ml), loaded in loadAll when the feature is on. nil hides the value.
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
@@ -290,6 +291,9 @@ struct TodayView: View {
         // It's not in the default selection, so a fresh install never shows it until both are true.
         DashboardCardPrefs.decodeEnabled(dashboardCardsRaw)
             .filter { hydrationEnabled || $0 != .hydration }
+            // Same opt-in shape for the food log, so a card the user had added keeps its place in the
+            // order and returns on re-enable rather than being dropped from the selection.
+            .filter { foodEnabled || $0 != .food }
             // Coach off means the AI is off, so the launcher card goes with the tab: leaving it on
             // Today would offer a feature the wearer has just switched off. Same gate shape as
             // hydration above, so a card they had added keeps its place and returns on re-enable.
@@ -2665,6 +2669,9 @@ struct TodayView: View {
         case .hydration:
             pinnedCardRow(icon: card.icon, tint: tint, title: card.title, subtitle: card.subtitle,
                           value: dashboardValue(card), route: .hydration)
+        case .food:
+            pinnedCardRow(icon: card.icon, tint: tint, title: card.title, subtitle: card.subtitle,
+                          value: dashboardValue(card), route: .food)
         case .coupled:
             // The Coupled view row (#43) carries NO metric value, it is a tap-through to the full
             // coupled day screen. An empty value renders just the icon + title + subtitle + chevron.
@@ -2695,6 +2702,7 @@ struct TodayView: View {
         case .steps, .stepsAverage30: return StrandPalette.metricCyan
         case .calories:    return StrandPalette.metricAmber
         case .hydration:   return StrandPalette.metricCyan
+        case .food:        return StrandPalette.metricAmber
         case .coupled:     return StrandPalette.chargeColor
         case .coach:       return StrandPalette.accent
         }
@@ -2804,6 +2812,11 @@ struct TodayView: View {
             // value (a fresh day reads "0.0 / 3.2 L"); the goal is always derivable from the profile.
             guard let goal = hydrationGoalML else { return "—" }
             return HydrationGoal.cardValueString(totalML: hydrationTotalML ?? 0, goalML: goal)
+        case .food:
+            // A plain synchronous read of today's entry list (UserDefaults, no store round-trip), so this
+            // needs no loaded state of its own. A day with nothing logged reads "0 kcal", not "—": zero
+            // logged food is a real answer here, whereas "—" would claim the figure is unknown.
+            return withUnit("\(Int(repo.foodTotals().kcal.rounded()))")
         case .coupled:
             // A tap-through row with no metric value of its own, the row shows just the chevron. Returning
             // an empty string (not "—") renders no number and leaves it un-dimmed (it isn't a missing value).

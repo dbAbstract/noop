@@ -211,6 +211,12 @@ final class Repository: ObservableObject {
     @Published private(set) var cycleTrackingSeq = 0
     func noteCycleTrackingChanged() { cycleTrackingSeq += 1 }
 
+    /// Bumped by every food-log mutation (log / edit / delete / weigh-in). Same reasoning as
+    /// `hydrationSeq`: a food write never causes a `refresh()`, so the Today card has no other signal and
+    /// would sit stale until an unrelated sync landed.
+    @Published private(set) var foodSeq = 0
+    func noteFoodChanged() { foodSeq += 1 }
+
     /// Workouts & GPS test mode (Test Centre): the tagged sink for the `.workouts` diagnostic lines
     /// (auto-detect inputs/thresholds/why, cross-source dedup decisions). Default nil (inert) so tests +
     /// non-prod inits get the byte-identical untraced path; AppModel wires it to `live.append(log:domain:)`.

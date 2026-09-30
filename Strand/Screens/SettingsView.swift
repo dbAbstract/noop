@@ -153,6 +153,7 @@ struct SettingsView: View {
     // Hydration tracker (opt-in, MVP). Default OFF — when off the hydration dashboard card + detail are
     // hidden. Mirrors the Android pref so the toggle reads the same on both platforms.
     @AppStorage(HydrationStore.enabledKey) private var hydrationEnabled = false
+    @AppStorage(FoodLogStore.enabledKey) private var foodLoggingEnabled = false
 
     /// Opt-in "Auto-detect workouts" (default OFF). When ON, Today scans the last day or two of HR for a
     /// sustained-elevated window and offers — via a single dismissible card — to save it as a workout.
@@ -1685,6 +1686,22 @@ struct SettingsView: View {
                 .accessibilityHint("Adds a water-log card to your dashboard")
 
                 Text("Adds a simple fluid log with a daily goal that adjusts to your effort. Tap to add a sip, cup or bottle and watch a progress ring fill. On \(Platform.deviceNounPhrase) only. Nothing is synced.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                rowDivider
+
+                Toggle(isOn: $foodLoggingEnabled) {
+                    Text("Food logging")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .tint(StrandPalette.accent)
+                .accessibilityHint("Adds a food log card to your dashboard")
+
+                Text("Log what you eat and see your daily calories and macros. You enter the numbers yourself — there is no food database and nothing is looked up online. A daily weigh-in lives here too, which is what lets NOOP work out your real expenditure over a few weeks. On \(Platform.deviceNounPhrase) only.")
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
