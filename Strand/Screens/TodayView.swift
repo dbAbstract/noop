@@ -282,6 +282,8 @@ struct TodayView: View {
     @AppStorage("noop.coachEnabled") private var coachEnabled = true
     @AppStorage(HydrationStore.enabledKey) private var hydrationEnabled = false
     @AppStorage(FoodLogStore.enabledKey) private var foodEnabled = false
+    /// Today's logged intake (kcal); nil while the feature is off. See `reloadFood`.
+    @State private var foodKcalToday: Double?
     /// Today's hydration total + goal (ml), loaded in loadAll when the feature is on. nil hides the value.
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
@@ -1566,6 +1568,8 @@ struct TodayView: View {
         // hydration fields. Cheap (one metricSeries row), never re-runs the heavy loads.
         .task(id: repo.hydrationSeq) { await reloadHydration() }
         .onChangeCompat(of: hydrationEnabled) { _ in Task { await reloadHydration() } }
+        .task(id: repo.foodSeq) { await reloadFood() }
+        .onChangeCompat(of: foodEnabled) { _ in Task { await reloadFood() } }
         // #755: NO per-edge safety net here, on purpose. A deep offload segments into many slices that each
         // flip `backfilling` false→true, so re-running the heavy history-wide reads on that edge would re-fire
         // them dozens of times mid-offload and re-create the very write-contention this fix removes. The
@@ -2813,10 +2817,10 @@ struct TodayView: View {
             guard let goal = hydrationGoalML else { return "—" }
             return HydrationGoal.cardValueString(totalML: hydrationTotalML ?? 0, goalML: goal)
         case .food:
-            // A plain synchronous read of today's entry list (UserDefaults, no store round-trip), so this
-            // needs no loaded state of its own. A day with nothing logged reads "0 kcal", not "—": zero
-            // logged food is a real answer here, whereas "—" would claim the figure is unknown.
-            return withUnit("\(Int(repo.foodTotals().kcal.rounded()))")
+            // A day with nothing logged reads "0 kcal", not "—": zero logged food is a real answer,
+            // whereas "—" would claim the figure is unknown. Only a not-yet-loaded read is unknown.
+            guard let kcal = foodKcalToday else { return "—" }
+            return withUnit("\(Int(kcal.rounded()))")
         case .coupled:
             // A tap-through row with no metric value of its own, the row shows just the chevron. Returning
             // an empty string (not "—") renders no number and leaves it un-dimmed (it isn't a missing value).
@@ -4857,6 +4861,13 @@ struct TodayView: View {
             hydrationTotalML = nil
             hydrationGoalML = nil
         }
+    }
+
+    /// Today's logged intake for the food card. Held in state because `dashboardValue` is synchronous and
+    /// the entry rows are a store read — the same reason `hydrationTotalML` is. Cleared when the feature is
+    /// off so the card can never show a stale total after it is switched back off.
+    private func reloadFood() async {
+        foodKcalToday = foodEnabled ? await repo.foodTotals().kcal : nil
     }
 
     /// #932: restore the day-scoped outputs from a same-(seq, day) cache on a re-mount, so the selected day

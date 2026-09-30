@@ -48,7 +48,8 @@
     "v44-ppg-waveform-base-code",
     "v45-rr-source-index",
     "v46-lift-log",
-    "v47-rr-whoop5-fill"
+    "v47-rr-whoop5-fill",
+    "v48-food-log"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android \u2014 the per-row upload flag belongs to an upload path that does not exist there \u2014 so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2311,6 +2312,196 @@
         "sport"
       ],
       "indices": []
+    },
+    "foodItem": {
+      "platform": "ios_only",
+      "reason": "v48 food log: the user's saved food library. iOS-only while the Kotlin twin is outstanding \u2014 Android needs the matching Room entity (same column ORDER) and com.noop.analytics.FoodLogStore before this becomes platform \"both\".",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null,
+          "android": {
+            "notNull": true
+          },
+          "divergence": "sqlite-text-pk-nullable"
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "name",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "servingLabel",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "kcal",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "protein",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "carbs",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fat",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fiber",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "createdAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "lastUsedTs",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "idx_foodItem_device_used",
+          "unique": false,
+          "columns": [
+            "deviceId",
+            "lastUsedTs"
+          ]
+        }
+      ]
+    },
+    "foodEntry": {
+      "platform": "ios_only",
+      "reason": "v48 food log: one logged eat. Name and macros are a snapshot taken at log time, so editing or deleting a library item never rewrites history; itemId is nullable and carries no foreign key for that reason. iOS-only pending the Kotlin twin.",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null,
+          "android": {
+            "notNull": true
+          },
+          "divergence": "sqlite-text-pk-nullable"
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "day",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "itemId",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "nameSnapshot",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "portion",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "kcal",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "protein",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "carbs",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fat",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fiber",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "loggedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "mealType",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "idx_foodEntry_device_day",
+          "unique": false,
+          "columns": [
+            "deviceId",
+            "day"
+          ]
+        }
+      ]
     }
   }
 }

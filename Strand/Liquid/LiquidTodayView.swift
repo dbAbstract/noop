@@ -1639,9 +1639,8 @@ struct LiquidTodayView: View {
             hydrationTotalML = nil
             hydrationGoalML = nil
         }
-        // Today's intake. A pure UserDefaults read of the day's entry list — no store round-trip — so it is
-        // cheap enough to sit on the same pass as hydration.
-        foodKcalToday = foodEnabled ? repo.foodTotals(day: Repository.localDayKey(Date())).kcal : nil
+        // Today's intake: one indexed read of the day's entry rows, on the same pass as hydration.
+        foodKcalToday = foodEnabled ? await repo.foodTotals(day: Repository.localDayKey(Date())).kcal : nil
         // Resolve the O(days) lookups ONCE here (not on every body re-render): the selected day and the
         // readiness verdict. Both scan repo.days (up to 599 rows); doing it per-render was the stutter.
         let day = resolveDisplayDay()

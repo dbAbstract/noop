@@ -167,6 +167,12 @@ public struct DeviceRegistryStore: Sendable {
         // privacy defect this list exists to close, and one the deviceId-column guard test could not
         // catch for a child table keyed only by its parent.
         "liftExercise", "liftProgram", "liftProgramItem", "liftSession", "liftSet",
+        // v48-food-log: both tables are deviceId-keyed (under the "food-log" source), so forgetting that
+        // source must clear the saved library and every logged entry. The day TOTALS live in
+        // metricSeries, already listed above, so leaving these off would delete the totals and strand
+        // the detail they were derived from — a delete that looks complete on every chart while the
+        // food the user ate is still on disk.
+        "foodItem", "foodEntry",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all

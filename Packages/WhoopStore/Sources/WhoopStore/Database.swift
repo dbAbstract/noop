@@ -1103,6 +1103,69 @@ extension WhoopStore {
         migrator.registerMigration("v47-rr-whoop5-fill") { db in
             try db.execute(sql: WhoopStore.whoop5RrFillMigrationSQL)
         }
+
+        // FORK-LOCAL (v0 food log). The day TOTALS already ride `metricSeries` under the `food-log`
+        // source, which is what every chart reads. These two tables hold what that cannot: the user's own
+        // food vocabulary, and the individual entries a day's total is derived from.
+        //
+        // They start here rather than in UserDefaults — where the first cut kept them — because the
+        // `.noopbak` backup is a ZIP of this SQLite file plus a fixed whitelist of scalar settings. Data
+        // outside the database is simply not in the backup, so a restore would have returned the charts
+        // and silently lost every saved food. Deleting the app takes the whole container with it, which
+        // makes that the difference between an inconvenience and losing the log entirely.
+        migrator.registerMigration("v48-food-log") { db in
+            // The user's own food vocabulary. NOOP ships NO food database and looks nothing up online: a
+            // food is whatever the user typed, remembered here so it can be offered back. Macros are PER
+            // SERVING; a log scales them by its portion.
+            try db.create(table: "foodItem", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                t.column("name", .text).notNull()
+                // What one serving IS, in the user's words ("1 scoop", "100 g", "1 medium banana"). Free
+                // text on purpose: a food's natural unit is not always mass, and forcing grams would make
+                // the user do the conversion NOOP exists to save them.
+                t.column("servingLabel", .text).notNull()
+                t.column("kcal", .double).notNull()
+                t.column("protein", .double).notNull()
+                t.column("carbs", .double).notNull()
+                t.column("fat", .double).notNull()
+                t.column("fiber", .double).notNull()
+                t.column("createdAt", .integer).notNull()   // unix seconds
+                t.column("lastUsedTs", .integer)            // unix seconds; recency for the picker
+            }
+            // Recency ordering for the picker, per device. NOT unique on name: two foods can honestly
+            // share one ("porridge" made two ways), and the library is keyed by id precisely so editing
+            // one never silently merges it with another.
+            try db.create(index: "idx_foodItem_device_used", on: "foodItem",
+                          columns: ["deviceId", "lastUsedTs"], options: [.ifNotExists])
+
+            // One logged eat.
+            //
+            // The macro columns are a SNAPSHOT taken at log time, duplicating the item deliberately.
+            // Editing "Protein shake" to a new recipe next month must not rewrite what last month's days
+            // say you ate, and deleting the item must not strand its history — which is also why `itemId`
+            // is nullable and carries no foreign key: it exists only so the picker can offer "log this
+            // again", and nothing reads through it for macros.
+            try db.create(table: "foodEntry", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                t.column("day", .text).notNull()            // local day key, yyyy-MM-dd
+                t.column("itemId", .text)
+                t.column("nameSnapshot", .text).notNull()
+                t.column("portion", .double).notNull()      // servings eaten; 1.0 = one serving
+                // Per-serving macros as they stood at log time — scale by `portion` for the contribution.
+                t.column("kcal", .double).notNull()
+                t.column("protein", .double).notNull()
+                t.column("carbs", .double).notNull()
+                t.column("fat", .double).notNull()
+                t.column("fiber", .double).notNull()
+                t.column("loggedAt", .integer).notNull()    // unix seconds
+                t.column("mealType", .text)                 // breakfast/lunch/dinner/snack, or NULL
+            }
+            // Every read is "one local day for this device", which is also what a re-bank rewrites.
+            try db.create(index: "idx_foodEntry_device_day", on: "foodEntry",
+                          columns: ["deviceId", "day"], options: [.ifNotExists])
+        }
         return migrator
     }
 }

@@ -6,21 +6,23 @@ import StrandAnalytics
 //
 // The user saves reusable FOOD ITEMS (a packet of crisps, a scoop of whey) and logs them against a day with
 // a portion multiplier. The day's macro TOTALS are banked in the generic `metricSeries` tall table under the
-// already-registered nutrition keys, so Trends / Compare / Explore light up with no new plumbing and no
-// schema change. The individual ENTRIES live in per-day UserDefaults JSON.
+// already-registered nutrition keys, so Trends / Compare / Explore light up with no new plumbing. The
+// saved library and the individual ENTRIES live in the v48 `foodItem` / `foodEntry` tables.
 //
-// That split is lifted wholesale from `HydrationStore`: `metricSeries` is the canonical day figure every
-// other surface reads, and the entry list is the editable detail behind it, kept in sync so deleting or
-// re-portioning an entry re-derives and re-banks the totals.
+// `metricSeries` stays the canonical day figure every other surface reads, and the entry rows are the
+// editable detail behind it, kept in sync so deleting or re-portioning an entry re-derives and re-banks
+// the totals.
 //
-// WHY NOT A GRDB TABLE (v0): a new table obliges updating BOTH copies of `schema_oracle.json` and commits
-// the (currently deferred) Room side to matching column order forever — a permanent parity liability taken
-// on before the model has settled. Caffeine and hydration entries already live in UserDefaults JSON, and
-// period views never read the entry lists (they range-query `metricSeries`, which IS SQLite), so the JSON
-// store is only ever read one day at a time. Promote to a `vN-food-log` migration when recipes arrive.
+// WHY THE DATABASE and not UserDefaults, where the first cut put them: `.noopbak` — the full backup, and
+// the only thing standing between a faulty migration and a lost log — is a ZIP of the SQLite file plus a
+// FIXED whitelist of scalar settings (`BackupSettings`). Anything held outside the database is simply not
+// in the backup, so a restore would have brought the charts back and silently dropped every saved food.
+// Deleting the app takes the entire container with it, which makes that the difference between an
+// inconvenience and losing the library outright. Hydration entries and caffeine intakes still have that
+// hole; this one no longer does.
 //
-// PARITY DEBT: there is no Kotlin twin yet. Android needs `com.noop.analytics.FoodLogStore` over
-// SharedPreferences with identical source ids, keys and rounding before this could go upstream.
+// PARITY DEBT: no Kotlin twin yet. Android needs the Room twin of the v48 tables (matching column ORDER,
+// per AGENTS.md) plus `com.noop.analytics.FoodLogStore`, and both schema_oracle.json copies stay in step.
 
 enum FoodLogStore {
     /// Source/device id the day totals are written under — its own local-only source, never confused with
@@ -29,16 +31,6 @@ enum FoodLogStore {
 
     /// Settings opt-in key (default OFF, matching every other optional tracker).
     static let enabledKey = "noop.foodLogging"
-
-    /// UserDefaults key for the saved item library — ONE JSON array, not per-day. Small enough to hold in
-    /// memory (a personal library is hundreds of items, not millions) and read only when a picker opens.
-    static let libraryKey = "noop.foodLibrary"
-
-    /// UserDefaults prefix for the per-day entry list, `noop.foodEntries.<yyyy-MM-dd>`. One array per local
-    /// day so a read is small and a day's edit never rewrites unrelated history.
-    static let entriesKeyPrefix = "noop.foodEntries."
-
-    static func entriesKey(forDay dayKey: String) -> String { entriesKeyPrefix + dayKey }
 
     /// The `metricSeries` keys a logged day writes. Mirrors `NutritionCsvImporter.Keys` for the four it
     /// shares, plus `fiber_g`, which the CSV importer has no column for.
@@ -196,6 +188,57 @@ enum FoodLibrary {
     }
 }
 
+// MARK: - Row mapping
+//
+// The app models carry UUIDs and Dates because that is what SwiftUI and the pure list helpers want; the
+// store speaks TEXT ids and unix seconds. Mapping happens only here, at the boundary.
+//
+// Everything is written under `FoodLogStore.sourceId` as its deviceId — the SAME id the day totals go to
+// in `metricSeries`. Deliberately NOT `Repository.deviceId`, which follows the ACTIVE STRAP: a food log
+// belongs to the person, not to the band they happened to be wearing, and keying it to the strap would
+// strand the library behind a remove-and-re-add.
+
+private extension FoodItem {
+    init(row: FoodItemRow) {
+        self.init(id: UUID(uuidString: row.id) ?? UUID(),
+                  name: row.name,
+                  servingLabel: row.servingLabel,
+                  macros: MacroTotals(kcal: row.kcal, protein: row.protein, carbs: row.carbs,
+                                      fat: row.fat, fiber: row.fiber),
+                  createdAt: Date(timeIntervalSince1970: TimeInterval(row.createdAt)),
+                  lastUsedAt: row.lastUsedTs.map { Date(timeIntervalSince1970: TimeInterval($0)) })
+    }
+
+    var row: FoodItemRow {
+        FoodItemRow(id: id.uuidString, deviceId: FoodLogStore.sourceId, name: name,
+                    servingLabel: servingLabel, kcal: macros.kcal, protein: macros.protein,
+                    carbs: macros.carbs, fat: macros.fat, fiber: macros.fiber,
+                    createdAt: Int(createdAt.timeIntervalSince1970),
+                    lastUsedTs: lastUsedAt.map { Int($0.timeIntervalSince1970) })
+    }
+}
+
+private extension FoodEntry {
+    init(row: FoodEntryRow) {
+        self.init(id: UUID(uuidString: row.id) ?? UUID(),
+                  itemId: row.itemId.flatMap(UUID.init(uuidString:)),
+                  nameSnapshot: row.nameSnapshot,
+                  macrosSnapshot: MacroTotals(kcal: row.kcal, protein: row.protein, carbs: row.carbs,
+                                              fat: row.fat, fiber: row.fiber),
+                  portion: row.portion,
+                  loggedAt: Date(timeIntervalSince1970: TimeInterval(row.loggedAt)),
+                  mealType: row.mealType.flatMap(MealType.init(rawValue:)))
+    }
+
+    func row(day: String) -> FoodEntryRow {
+        FoodEntryRow(id: id.uuidString, deviceId: FoodLogStore.sourceId, day: day,
+                     itemId: itemId?.uuidString, nameSnapshot: nameSnapshot, portion: portion,
+                     kcal: macrosSnapshot.kcal, protein: macrosSnapshot.protein,
+                     carbs: macrosSnapshot.carbs, fat: macrosSnapshot.fat, fiber: macrosSnapshot.fiber,
+                     loggedAt: Int(loggedAt.timeIntervalSince1970), mealType: mealType?.rawValue)
+    }
+}
+
 // MARK: - Logging + read seam (Repository extension)
 
 extension Repository {
@@ -203,56 +246,71 @@ extension Repository {
     // MARK: Entries
 
     /// A day's logged foods, oldest first. Empty when nothing was logged.
-    func foodEntries(day: String? = nil) -> [FoodEntry] {
-        Self.readFoodEntries(day: day ?? Repository.localDayKey(Date()))
+    func foodEntries(day: String? = nil) async -> [FoodEntry] {
+        let dayKey = day ?? Repository.localDayKey(Date())
+        guard let store = await storeHandle() else { return [] }
+        let rows = (try? await store.foodEntries(deviceId: FoodLogStore.sourceId, day: dayKey)) ?? []
+        return rows.map(FoodEntry.init(row:))
     }
 
-    /// The day's macro totals as stored. Derived from the entry list rather than read back out of
-    /// `metricSeries` so the figure a screen shows cannot drift from the rows behind it.
-    func foodTotals(day: String? = nil) -> MacroTotals {
-        FoodEntries.total(foodEntries(day: day))
+    /// The day's macro totals, derived from the entry rows rather than read back out of `metricSeries`,
+    /// so the figure a screen shows cannot drift from the rows behind it.
+    func foodTotals(day: String? = nil) async -> MacroTotals {
+        FoodEntries.total(await foodEntries(day: day))
     }
 
-    /// Log `item` at `portion` servings. Stamps the library item's `lastUsedAt`, appends the entry, then
-    /// re-derives and re-banks the day totals. Returns the new day totals.
+    /// Log `item` at `portion` servings: stamp the library item's recency, insert the entry, then
+    /// re-derive and re-bank the day totals. Returns the new day totals.
     @discardableResult
     func logFood(item: FoodItem, portion: Double, day: String? = nil,
                  at date: Date = Date(), mealType: MealType? = nil) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(date)
         let entry = FoodEntry(itemId: item.id, nameSnapshot: item.name, macrosSnapshot: item.macros,
                               portion: portion, loggedAt: date, mealType: mealType)
-        let current = Self.readFoodEntries(day: dayKey)
+        // Validated by the SAME pure helper the tests pin, so a bad portion is rejected identically
+        // whether it came from the UI or from a future import — not re-checked inline here.
+        let current = await foodEntries(day: dayKey)
         let next = FoodEntries.adding(current, entry)
-        // `adding` rejects a bad portion, so an unchanged list means nothing was logged — don't re-bank or
-        // bump the UI for a write that did not happen.
-        guard next.count != current.count else { return FoodEntries.total(current) }
-        Self.writeFoodEntries(next, day: dayKey)
-        Self.writeFoodLibrary(FoodLibrary.markingUsed(Self.readFoodLibrary(), id: item.id, at: date))
+        guard next.count != current.count, let store = await storeHandle() else {
+            return FoodEntries.total(current)
+        }
+        _ = try? await store.upsertFoodEntries([entry.row(day: dayKey)])
+        var used = item
+        used.lastUsedAt = date
+        _ = try? await store.upsertFoodItems([used.row])
         return await rebankFoodTotals(entries: next, day: dayKey)
     }
 
     @discardableResult
     func deleteFoodEntry(id: UUID, day: String? = nil) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(Date())
-        let next = FoodEntries.removing(Self.readFoodEntries(day: dayKey), id: id)
-        Self.writeFoodEntries(next, day: dayKey)
-        return await rebankFoodTotals(entries: next, day: dayKey)
+        guard let store = await storeHandle() else { return await foodTotals(day: dayKey) }
+        _ = try? await store.deleteFoodEntry(deviceId: FoodLogStore.sourceId, id: id.uuidString)
+        return await rebankFoodTotals(entries: await foodEntries(day: dayKey), day: dayKey)
     }
 
     /// Re-portion a logged entry (a non-positive portion deletes it), then re-derive and re-bank.
     @discardableResult
     func updateFoodEntry(id: UUID, portion: Double, day: String? = nil) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(Date())
-        let next = FoodEntries.updating(Self.readFoodEntries(day: dayKey), id: id, portion: portion)
-        Self.writeFoodEntries(next, day: dayKey)
+        let current = await foodEntries(day: dayKey)
+        let next = FoodEntries.updating(current, id: id, portion: portion)
+        guard let store = await storeHandle() else { return FoodEntries.total(current) }
+        if next.count < current.count {
+            // `updating` treats a non-positive portion as a delete; mirror that in the store rather than
+            // leaving a row the day total no longer counts.
+            _ = try? await store.deleteFoodEntry(deviceId: FoodLogStore.sourceId, id: id.uuidString)
+        } else if let edited = next.first(where: { $0.id == id }) {
+            _ = try? await store.upsertFoodEntries([edited.row(day: dayKey)])
+        }
         return await rebankFoodTotals(entries: next, day: dayKey)
     }
 
     /// Re-derive the day totals from `entries` and upsert all five nutrition keys.
     ///
-    /// Writes every key on every re-bank, including zeros, rather than only the non-zero ones. Deleting the
-    /// last fatty food of a day must drive `fat_g` to 0; skipping the write would strand yesterday's figure
-    /// in the table and the chart would keep showing food that is no longer logged.
+    /// Writes every key on every re-bank, INCLUDING zeros. Deleting the last fatty food of a day must
+    /// drive `fat_g` to 0; skipping the write would strand yesterday's figure in the table and the chart
+    /// would keep showing food that is no longer logged.
     @discardableResult
     private func rebankFoodTotals(entries: [FoodEntry], day dayKey: String) async -> MacroTotals {
         let totals = FoodEntries.total(entries)
@@ -271,10 +329,10 @@ extension Repository {
     }
 
     /// The last `days` local-day calorie-in totals up to and including today, OLDEST first, one row per
-    /// calendar day with 0 for days with no log. Backs the mini history bars.
+    /// calendar day with 0 for days with no log.
     ///
-    /// Reads `metricSeries` rather than the per-day JSON: one ranged SQL read beats N UserDefaults reads,
-    /// and the table is exactly what the re-bank above keeps current.
+    /// Reads `metricSeries` rather than the entry rows: one ranged read beats N per-day queries, and that
+    /// table is exactly what the re-bank above keeps current.
     func foodHistory(days: Int = 7, now: Date = Date()) async -> [(day: String, kcal: Double)] {
         let n = max(1, days)
         let fromKey = Repository.localDayKey(now.addingTimeInterval(-Double(n - 1) * 86_400))
@@ -294,51 +352,26 @@ extension Repository {
 
     // MARK: Library
 
-    func foodLibrary() -> [FoodItem] { Self.readFoodLibrary() }
+    func foodLibrary() async -> [FoodItem] {
+        guard let store = await storeHandle() else { return [] }
+        let rows = (try? await store.foodItems(deviceId: FoodLogStore.sourceId)) ?? []
+        return rows.map(FoodItem.init(row:))
+    }
 
     /// Insert or update a library item. Does NOT touch any logged entry — existing entries keep their
     /// snapshots, which is the point of taking them.
-    func saveFoodItem(_ item: FoodItem) {
-        Self.writeFoodLibrary(FoodLibrary.upserting(Self.readFoodLibrary(), item))
+    func saveFoodItem(_ item: FoodItem) async {
+        guard let store = await storeHandle() else { return }
+        _ = try? await store.upsertFoodItems([item.row])
         noteFoodChanged()
     }
 
-    /// Remove a library item. Logged history is untouched and still renders, because each entry carries its
-    /// own name and macros.
-    func deleteFoodItem(id: UUID) {
-        Self.writeFoodLibrary(FoodLibrary.removing(Self.readFoodLibrary(), id: id))
+    /// Remove a library item. Logged history is untouched and still renders, because each entry carries
+    /// its own name and macros.
+    func deleteFoodItem(id: UUID) async {
+        guard let store = await storeHandle() else { return }
+        _ = try? await store.deleteFoodItem(deviceId: FoodLogStore.sourceId, id: id.uuidString)
         noteFoodChanged()
-    }
-
-    // MARK: Persistence (UserDefaults JSON)
-
-    fileprivate static func readFoodEntries(day dayKey: String) -> [FoodEntry] {
-        guard let data = UserDefaults.standard.data(forKey: FoodLogStore.entriesKey(forDay: dayKey)),
-              let decoded = try? JSONDecoder().decode([FoodEntry].self, from: data) else { return [] }
-        return decoded.sorted { $0.loggedAt < $1.loggedAt }
-    }
-
-    fileprivate static func writeFoodEntries(_ entries: [FoodEntry], day dayKey: String) {
-        let key = FoodLogStore.entriesKey(forDay: dayKey)
-        if entries.isEmpty {
-            UserDefaults.standard.removeObject(forKey: key)
-        } else if let data = try? JSONEncoder().encode(entries) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
-    }
-
-    fileprivate static func readFoodLibrary() -> [FoodItem] {
-        guard let data = UserDefaults.standard.data(forKey: FoodLogStore.libraryKey),
-              let decoded = try? JSONDecoder().decode([FoodItem].self, from: data) else { return [] }
-        return FoodLibrary.sorted(decoded)
-    }
-
-    fileprivate static func writeFoodLibrary(_ items: [FoodItem]) {
-        if items.isEmpty {
-            UserDefaults.standard.removeObject(forKey: FoodLogStore.libraryKey)
-        } else if let data = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(data, forKey: FoodLogStore.libraryKey)
-        }
     }
 }
 

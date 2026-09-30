@@ -50,7 +50,7 @@ struct FoodLogView: View {
         .sheet(isPresented: $showAddSheet) {
             AddFoodSheet(library: library) { item, portion in
                 Task {
-                    repo.saveFoodItem(item)
+                    await repo.saveFoodItem(item)
                     await repo.logFood(item: item, portion: portion)
                     reloadTick += 1
                 }
@@ -314,9 +314,9 @@ struct FoodLogView: View {
     // MARK: - Data
 
     private func reload() async {
-        entries = repo.foodEntries()
-        totals = repo.foodTotals()
-        library = repo.foodLibrary()
+        entries = await repo.foodEntries()
+        totals = FoodEntries.total(entries)
+        library = await repo.foodLibrary()
         history = await repo.foodHistory(days: 7)
         weightToday = await repo.weightToday()
     }
