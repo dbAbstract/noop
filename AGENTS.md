@@ -61,6 +61,12 @@ strap, no CoreBluetooth. Never add `import AppKit` / `import UIKit` / `import Co
 Android is an independent reimplementation of the same logic, **not** a port that shares code with
 Swift. So:
 
+> **FORK NOTE.** This fork carries an Apple-only food-logging and diet-targeting feature, so the
+> same-PR rule below is currently suspended for it. Everything owed on the Android side is itemised in
+> [`docs/FORK_ANDROID_PARITY_TODO.md`](docs/FORK_ANDROID_PARITY_TODO.md) — read that before touching
+> `android/`. The rules below still apply in full when those twins are written.
+
+
 - **Analytics and stored data must be byte-identical across Swift and Kotlin.** If you change a
   decoder, an analytics formula, a migration, or a stored value on one platform, change the twin on
   the other in the same PR (or explicitly call out why not). "It's Compose vs SwiftUI" is *not* a

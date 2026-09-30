@@ -360,6 +360,7 @@ struct LiquidTodayView: View {
                     ForEach(sectionOrder) { section in
                         switch section {
                         case .hero: heroCard
+                        case .diet: DietBudgetCard()
                         case .liveSession: if liveSessionsBeta { liveSessionStartRow }
                         case .synthesis: synthesisSection
                         case .keyMetrics: keyMetricsSection
@@ -781,7 +782,6 @@ struct LiquidTodayView: View {
             // TodayView's `enabledDashboardCards` and Android's `it != HYDRATION || hydrationEnabled`.
             ForEach(DashboardCardPrefs.decodeEnabled(dashboardCardsRaw)
                         .filter { hydrationEnabled || $0 != .hydration }
-                        .filter { foodEnabled || $0 != .food }
                         // Coach off means the AI is off, so the launcher card goes with the tab: leaving it
                         // on Today would offer a feature the wearer has just switched off. Same gate shape
                         // as hydration, so a card they had added keeps its place and returns on re-enable.
@@ -1086,12 +1086,6 @@ struct LiquidTodayView: View {
                      frac: hydrationGoalML.map {
                          HydrationGoal.fraction(totalML: hydrationTotalML ?? 0, goalML: $0)
                      })
-        case .food:
-            // Today's logged intake. The ring fraction is deliberately left nil rather than drawn against
-            // a target: v0 has no calorie goal, and filling a ring against an invented one would be the
-            // fabrication the rest of this screen avoids. It fills in when targets arrive.
-            cardLink(.food, title: card.title, sub: card.subtitle,
-                     value: intText(foodKcalToday), tint: StrandPalette.metricAmber, frac: nil)
         case .coupled:
             // A tap-through to the full Coupled day screen. No value.
             cardLink(.coupled, title: card.title, sub: card.subtitle,

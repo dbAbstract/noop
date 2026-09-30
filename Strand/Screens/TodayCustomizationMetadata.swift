@@ -15,6 +15,7 @@ extension TodaySection {
         case .menstrualCycle: return "drop.degreesign"
         case .journal: return "book.closed"
         case .addedCards: return "rectangle.stack.badge.plus"
+        case .diet: return "fork.knife"
         }
     }
 
@@ -31,6 +32,9 @@ extension TodaySection {
         case .menstrualCycle: return StrandPalette.restColor
         case .journal: return StrandPalette.metricAmber
         case .addedCards: return StrandPalette.accent
+        // Amber, matching the Calories tile: intake and burn are the same quantity read in opposite
+        // directions, and tinting them apart would suggest otherwise.
+        case .diet: return StrandPalette.metricAmber
         }
     }
 }
@@ -78,7 +82,6 @@ extension DashboardCard {
         case .skinTemp, .calories: return StrandPalette.metricAmber
         // Intake sits beside Calories on the amber "energy" side on purpose — the two are the same
         // quantity read in opposite directions, and tinting them apart would suggest otherwise.
-        case .food: return StrandPalette.metricAmber
         case .sleep: return StrandPalette.restColor
         case .coupled: return StrandPalette.chargeColor
         case .coach: return StrandPalette.accent

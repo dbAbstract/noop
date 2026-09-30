@@ -35,6 +35,8 @@ enum TabRoute: Hashable {
     case health
     case hydration
     case food
+    /// The diet detail screen — intake against the budget, and the expenditure model behind it.
+    case diet
     case coupled
 }
 
@@ -72,6 +74,7 @@ extension View {
             case .health: HealthView()
             case .hydration: HydrationView()
             case .food: FoodLogView()
+            case .diet: DietDetailView()
             case .coupled: CoupledView()
             }
         }

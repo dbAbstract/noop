@@ -37,6 +37,11 @@ enum TodaySection: String, CaseIterable, Identifiable {
     /// selection in order; empty (and effectively invisible) until the user adds a card in Customise.
     /// Appended LAST so `decodeOrder`'s back-fill lands it predictably for existing saved orders.
     case addedCards
+    /// The diet budget (#diet-targets). Placed immediately after the hero in `defaultOrder` because it
+    /// answers the same kind of question those three do — "where do I stand today" — and the user asked
+    /// for it there specifically. Appended LAST in the enum so `decodeOrder`'s back-fill lands it
+    /// predictably for saved orders that predate it; the default order below is what positions it.
+    case diet
 
     var id: String { rawValue }
 
@@ -54,14 +59,15 @@ enum TodaySection: String, CaseIterable, Identifiable {
         case .menstrualCycle: return String(localized: "Menstrual Cycle")
         case .journal:        return String(localized: "Journal")
         case .addedCards:     return String(localized: "Added Cards")
+        case .diet:           return String(localized: "Diet")
         }
     }
 
     /// The original, hard-coded section order — the default when the layout isn't customised. The journal
     /// widget (#656) is last by default, where it was first added, above the data-sources card.
     static let defaultOrder: [TodaySection] = [
-        .hero, .liveSession, .synthesis, .keyMetrics, .workouts, .heartRate, .recoveryVitals, .yourCards,
-        .menstrualCycle, .journal, .addedCards,
+        .hero, .diet, .liveSession, .synthesis, .keyMetrics, .workouts, .heartRate, .recoveryVitals,
+        .yourCards, .menstrualCycle, .journal, .addedCards,
     ]
 }
 
