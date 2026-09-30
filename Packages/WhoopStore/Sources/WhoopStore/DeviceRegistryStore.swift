@@ -173,6 +173,9 @@ public struct DeviceRegistryStore: Sendable {
         // the detail they were derived from — a delete that looks complete on every chart while the
         // food the user ate is still on disk.
         "foodItem", "foodEntry",
+        // v49-diet-goal: deviceId-keyed like everything above. Forgetting the source must clear the goal
+        // too, or a re-added source would silently inherit the previous one's targets.
+        "dietGoal",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all

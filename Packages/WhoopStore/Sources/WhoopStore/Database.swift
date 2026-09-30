@@ -1166,6 +1166,45 @@ extension WhoopStore {
             try db.create(index: "idx_foodEntry_device_day", on: "foodEntry",
                           columns: ["deviceId", "day"], options: [.ifNotExists])
         }
+        // FORK-LOCAL (diet targets). The goal the eating budget is derived from: a destination and a
+        // timeline, from which the daily deficit falls out.
+        //
+        // A TABLE rather than UserDefaults for the same reason the food log is one — `.noopbak` is a ZIP
+        // of this SQLite file plus a fixed whitelist of settings, so anything outside the database is not
+        // in the backup. Losing the goal would silently reset every derived target.
+        //
+        // Rows rather than one row: a goal CHANGES (reached, revised, re-aimed), and the history is what
+        // lets a past day's adherence still be judged against the target that was actually in force that
+        // day. Superseding is `endedOn`, never deletion.
+        migrator.registerMigration("v49-diet-goal") { db in
+            try db.create(table: "dietGoal", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                // Local day the goal took effect, yyyy-MM-dd — the same key space as metricSeries, so a
+                // day's target can be resolved by string comparison with no date maths.
+                t.column("startedOn", .text).notNull()
+                // NULL while current. Set when a new goal supersedes this one; the row is kept so an
+                // older day still resolves against the target that governed it.
+                t.column("endedOn", .text)
+                t.column("startWeightKg", .double).notNull()
+                t.column("targetWeightKg", .double).notNull()
+                t.column("months", .integer).notNull()
+                // "sedentary" | "lightlyActive".
+                t.column("activityLevel", .text).notNull()
+                // The deficit derived from the goal at the time it was set. Stored rather than recomputed
+                // so a past day keeps the number it was actually judged against, even after the user's
+                // weight has moved underneath the derivation.
+                t.column("dailyDeficitKcal", .double).notNull()
+                // Set when the user overrides the derived daily target outright; NULL means "use the
+                // derivation". Kept separate from `dailyDeficitKcal` so an override is visibly an
+                // override rather than silently rewriting the goal it came from.
+                t.column("targetOverrideKcal", .double)
+                t.column("createdAt", .integer).notNull()   // unix seconds
+            }
+            // Resolving "the goal in force on day X" is the only read, and it scans by device then date.
+            try db.create(index: "idx_dietGoal_device_started", on: "dietGoal",
+                          columns: ["deviceId", "startedOn"], options: [.ifNotExists])
+        }
         return migrator
     }
 }

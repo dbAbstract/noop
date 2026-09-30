@@ -203,6 +203,15 @@ enum MetricCatalog {
         // series above, which is written by the import and owned by whatever app recorded it.
         d("weight", String(localized: "Weight"), "Health", "kg", WeightLogStore.sourceId, "scalemass", 1, nil),
 
+        // ── Diet (derived daily, from the goal + the expenditure model).
+        //
+        // `diet_expenditure` is deliberately NOT `energy_kcal`: that key is NOOP's own heart-rate figure,
+        // and these are two different answers to one question. Sharing a key would let one silently
+        // stand in for the other on a chart, which is exactly the comparison this feature exists to make
+        // visible.
+        d("calorie_target", String(localized: "Calorie Target"), "Nutrition", "kcal", DietStore.sourceId, "target", 0, nil),
+        d("diet_expenditure", String(localized: "Expenditure (modelled)"), "Nutrition", "kcal", DietStore.sourceId, "flame.circle", 0, nil),
+
         // ── Mind (daily mood check-in, 1–5; non-clinical self-tracking)
         d("mood", String(localized: "Mood"), "Mind", "/5", "noop-mood", "face.smiling", 0, true),
 

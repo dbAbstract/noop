@@ -49,7 +49,8 @@
     "v45-rr-source-index",
     "v46-lift-log",
     "v47-rr-whoop5-fill",
-    "v48-food-log"
+    "v48-food-log",
+    "v49-diet-goal"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android \u2014 the per-row upload flag belongs to an upload path that does not exist there \u2014 so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2499,6 +2500,95 @@
           "columns": [
             "deviceId",
             "day"
+          ]
+        }
+      ]
+    },
+    "dietGoal": {
+      "platform": "ios_only",
+      "reason": "v49 diet goal: a target weight and a timeline, from which the daily deficit is derived. Rows rather than one row because a goal changes and a past day must still resolve against the target that governed it; superseding sets endedOn, never deletes. iOS-only pending the Kotlin twin (matching column ORDER) and its Room migration.",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null,
+          "android": {
+            "notNull": true
+          },
+          "divergence": "sqlite-text-pk-nullable"
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "startedOn",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "endedOn",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "startWeightKg",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "targetWeightKg",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "months",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "activityLevel",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "dailyDeficitKcal",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "targetOverrideKcal",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "createdAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "idx_dietGoal_device_started",
+          "unique": false,
+          "columns": [
+            "deviceId",
+            "startedOn"
           ]
         }
       ]
