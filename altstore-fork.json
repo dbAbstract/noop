@@ -1,0 +1,34 @@
+{
+  "name": "NOOP (dbAbstract fork)",
+  "identifier": "com.takienari.noop.altstore.fork",
+  "sourceURL": "https://raw.githubusercontent.com/dbAbstract/noop/food-log/altstore-fork.json",
+  "subtitle": "Personal fork builds — food log, strap-first calories.",
+  "description": "A private AltStore / SideStore source for a personal fork of NOOP, the independent open-source WHOOP companion. Points at this fork's rolling `testing-latest` release, so each CI testing build appears here as an update.\n\nNOOP is not affiliated with WHOOP. It reads a strap you own, directly over Bluetooth, on your own device — no WHOOP app, no subscription, no cloud.",
+  "iconURL": "https://github.com/ryanbr/noop/raw/main/Strand/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png",
+  "website": "https://github.com/dbAbstract/noop",
+  "tintColor": "44E2B0",
+  "apps": [
+    {
+      "name": "NOOP (fork)",
+      "bundleIdentifier": "com.noopapp.noop",
+      "developerName": "dbAbstract",
+      "subtitle": "Personal fork build with the v0 food log.",
+      "localizedDescription": "A personal fork build of NOOP. Adds an on-device food and macro log, a manual weigh-in, and an opt-in preference to show NOOP's own calorie estimate instead of Apple Health's.\n\nBuilt by this fork's 'Testing build (fork)' workflow from the food-log branch. Unsigned — SideStore re-signs it with your own Apple ID on install.",
+      "iconURL": "https://github.com/ryanbr/noop/raw/main/Strand/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png",
+      "tintColor": "44E2B0",
+      "category": "healthcare-fitness",
+      "screenshotURLs": [],
+      "versions": [
+        {
+          "version": "11.8.0",
+          "buildVersion": "429",
+          "date": "2026-09-30",
+          "localizedDescription": "v0 food log, manual weigh-in, strap-first calories.",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0.ipa",
+          "size": 22026513,
+          "minOSVersion": "17.0"
+        }
+      ]
+    }
+  ]
+}
