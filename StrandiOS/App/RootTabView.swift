@@ -22,6 +22,8 @@ struct RootTabView: View {
     /// attached and would otherwise keep posting AI notifications for a feature the wearer switched off.
     @AppStorage("noop.coachEnabled") private var coachEnabled = true
     @AppStorage("noop.bottomBarAutoHide") private var bottomBarAutoHide = false
+    /// Sizes the quick-action sheet's fixed detent, which has to grow when the Log food row appears.
+    @AppStorage(FoodLogStore.enabledKey) private var foodLoggingEnabled = false
 
     /// The live gym session, owned at the app root — see `LiftSessionController`.
     @EnvironmentObject private var liftSession: LiftSessionController
@@ -377,8 +379,10 @@ struct RootTabView: View {
                     withAnimation(Self.sheetEase) { quickAction = picked }
                 }
             }
-            .presentationDetents([.height(344)])
+            .presentationDetents([.height(QuickActionSheetMetrics.height(foodEnabled: foodLoggingEnabled))])
             .presentationDragIndicator(.hidden)
+        case .food:
+            quickScreen(FoodLogView())
         case .live:
             quickScreen(LiveView())
         case .workout:
@@ -690,8 +694,21 @@ private struct MoreRow: View {
 /// The destinations the centre FAB can present. `.menu` is the action sheet itself; the rest
 /// route to existing screens. `Identifiable` so it drives `.sheet(item:)`.
 private enum QuickAction: Int, Identifiable {
-    case menu, live, workout, journal, breathe
+    case menu, live, workout, journal, breathe, food
     var id: Int { rawValue }
+}
+
+/// Sheet geometry for the quick-action menu. The detent is a fixed height rather than `.medium`, so it
+/// has to be told when a row appears or the last row sits under the sheet's edge.
+private enum QuickActionSheetMetrics {
+    /// Four always-present rows (Live / Workout / Journal / Breathe).
+    static let baseHeight: CGFloat = 344
+    /// One row: 38pt tile + 10pt vertical padding either side, plus the 8pt VStack spacing above it.
+    static let rowHeight: CGFloat = 66
+
+    static func height(foodEnabled: Bool) -> CGFloat {
+        baseHeight + (foodEnabled ? rowHeight : 0)
+    }
 }
 
 /// The bottom sheet of quick actions presented by the centre FAB. Spec bottom sheet: surfaceOverlay
@@ -699,6 +716,10 @@ private enum QuickAction: Int, Identifiable {
 private struct QuickActionSheet: View {
     /// Called with the picked destination (the host swaps the menu for that screen).
     let onPick: (QuickAction) -> Void
+
+    /// The food log's opt-in. Read here as well as in the shell (which sizes the detent) rather than
+    /// passed in, so the row and the sheet height can never be resolved from different answers.
+    @AppStorage(FoodLogStore.enabledKey) private var foodLoggingEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -720,6 +741,13 @@ private struct QuickActionSheet: View {
             VStack(spacing: 8) {
                 row("Live HR", icon: "waveform.path.ecg", tint: StrandPalette.metricRose) { onPick(.live) }
                 row("Start workout", icon: "figure.run", tint: StrandPalette.effortColor) { onPick(.workout) }
+                // Sits with the other log-something actions rather than at the top: Live and Workout are
+                // the time-critical ones (a strap reading you want NOW), while logging a meal is not.
+                // Hidden entirely when the feature is off, matching how its Today card is gated — an
+                // always-present row for a disabled feature is a dead end.
+                if foodLoggingEnabled {
+                    row("Log food", icon: "fork.knife", tint: StrandPalette.metricAmber) { onPick(.food) }
+                }
                 row("Log journal", icon: "square.and.pencil", tint: StrandPalette.accent) { onPick(.journal) }
                 row("Breathe", icon: "wind", tint: StrandPalette.restColor) { onPick(.breathe) }
             }
