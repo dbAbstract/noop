@@ -21,11 +21,11 @@
       "versions": [
         {
           "version": "11.8.0",
-          "buildVersion": "1005",
+          "buildVersion": "1006",
           "date": "2026-09-30",
-          "localizedDescription": "ci: put the build number in the ipa filename so each build has its own URL",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1005.ipa",
-          "size": 16059236,
+          "localizedDescription": "feat(food): move the food log into the database so it survives a restore",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1006.ipa",
+          "size": 16070966,
           "minOSVersion": "17.0"
         }
       ]
