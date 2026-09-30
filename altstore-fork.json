@@ -21,11 +21,11 @@
       "versions": [
         {
           "version": "11.8.0",
-          "buildVersion": "430",
+          "buildVersion": "1003",
           "date": "2026-09-30",
-          "localizedDescription": "Log food in the Today quick actions (+ button). v0 food log, manual weigh-in, strap-first calories.",
+          "localizedDescription": "ci: build and publish the fork source automatically on a push to `fork`",
           "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0.ipa",
-          "size": 22029885,
+          "size": 22076878,
           "minOSVersion": "17.0"
         }
       ]
