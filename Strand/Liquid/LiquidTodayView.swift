@@ -561,10 +561,15 @@ struct LiquidTodayView: View {
                             .font(StrandFont.rounded(28))
                             .foregroundStyle(StrandPalette.textPrimary)
                             .shadow(color: .black.opacity(0.4), radius: 10, y: 1)
-                        Text(dateLine)
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textSecondary)
-                            .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                        HStack(spacing: NoopMetrics.space2) {
+                            Text(dateLine)
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                                .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                            // Rides the date line rather than the title so it cannot push a long day name
+                            // into the trailing controls' fade mask.
+                            DevBuildBadge()
+                        }
                     }
                     .contentShape(Rectangle())
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2434,6 +2439,34 @@ private let headerClusterSpacing = NoopMetrics.space1
 #else
 private let headerClusterSpacing = NoopMetrics.space3
 #endif
+
+/// "DEV" pill shown only in the development build (FORK-LOCAL).
+///
+/// Third of three markers, with the Home-screen name ("NOOP Dev") and the amber app icon. Each catches a
+/// different moment: the name when launching, the icon in the app switcher, and this one once you are
+/// already inside and wondering which install you opened — the point at which the other two are no longer
+/// on screen.
+///
+/// Gated on NOOP_DEV_BUILD, which `project.yml` defines on the Debug configuration alongside the icon and
+/// the display name, so all three come from one switch. `#if DEBUG` would have been a SECOND source of
+/// truth for the same question and free to disagree with the icon.
+///
+/// Renders nothing at all in a Release build — not a hidden view, no layout effect, no accessibility node.
+private struct DevBuildBadge: View {
+    var body: some View {
+        #if NOOP_DEV_BUILD
+        Text(verbatim: "DEV")
+            .font(StrandFont.caption.weight(.bold))
+            .foregroundStyle(StrandPalette.surfaceBase)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(StrandPalette.metricAmber, in: Capsule())
+            // Not decorative: which build you are looking at is exactly the thing this conveys, and a
+            // VoiceOver user has no icon or Home-screen name to fall back on mid-session.
+            .accessibilityLabel("Development build")
+        #endif
+    }
+}
 
 private struct LiquidAddButton: View {
     @EnvironmentObject var router: NavRouter

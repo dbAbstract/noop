@@ -240,7 +240,10 @@ targets:
       path: StrandiOS/Resources/Info.plist
       properties:
         CFBundleName: NOOP
-        CFBundleDisplayName: NOOP
+        # FORK-LOCAL: resolved per configuration (see NOOP_DISPLAY_NAME below) so a Debug build installed
+        # from Xcode reads "NOOP Dev" on the Home screen while the Release build keeps "NOOP". The two
+        # install side by side under different bundle ids and were otherwise indistinguishable.
+        CFBundleDisplayName: "$(NOOP_DISPLAY_NAME)"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # Surfaces APP_GROUP_ID to runtime (WidgetSnapshot.suiteName) so the App Group id isn't
@@ -362,6 +365,30 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_EMIT_LOC_STRINGS: YES
+      # FORK-LOCAL: mark the DEBUG build so it is distinguishable from the sideloaded Release one.
+      #
+      # The two install SIDE BY SIDE — Xcode builds com.takienari.noop, CI builds com.noopapp.noop — with
+      # separate databases, which is deliberate: an unfinished migration must not be able to corrupt the
+      # install holding real strap history. But both shipped the same name AND the same icon, so the only
+      # way to tell which was which on the Home screen was to remember where they sat.
+      #
+      # Split per CONFIGURATION rather than per bundle id, because Debug/Release is what actually
+      # separates the two loops (Xcode builds Debug, the testing workflow builds Release) and it needs no
+      # new flag to keep in sync with the prefix.
+      #
+      # NOT an alternate icon via setAlternateIconName: "AppIcon-Navy" already uses that mechanism as a
+      # user-facing preference, so claiming it for the dev build would make the two identical again the
+      # moment someone picked Navy on the daily driver.
+      configs:
+        Debug:
+          NOOP_DISPLAY_NAME: "NOOP Dev"
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
+          # Compiled into the Debug binary so the in-app badge and the Home-screen identity are driven by
+          # ONE fact. A separate #if DEBUG in Swift would be a second source of truth for the same thing,
+          # free to disagree with the icon after a config change.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) NOOP_DEV_BUILD"
+        Release:
+          NOOP_DISPLAY_NAME: NOOP
     dependencies:
       - package: WhoopProtocol
       - package: WhoopStore
