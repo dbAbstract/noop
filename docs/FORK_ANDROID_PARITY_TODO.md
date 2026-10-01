@@ -249,7 +249,24 @@ flat walking rate — an under-credit of a hard session rather than an invented 
 
 ---
 
-## 7. Known gaps NOT introduced here
+## 7. Translation debt (blocks upstreaming, not the fork)
+
+Every string added by this feature is **English only**. `i18n-coverage.yml` hard-fails on a missing de /
+es / fr / pt-PT translation, but it triggers only on PRs into `main` and on pushes to `main` — so it
+never sees this fork's branches, and the debt accumulates silently.
+
+That is fine for a personal build and is a hard blocker the first time any of this is offered upstream.
+Whoever does that should run `python3 Tools/i18n_audit.py --ci` first (it needs **Python 3.10+**; the
+`str | None` alias at module scope fails outright on 3.9) and expect a long list.
+
+Note also that `Tools/seed-string-catalog.py` is **not** the way to extract these. It rebuilds the
+catalogue from whatever `.stringsdata` happens to be in DerivedData, which on a machine that has built
+other targets means thousands of unrelated strings and a whole-file rewrite — not the small additive
+diff the previous extraction commits show.
+
+---
+
+## 8. Known gaps NOT introduced here
 
 Worth fixing while in the area, but pre-existing on both platforms:
 
