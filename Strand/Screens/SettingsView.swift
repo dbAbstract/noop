@@ -2355,6 +2355,17 @@ struct SettingsView: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
     }
 
+    /// "v11.8.0 (430)" on a local build, "v11.8.0.1013" on a CI one.
+    ///
+    /// CI folds the build into the MARKETING version, because that is the field AltStore/SideStore
+    /// actually compare to decide an update exists. Printing the build again in brackets would then say
+    /// the same number twice. A local build does not do that, so there the bracket is the only place the
+    /// build appears and it stays.
+    private var versionPillText: String {
+        let v = bundleVersionString, b = bundleBuildString
+        return v.hasSuffix(".\(b)") ? "v\(v)" : "v\(v) (\(b))"
+    }
+
     private var aboutCard: some View {
         SettingsSection(
             icon: "info.circle.fill",
@@ -2366,7 +2377,7 @@ struct SettingsView: View {
                     Text("NOOP")
                         .font(StrandFont.title2)
                         .foregroundStyle(StrandPalette.textPrimary)
-                    StatePill("v\(bundleVersionString) (\(bundleBuildString))", tone: .neutral, showsDot: false)
+                    StatePill(versionPillText, tone: .neutral, showsDot: false)
                     Spacer()
                     NoopButton("What's new", systemImage: "sparkles", kind: .secondary) {
                         showWhatsNew = true
