@@ -12,9 +12,17 @@ import StrandAnalytics
 // read-only and derived, because a typed total beside computed ingredients is two answers to one question
 // and the repo's hard rules say not to show the fact twice.
 //
-// INGREDIENTS MUST ALREADY BE IN THE LIBRARY. Adding a brand-new food from inside here would mean two
-// nested creation flows and a half-saved recipe if the inner one is cancelled. Saving the ingredient
-// first is one extra step on a screen the user visits rarely, and it keeps both flows atomic.
+// AN INGREDIENT NEED NOT BE SAVED. Two ways to add one:
+//
+//   • Pick a SAVED food — its macros then resolve live, so correcting that food corrects every recipe
+//     containing it. The right choice for anything you also eat on its own.
+//   • Type an UNSAVED one — its macros are held by the recipe itself. The right choice for anything that
+//     exists only as part of this dish. A bulgogi marinade is soy sauce, oyster sauce, sesame oil and
+//     sugar; forcing each into the library to build one recipe would fill the food picker with things
+//     nobody logs on their own, which is the same reason one-off meals default to not being saved.
+//
+// The trade is explicit and stated in the UI: an unsaved ingredient cannot be corrected in one place
+// later, because there is no one place. It also cannot go missing, for the same reason.
 struct RecipeBuilderSheet: View {
     /// nil creates a new recipe; non-nil edits an existing one.
     let existing: Recipe?
@@ -36,14 +44,40 @@ struct RecipeBuilderSheet: View {
     @State private var saving = false
     @State private var confirmingDelete = false
 
+    // Unsaved-ingredient draft. Its own fields rather than a nested sheet: a second modal over a
+    // half-built recipe is how you lose the recipe when the inner one is cancelled.
+    @State private var addingInline = false
+    @State private var inlineName = ""
+    @State private var inlineServing = ""
+    @State private var inlineKcal = ""
+    @State private var inlineProtein = ""
+    @State private var inlineCarbs = ""
+    @State private var inlineFat = ""
+    @State private var inlineFiber = ""
+
     private var byId: [UUID: FoodItem] {
         Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
+    }
+
+    private var inlineMacros: MacroTotals {
+        MacroTotals(kcal: number(inlineKcal), protein: number(inlineProtein), carbs: number(inlineCarbs),
+                    fat: number(inlineFat), fiber: number(inlineFiber))
+    }
+
+    private var canAddInline: Bool {
+        !inlineName.trimmingCharacters(in: .whitespaces).isEmpty && !inlineMacros.isEmpty
+    }
+
+    /// Blank reads as 0 — a sauce with no fibre listed is the common case, and forcing a 0 into every
+    /// box is friction for no gain. Matches `AddFoodSheet`.
+    private func number(_ s: String) -> Double {
+        Double(s.trimmingCharacters(in: .whitespaces)) ?? 0
     }
 
     /// A recipe may not contain itself, and an ingredient already in the list is added by bumping its
     /// quantity rather than appearing twice.
     private var candidates: [FoodItem] {
-        let used = Set(parts.map { $0.foodItemId })
+        let used = Set(parts.compactMap { $0.foodItemId })
         return FoodLibrary.matching(library, query: query)
             .filter { $0.id != existing?.item.id && !used.contains($0.id) }
     }
@@ -52,7 +86,7 @@ struct RecipeBuilderSheet: View {
     /// saved, not what was saved last.
     private var composed: MacroTotals {
         RecipeMath.compose(parts.map {
-            RecipePart(macrosPerServing: byId[$0.foodItemId]?.macros ?? .zero,
+            RecipePart(macrosPerServing: $0.macrosPerServing(in: byId) ?? .zero,
                        quantity: quantity(of: $0))
         })
     }
@@ -69,7 +103,7 @@ struct RecipeBuilderSheet: View {
                 detailsSection
                 ingredientsSection
                 totalsSection
-                if !candidates.isEmpty { addIngredientSection }
+                addIngredientSection
                 actions
             }
             .padding(NoopMetrics.screenPadding)
@@ -125,17 +159,36 @@ struct RecipeBuilderSheet: View {
 
     @ViewBuilder
     private func ingredientRow(_ part: RecipePartRef) -> some View {
-        let item = byId[part.foodItemId]
+        // Resolved through the part, so a library reference and an unsaved ingredient render the same way
+        // without this view needing to know which it has. nil means ONLY the one case that matters: a
+        // reference whose food has been deleted.
+        let resolvedName = part.name(in: byId)
+        let macros = part.macrosPerServing(in: byId)
+        let isInline = part.foodItemId == nil
         HStack(alignment: .firstTextBaseline, spacing: NoopMetrics.space3) {
             VStack(alignment: .leading, spacing: 2) {
-                // A deleted ingredient is NAMED as missing rather than dropped from the list. Dropping it
-                // would make the recipe's total quietly shrink to a plausible wrong number; saying so
-                // leaves a problem the user can fix.
-                Text(item?.name ?? "Missing ingredient")
-                    .font(StrandFont.body)
-                    .foregroundStyle(item == nil ? StrandPalette.textTertiary : StrandPalette.textPrimary)
-                Text(item.map { "per \($0.servingLabel) · \(Int($0.macros.kcal.rounded())) kcal" }
-                     ?? "This food was deleted from your library")
+                HStack(spacing: 6) {
+                    // A deleted ingredient is NAMED as missing rather than dropped from the list. Dropping
+                    // it would make the recipe's total quietly shrink to a plausible wrong number; saying
+                    // so leaves a problem the user can fix.
+                    Text(resolvedName ?? "Missing ingredient")
+                        .font(StrandFont.body)
+                        .foregroundStyle(macros == nil ? StrandPalette.textTertiary
+                                                       : StrandPalette.textPrimary)
+                    // Marks which ingredients live only in this recipe, because that decides where you
+                    // go to correct one later.
+                    if isInline {
+                        Text("unsaved")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                    }
+                }
+                Text(macros.map { m in
+                        let per = part.servingLabel(in: byId) ?? ""
+                        return per.isEmpty
+                            ? "\(Int(m.kcal.rounded())) kcal"
+                            : "per \(per) · \(Int(m.kcal.rounded())) kcal"
+                     } ?? "This food was deleted from your library")
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
             }
@@ -146,7 +199,7 @@ struct RecipeBuilderSheet: View {
                 #if os(iOS)
                 .keyboardType(.decimalPad)
                 #endif
-                .accessibilityLabel("Quantity of \(item?.name ?? "missing ingredient")")
+                .accessibilityLabel("Quantity of \(resolvedName ?? "missing ingredient")")
             Button {
                 remove(part)
             } label: {
@@ -154,7 +207,7 @@ struct RecipeBuilderSheet: View {
                     .foregroundStyle(StrandPalette.textTertiary)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Remove \(item?.name ?? "missing ingredient")")
+            .accessibilityLabel("Remove \(resolvedName ?? "missing ingredient")")
         }
     }
 
@@ -185,40 +238,110 @@ struct RecipeBuilderSheet: View {
 
     private var addIngredientSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Add an ingredient", overline: "Library")
+            SectionHeader("Add an ingredient", overline: "Saved or not")
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
-                    TextField("Search saved foods", text: $query)
-                        .textFieldStyle(.roundedBorder)
-                    ForEach(candidates.prefix(8)) { item in
-                        Button {
-                            add(item)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.name)
-                                        .font(StrandFont.body)
-                                        .foregroundStyle(StrandPalette.textPrimary)
-                                    Text(item.servingLabel)
-                                        .font(StrandFont.caption)
-                                        .foregroundStyle(StrandPalette.textTertiary)
-                                }
-                                Spacer()
-                                Text("\(Int(item.macros.kcal.rounded())) kcal")
-                                    .font(StrandFont.footnote)
-                                    .foregroundStyle(StrandPalette.textSecondary)
-                                Image(systemName: "plus.circle")
-                                    .foregroundStyle(StrandPalette.accent)
-                            }
+                    if !library.isEmpty {
+                        TextField("Search saved foods", text: $query)
+                            .textFieldStyle(.roundedBorder)
+                        if candidates.isEmpty {
+                            Text(query.isEmpty
+                                 ? "Everything in your library is already in this recipe."
+                                 : "No saved food matches that — add it as an unsaved ingredient below.")
+                                .font(StrandFont.footnote)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .buttonStyle(.plain)
+                        ForEach(candidates.prefix(8)) { item in
+                            Button {
+                                add(item)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.name)
+                                            .font(StrandFont.body)
+                                            .foregroundStyle(StrandPalette.textPrimary)
+                                        Text(item.servingLabel)
+                                            .font(StrandFont.caption)
+                                            .foregroundStyle(StrandPalette.textTertiary)
+                                    }
+                                    Spacer()
+                                    Text("\(Int(item.macros.kcal.rounded())) kcal")
+                                        .font(StrandFont.footnote)
+                                        .foregroundStyle(StrandPalette.textSecondary)
+                                    Image(systemName: "plus.circle")
+                                        .foregroundStyle(StrandPalette.accent)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Divider().overlay(StrandPalette.hairline)
                     }
-                    Text("Only foods already in your library can be ingredients. Save a food first, then add it here.")
-                        .font(StrandFont.caption)
-                        .foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+
+                    inlineDraft
                 }
             }
+        }
+    }
+
+    /// Add an ingredient that is NOT in the library and will not be added to it.
+    ///
+    /// Inline rather than a nested sheet, deliberately: a second modal over a half-built recipe is how
+    /// the recipe gets lost when the inner one is cancelled.
+    @ViewBuilder
+    private var inlineDraft: some View {
+        if addingInline {
+            VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                Text("Unsaved ingredient")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                TextField("Name — e.g. Soy sauce", text: $inlineName)
+                    .textFieldStyle(.roundedBorder)
+                TextField("One serving is — e.g. 1 tbsp", text: $inlineServing)
+                    .textFieldStyle(.roundedBorder)
+                // Per SERVING, matching every other macro entry in the app, so one convention covers
+                // both ingredient kinds and `RecipeMath` can scale them identically.
+                HStack(spacing: NoopMetrics.space2) {
+                    macroField("kcal", $inlineKcal)
+                    macroField("P", $inlineProtein)
+                    macroField("C", $inlineCarbs)
+                    macroField("F", $inlineFat)
+                    macroField("Fib", $inlineFiber)
+                }
+                Text("Macros per serving. This ingredient lives in this recipe only — it will not appear in your food library, and correcting it later means editing this recipe.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: NoopMetrics.space3) {
+                    NoopButton("Cancel", kind: .secondary) { resetInlineDraft() }
+                    NoopButton("Add", kind: .primary) { addInline() }
+                        .disabled(!canAddInline)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                NoopButton("Add an unsaved ingredient", systemImage: "plus", kind: .secondary) {
+                    addingInline = true
+                }
+                Text("For something that only exists in this dish — a sauce, a marinade component. Nothing is added to your food library.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func macroField(_ label: String, _ binding: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+            TextField("0", text: binding)
+                .textFieldStyle(.roundedBorder)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .accessibilityLabel(label)
         }
     }
 
@@ -275,10 +398,31 @@ struct RecipeBuilderSheet: View {
     }
 
     private func add(_ item: FoodItem) {
-        let part = RecipePartRef(foodItemId: item.id, quantity: 1)
+        let part = RecipePartRef(source: .library(item.id), quantity: 1)
         parts.append(part)
         quantityDrafts[part.id] = "1"
         query = ""
+    }
+
+    private func addInline() {
+        let part = RecipePartRef(
+            source: .inline(name: inlineName.trimmingCharacters(in: .whitespaces),
+                            // A blank serving label would make the row read "1 ×" with no unit; a plain
+                            // default at least states the unit is unspecified. Matches `AddFoodSheet`.
+                            servingLabel: inlineServing.trimmingCharacters(in: .whitespaces).isEmpty
+                                ? String(localized: "1 serving")
+                                : inlineServing.trimmingCharacters(in: .whitespaces),
+                            macros: inlineMacros),
+            quantity: 1)
+        parts.append(part)
+        quantityDrafts[part.id] = "1"
+        resetInlineDraft()
+    }
+
+    private func resetInlineDraft() {
+        addingInline = false
+        inlineName = ""; inlineServing = ""
+        inlineKcal = ""; inlineProtein = ""; inlineCarbs = ""; inlineFat = ""; inlineFiber = ""
     }
 
     private func remove(_ part: RecipePartRef) {
@@ -291,7 +435,7 @@ struct RecipeBuilderSheet: View {
         // The quantity the STORE sees is the parsed draft, so what is persisted is exactly what the
         // totals panel was showing — rather than the stale `quantity` the part was created with.
         let resolved = parts.map {
-            RecipePartRef(id: $0.id, foodItemId: $0.foodItemId, quantity: quantity(of: $0))
+            RecipePartRef(id: $0.id, source: $0.source, quantity: quantity(of: $0))
         }
         let item = FoodItem(id: existing?.item.id ?? UUID(),
                             name: name.trimmingCharacters(in: .whitespaces),

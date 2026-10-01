@@ -71,7 +71,9 @@ struct AddFoodSheet: View {
         guard let recipe = selectedRecipe else { return nil }
         let byId = Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
         return RecipeMath.compose(recipe.parts.map { part in
-            RecipePart(macrosPerServing: byId[part.foodItemId]?.macros ?? .zero,
+            // Resolved through the part, so an unsaved ingredient contributes its own macros while a
+            // library reference still resolves live.
+            RecipePart(macrosPerServing: part.macrosPerServing(in: byId) ?? .zero,
                        quantity: Double((partDrafts[part.id] ?? "").trimmingCharacters(in: .whitespaces)) ?? 0)
         })
     }
@@ -215,15 +217,15 @@ struct AddFoodSheet: View {
                 NoopCard {
                     VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                         ForEach(recipe.parts) { part in
-                            let ingredient = byId[part.foodItemId]
+                            let ingredientName = part.name(in: byId)
+                            let hasMacros = part.macrosPerServing(in: byId) != nil
                             HStack(alignment: .firstTextBaseline, spacing: NoopMetrics.space3) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(ingredient?.name ?? "Missing ingredient")
+                                    Text(ingredientName ?? "Missing ingredient")
                                         .font(StrandFont.body)
-                                        .foregroundStyle(ingredient == nil
-                                                         ? StrandPalette.textTertiary
-                                                         : StrandPalette.textPrimary)
-                                    Text(ingredient?.servingLabel ?? "Deleted from your library")
+                                        .foregroundStyle(hasMacros ? StrandPalette.textPrimary
+                                                                   : StrandPalette.textTertiary)
+                                    Text(part.servingLabel(in: byId) ?? "Deleted from your library")
                                         .font(StrandFont.caption)
                                         .foregroundStyle(StrandPalette.textTertiary)
                                 }
@@ -234,7 +236,7 @@ struct AddFoodSheet: View {
                                     #if os(iOS)
                                     .keyboardType(.decimalPad)
                                     #endif
-                                    .accessibilityLabel("Quantity of \(ingredient?.name ?? "missing ingredient")")
+                                    .accessibilityLabel("Quantity of \(ingredientName ?? "missing ingredient")")
                             }
                         }
                         if recipeIsTweaked {

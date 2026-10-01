@@ -15,6 +15,14 @@ import Foundation
 // where the thing is being edited, frozen where it is being remembered: the same split the food log
 // already applies to names and macros.
 //
+// AN INGREDIENT NEED NOT BE IN THE LIBRARY. A component either REFERENCES a library food — whose macros
+// then resolve live, so correcting the food corrects every recipe containing it — or carries its macros
+// INLINE. The inline case is the common one for anything used in exactly one dish: a bulgogi marinade is
+// soy sauce, oyster sauce, sesame oil and sugar, four foods that exist only as part of that marinade.
+// Requiring each to be saved first would fill the food picker with things nobody logs on their own.
+//
+// Only a REFERENCE can go missing, which is the only reason the two cases are distinguished here at all.
+//
 // A MISSING INGREDIENT IS NOT ZERO. If a component names a food that no longer exists, the total it
 // belongs to is refused rather than quietly computed without it. Deleting the banana must not make the
 // shake look like a 180 kcal food — an absent number and a smaller number are different claims, and only
@@ -86,15 +94,45 @@ public enum RecipeMath {
     public static func resolve(componentIds: [String],
                               quantities: [Double],
                               lookup: (String) -> MacroTotals?) -> RecipeComposition {
+        resolve(references: componentIds.map(Reference.library),
+                quantities: quantities,
+                lookup: lookup)
+    }
+
+    /// What a component points at: a library food that must be looked up, or macros it carries itself.
+    ///
+    /// The distinction matters to exactly one thing — whether the component can go MISSING. A library
+    /// reference can (the food was deleted), and that refuses the total. An inline ingredient cannot, by
+    /// construction, because there is nothing to delete out from under it.
+    public enum Reference: Equatable, Sendable {
+        /// An id to resolve against the library.
+        case library(String)
+        /// Per-serving macros held by the component itself — an ad-hoc ingredient used in one dish and
+        /// not worth a library entry.
+        case inline(MacroTotals)
+    }
+
+    /// Compose a mix of library references and inline ingredients.
+    ///
+    /// Same rule as before for references: any that cannot be resolved refuses the whole total rather
+    /// than being summed around. Inline ingredients are already resolved and simply participate.
+    public static func resolve(references: [Reference],
+                              quantities: [Double],
+                              lookup: (String) -> MacroTotals?) -> RecipeComposition {
         var parts: [RecipePart] = []
         var missing: [String] = []
-        for (i, id) in componentIds.prefix(maxParts).enumerated() {
-            guard let macros = lookup(id) else {
-                missing.append(id)
-                continue
+        for (i, ref) in references.prefix(maxParts).enumerated() {
+            let quantity = i < quantities.count ? quantities[i] : 0
+            switch ref {
+            case .inline(let macros):
+                parts.append(RecipePart(macrosPerServing: macros, quantity: quantity))
+            case .library(let id):
+                guard let macros = lookup(id) else {
+                    missing.append(id)
+                    continue
+                }
+                parts.append(RecipePart(macrosPerServing: macros, quantity: quantity))
             }
-            parts.append(RecipePart(macrosPerServing: macros,
-                                    quantity: i < quantities.count ? quantities[i] : 0))
         }
         // Refused, not partially summed — the whole point of tracking `missing` at all.
         guard missing.isEmpty else {

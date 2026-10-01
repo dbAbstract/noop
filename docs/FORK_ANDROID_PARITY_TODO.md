@@ -57,7 +57,7 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
 | `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
-| `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. |
+| `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. A part is either a `Reference.library(id)` (looked up, can go missing) or a `Reference.inline(macros)` (carried, cannot) — an inline part must NEVER consult the lookup, or every ad-hoc recipe is refused. |
 
 **On the protein default.** 1.2 g/kg is deliberately below the usually-quoted 1.6–2.2. That range comes
 from studies on people training several times a week; the lifting stimulus is what creates the demand.
@@ -73,7 +73,7 @@ against one number and measure itself against another. Keep that sharing in Kotl
 
 ## 2. Storage — GRDB migrations needing Room twins
 
-Three migrations, all currently `ios_only` in the schema oracle.
+Four migrations, all currently `ios_only` in the schema oracle.
 
 ### `v48-food-log` — `foodItem`, `foodEntry`
 
@@ -138,6 +138,27 @@ Design points the twin must preserve:
   entry. On Apple, a tweaked recipe deliberately logs with `saveToLibrary: false` — otherwise the
   re-save that stamps `lastUsedAt` would push today's amounts onto the saved recipe.
 
+### `v51-inline-recipe-ingredients` — ad-hoc ingredients
+
+Makes `recipeComponent.foodItemId` NULLABLE and adds seven `inline*` columns. **This migration REBUILDS
+the table** (create-copy-drop-rename), because SQLite cannot drop NOT NULL in place — so the column order
+below is authoritative and Room must match it exactly:
+
+```
+recipeComponent  id, deviceId, recipeId, foodItemId, quantity, ord,
+                 inlineName, inlineServingLabel, inlineKcal, inlineProtein, inlineCarbs,
+                 inlineFat, inlineFiber
+```
+
+- **Exactly one shape per row.** Non-null `foodItemId` = a library reference, whose macros resolve LIVE.
+  Null = the `inline*` columns hold the ingredient outright. That nil IS the discriminator; a row
+  carrying both would make every reader guess.
+- **Only a reference can go missing**, which is the only reason the two cases are distinguished in
+  `RecipeMath` at all. An inline ingredient has nothing to delete out from under it.
+- The index does **not** survive the rebuild — the migration recreates it afterwards. A Room twin doing
+  its own rebuild has the same trap.
+- Inline macros are PER SERVING, the same convention `foodItem` uses, so one scaling path covers both.
+
 ### `deviceScopedTables`
 
 `foodItem`, `foodEntry`, `dietGoal` and `recipeComponent` are all registered in
@@ -173,7 +194,7 @@ for the other on a chart, which is precisely the comparison the feature exists t
 | Swift | Android equivalent |
 |---|---|
 | `Strand/Data/FoodLogStore.swift` | `com.noop.analytics.FoodLogStore` over Room |
-| `Strand/Data/DietExpenditure.swift` | the day-assembly orchestration |
+| `Strand/Data/DietExpenditure.swift` | the day-assembly orchestration — including `dailyStepsForDiet`, see section 5 |
 | `Strand/Screens/FoodLogView.swift`, `AddFoodSheet.swift` | food logging UI — includes the day stepper (**past-day logging**: every write threads a `day` key, defaulting to today only at the edge) |
 | `Strand/Screens/EditFoodItemSheet.swift`, `EditWeightSheet.swift` | editing a saved food / a past weigh-in |
 | `Strand/Data/RecipeStore.swift`, `Strand/Screens/RecipeBuilderSheet.swift` | recipes — builder plus the log-time per-ingredient tweak in `AddFoodSheet` |
@@ -209,6 +230,34 @@ per-step rate cannot tell them apart — leaving them in would both double-count
 **Degrade conservatively.** Where the strap cannot answer (WHOOP 4.0 has no counter; a 5.0 has nothing
 until the window offloads), return **0 excluded steps**, not nil. Those steps then stay in NEAT at the
 flat walking rate — an under-credit of a hard session rather than an invented one.
+
+### `dailyStepsForDiet` — which step count the budget may use
+
+The twin of the above for the OTHER term, and a bug fix the Kotlin port must not reintroduce. The
+original read the merged daily cache's `steps` column directly, which for TODAY only gains a value once
+the strap has offloaded the window. Between offloads it was nil, NEAT was computed from 0, and the budget
+sat at `BMR x 1.2 - deficit` all day while the Today tile — reading its own fresher series — showed
+thousands of steps. The arithmetic was correct and it was being fed a step count from hours ago.
+
+The resolution order, which is a PRECEDENCE and deliberately neither a sum nor a max across instruments
+(these are alternative measurements of the same legs — adding double-counts, and taking the highest hands
+the budget to whichever device over-reports):
+
+1. The measured strap count for that day. A **zero column counts as no answer**, not as "no steps" — the
+   daily cache writes 0 for a day it has not seen, and treating that as measured pins the budget at
+   baseline for anyone whose steps come from their phone.
+2. Apple Health's `steps` series for that day.
+3. **Today only, and only upward:** the live phone pedometer may RAISE the resolved figure, never lower
+   it. It is the only source that knows about the last ten minutes. If the strap has already offloaded
+   more steps than the phone saw, the phone was in a bag and the strap is right. Taking the larger of two
+   counts that both lag for different reasons is the least-wrong way to track a day in progress, and it
+   cannot invent movement because both are measurements.
+
+Nothing resolvable means nil, which the caller treats as no NEAT credit rather than a guess.
+
+The UI half matters too: the budget card recomputes when the app becomes **active**, because that is when
+the user has been walking. A sync-keyed refresh alone does not fire, since a sync is not what changes the
+pedometer's figure.
 
 ---
 

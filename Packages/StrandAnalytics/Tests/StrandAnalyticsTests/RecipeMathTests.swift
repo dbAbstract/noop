@@ -145,3 +145,64 @@ final class RecipeMathTests: XCTestCase {
         XCTAssertEqual(RecipeMath.renumbered(-5), [])
     }
 }
+
+// MARK: - Inline (unsaved) ingredients
+
+/// A recipe may mix library references with ad-hoc ingredients that were never saved. The rule that
+/// matters: only a REFERENCE can go missing, so an inline ingredient can never refuse a total.
+extension RecipeMathTests {
+
+    private var soy: MacroTotals { MacroTotals(kcal: 8, protein: 1.3, carbs: 0.8, fat: 0, fiber: 0) }
+    private var oyster: MacroTotals { MacroTotals(kcal: 9, protein: 0.2, carbs: 2, fat: 0, fiber: 0) }
+
+    /// The bulgogi-marinade case: nothing here is worth a library entry.
+    func testAllInlineIngredientsCompose() {
+        let c = RecipeMath.resolve(references: [.inline(soy), .inline(oyster)],
+                                  quantities: [2, 1]) { _ in nil }
+        XCTAssertTrue(c.isComplete)
+        XCTAssertEqual(c.resolvedCount, 2)
+        XCTAssertEqual(c.macros?.kcal ?? .nan, 8 * 2 + 9, accuracy: 0.01)
+        XCTAssertEqual(c.macros?.protein ?? .nan, 1.3 * 2 + 0.2, accuracy: 0.01)
+    }
+
+    func testLibraryAndInlineIngredientsMixInOneRecipe() {
+        let library = ["whey": whey]
+        let c = RecipeMath.resolve(references: [.library("whey"), .inline(soy)],
+                                  quantities: [1, 3]) { library[$0] }
+        XCTAssertTrue(c.isComplete)
+        XCTAssertEqual(c.macros?.kcal ?? .nan, 120 + 24, accuracy: 0.01)
+    }
+
+    /// An inline ingredient has nothing to delete out from under it, so the `lookup` must never be
+    /// consulted for one — a resolver that fell through to the library would make every inline part
+    /// "missing" and refuse every ad-hoc recipe.
+    func testInlineIngredientsNeverConsultTheLibrary() {
+        var lookups = 0
+        let c = RecipeMath.resolve(references: [.inline(soy), .inline(oyster)],
+                                  quantities: [1, 1]) { _ in lookups += 1; return nil }
+        XCTAssertEqual(lookups, 0)
+        XCTAssertTrue(c.isComplete)
+    }
+
+    /// A deleted library food still refuses the total even when inline parts surround it — the inline
+    /// ones must not paper over the gap.
+    func testAMissingReferenceStillRefusesAMixedRecipe() {
+        let c = RecipeMath.resolve(references: [.inline(soy), .library("gone"), .inline(oyster)],
+                                  quantities: [1, 1, 1]) { _ in nil }
+        XCTAssertNil(c.macros)
+        XCTAssertEqual(c.missingIngredientIds, ["gone"])
+        XCTAssertEqual(c.resolvedCount, 2)
+    }
+
+    /// The id-based overload must stay byte-identical to the reference-based one it now delegates to,
+    /// since existing callers still use it.
+    func testTheIdOverloadMatchesTheReferenceForm() {
+        let library = ["whey": whey, "oat": oatMilk]
+        let viaIds = RecipeMath.resolve(componentIds: ["whey", "oat"], quantities: [1, 3]) { library[$0] }
+        let viaRefs = RecipeMath.resolve(references: [.library("whey"), .library("oat")],
+                                        quantities: [1, 3]) { library[$0] }
+        XCTAssertEqual(viaIds.macros, viaRefs.macros)
+        XCTAssertEqual(viaIds.missingIngredientIds, viaRefs.missingIngredientIds)
+        XCTAssertEqual(viaIds.resolvedCount, viaRefs.resolvedCount)
+    }
+}

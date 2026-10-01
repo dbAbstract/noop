@@ -24,6 +24,10 @@ struct DietBudgetCard: View {
     @State private var targets: MacroTargetSet?
     @State private var showGoalSheet = false
     @State private var reloadTick = 0
+    /// The budget moves with the day's steps, so it has to be recomputed when the user comes BACK to
+    /// the app — which is exactly when they have been walking. `repo.refreshSeq` only bumps on a sync,
+    /// and a sync is not what makes the pedometer's figure change.
+    @Environment(\.scenePhase) private var scenePhase
 
     private var cardOpacity: Double { max(0, min(1, Double(cardOpacityPercent) / 100)) }
 
@@ -43,6 +47,9 @@ struct DietBudgetCard: View {
             }
         }
         .task(id: "\(repo.foodSeq)-\(repo.refreshSeq)-\(reloadTick)-\(foodEnabled)") { await reload() }
+        .onChangeCompat(of: scenePhase) { phase in
+            if phase == .active { reloadTick += 1 }
+        }
         .sheet(isPresented: $showGoalSheet) {
             DietGoalSheet(existing: nil) { reloadTick += 1 }
                 .environmentObject(repo)

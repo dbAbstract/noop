@@ -185,6 +185,125 @@ final class MigrationTests: XCTestCase {
     }
 
     /// v5 adds a `synced` column to all 8 decoded tables.
+    // MARK: - v51: inline recipe ingredients
+
+    /// v51 REBUILDS `recipeComponent` to drop `foodItemId`'s NOT NULL. A rebuild is the migration shape
+    /// that can lose data, so this pins the column set, the order Room has to match, and the index that
+    /// does not survive a rename on its own.
+    func testV51RecipeComponentHasInlineColumnsInTheOracleOrder() async throws {
+        let store = try await WhoopStore.inMemory()
+        let cols = try await store.columnNamesForTest(table: "recipeComponent")
+        XCTAssertEqual(cols, ["id", "deviceId", "recipeId", "foodItemId", "quantity", "ord",
+                              "inlineName", "inlineServingLabel", "inlineKcal", "inlineProtein",
+                              "inlineCarbs", "inlineFat", "inlineFiber"],
+                       "column ORDER is the Room contract, not just the column set")
+    }
+
+    /// The index is created inside the migration AFTER the rename, because a rebuilt-and-renamed table
+    /// does not carry the old table's indices with it. Without this, every recipe read is a full scan —
+    /// which is invisible until the library is large.
+    func testV51RecreatesTheRecipeComponentIndexAfterTheRebuild() async throws {
+        let store = try await WhoopStore.inMemory()
+        let indices = try await store.indexNamesForTest(table: "recipeComponent")
+        XCTAssertTrue(indices.contains("idx_recipeComponent_device_recipe"),
+                      "the rebuild dropped the index and never put it back")
+    }
+
+    /// A library reference round-trips with its inline columns null, and an inline ingredient round-trips
+    /// with `foodItemId` null. Exactly one of the two shapes is ever populated — that nil IS the
+    /// discriminator, so a row that carried both would make the reader guess.
+    func testV51StoresBothIngredientShapesDistinguishably() async throws {
+        let store = try await WhoopStore.inMemory()
+        let reference = RecipeComponentRow(id: "c1", deviceId: "food-log", recipeId: "r1",
+                                           foodItemId: "whey", quantity: 2, ord: 0)
+        let inline = RecipeComponentRow(id: "c2", deviceId: "food-log", recipeId: "r1",
+                                        foodItemId: nil, quantity: 1, ord: 1,
+                                        inlineName: "Soy sauce", inlineServingLabel: "1 tbsp",
+                                        inlineKcal: 8, inlineProtein: 1.3, inlineCarbs: 0.8,
+                                        inlineFat: 0, inlineFiber: 0)
+        _ = try await store.upsertRecipeComponents([reference, inline])
+
+        let rows = try await store.recipeComponents(deviceId: "food-log", recipeId: "r1")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].foodItemId, "whey")
+        XCTAssertNil(rows[0].inlineName, "a library reference must not also carry inline macros")
+        XCTAssertNil(rows[1].foodItemId, "a nil foodItemId is what marks the row inline")
+        XCTAssertEqual(rows[1].inlineName, "Soy sauce")
+        XCTAssertEqual(rows[1].inlineKcal ?? .nan, 8, accuracy: 0.001)
+        XCTAssertEqual(rows[1].inlineProtein ?? .nan, 1.3, accuracy: 0.001)
+    }
+
+    /// A wholesale replace must keep both shapes intact — it is the only write path the recipe editor
+    /// uses, and an inline ingredient silently dropped there would take its calories with it.
+    func testV51ReplacePreservesInlineIngredients() async throws {
+        let store = try await WhoopStore.inMemory()
+        let inline = RecipeComponentRow(id: "c9", deviceId: "food-log", recipeId: "r2",
+                                        foodItemId: nil, quantity: 3, ord: 0,
+                                        inlineName: "Oyster sauce", inlineServingLabel: "1 tbsp",
+                                        inlineKcal: 9, inlineProtein: 0.2, inlineCarbs: 2,
+                                        inlineFat: 0, inlineFiber: 0)
+        _ = try await store.replaceRecipeComponents(deviceId: "food-log", recipeId: "r2", with: [inline])
+        let rows = try await store.recipeComponents(deviceId: "food-log", recipeId: "r2")
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].inlineName, "Oyster sauce")
+        XCTAssertEqual(rows[0].quantity, 3)
+    }
+
+    /// THE ONE THAT MATTERS. v51 rebuilds the table, and a rebuild is the migration shape that loses
+    /// data: create-copy-drop-rename with a column list spelled out by hand. This stages a real v50-era
+    /// row, runs v51 over it, and checks it survived with its values intact and its new columns null.
+    ///
+    /// The fresh-database tests above cannot catch a broken copy, because a fresh database has no rows
+    /// to lose.
+    func testV51RebuildPreservesExistingV50Components() async throws {
+        let dbQueue = try DatabaseQueue()
+        try WhoopStore.makeMigrator().migrate(dbQueue, upTo: "v50-diet-v3")
+        try await dbQueue.write { db in
+            // Written against the v50 shape, where foodItemId was NOT NULL and there were no inline
+            // columns to write.
+            try db.execute(sql: """
+                INSERT INTO recipeComponent (id, deviceId, recipeId, foodItemId, quantity, ord)
+                VALUES ('old1', 'food-log', 'shake', 'whey', 1.5, 0),
+                       ('old2', 'food-log', 'shake', 'banana', 1, 1)
+                """)
+        }
+
+        // Full migrator: GRDB resumes from the applied v50, so only v51 runs.
+        try WhoopStore.makeMigrator().migrate(dbQueue)
+
+        try await dbQueue.read { db in
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM recipeComponent"), 2,
+                           "the rebuild dropped rows")
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT foodItemId FROM recipeComponent WHERE id = 'old1'"),
+                           "whey")
+            XCTAssertEqual(try Double.fetchOne(db, sql: "SELECT quantity FROM recipeComponent WHERE id = 'old1'"),
+                           1.5, "a copy that mismatched its column list would scramble the values")
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT ord FROM recipeComponent WHERE id = 'old2'"), 1,
+                           "ord is what preserves the user's arrangement")
+            // The new columns exist and are null on migrated rows — a pre-v51 component is a library
+            // reference by definition, since inline ones could not be expressed yet.
+            XCTAssertNil(try String.fetchOne(db, sql: "SELECT inlineName FROM recipeComponent WHERE id = 'old1'"))
+        }
+    }
+
+    /// After v51 an inline row must be INSERTABLE with a null `foodItemId` — the whole point of the
+    /// rebuild. If the NOT NULL survived, this throws rather than failing an assertion.
+    func testV51AllowsNullFoodItemIdAfterTheRebuild() async throws {
+        let dbQueue = try DatabaseQueue()
+        try WhoopStore.makeMigrator().migrate(dbQueue)
+        try await dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO recipeComponent (id, deviceId, recipeId, foodItemId, quantity, ord, inlineName, inlineKcal)
+                VALUES ('inline1', 'food-log', 'marinade', NULL, 2, 0, 'Sesame oil', 40)
+                """)
+        }
+        try await dbQueue.read { db in
+            XCTAssertNil(try String.fetchOne(db, sql: "SELECT foodItemId FROM recipeComponent WHERE id = 'inline1'"))
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT inlineName FROM recipeComponent WHERE id = 'inline1'"),
+                           "Sesame oil")
+        }
+    }
+
     func testV5AddsSyncedColumnToDecodedTables() async throws {
         let store = try await WhoopStore.inMemory()
         for table in ["hrSample", "rrInterval", "event", "battery",

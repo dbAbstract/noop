@@ -1250,6 +1250,61 @@ extension WhoopStore {
                 t.add(column: "macroSource", .text)
             }
         }
+
+        // Ad-hoc recipe ingredients — a thing you used once, in one dish, that is not worth saving.
+        //
+        // v50 required every ingredient to be a library `foodItem`, which is wrong for the common case.
+        // A bulgogi marinade is soy sauce, oyster sauce, sesame oil and sugar: four foods that exist only
+        // as part of that marinade. Forcing each into the library to build one recipe fills the food
+        // picker with things nobody will ever log on their own, which is the same failure
+        // `saveToLibrary: false` exists to prevent for one-off meals.
+        //
+        // WHY INLINE COLUMNS RATHER THAN A HIDDEN `foodItem`. Storing ad-hoc ingredients as library items
+        // behind a visibility flag was the other option, and it reuses more plumbing — but it makes every
+        // existing library read (`foodItems`, the picker, recents, the Today card, `FoodLibrary.sorted`)
+        // responsible for filtering them out, and the first reader that forgets leaks "oyster sauce, 1
+        // tbsp" into the food picker. Inline columns keep the entire change inside the recipe path, where
+        // the only reader is `RecipeMath`.
+        //
+        // `foodItemId` becomes NULLABLE: non-null means a library reference (macros resolve live, so
+        // correcting the ingredient corrects the recipe), null means the inline columns below hold the
+        // ingredient outright. Exactly one of the two is ever populated.
+        migrator.registerMigration("v51-inline-recipe-ingredients") { db in
+            // SQLite cannot drop NOT NULL in place, so the table is rebuilt. Done as an explicit
+            // create-copy-swap rather than GRDB's automatic rename, so the resulting column ORDER is
+            // stated here in one place — Room's twin has to match it exactly, and an implicit rebuild
+            // would leave that order to GRDB's discretion.
+            try db.create(table: "recipeComponent_new") { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                t.column("recipeId", .text).notNull()
+                // NULL = an inline ingredient; non-NULL = a library reference. Still no foreign key.
+                t.column("foodItemId", .text)
+                t.column("quantity", .double).notNull()
+                t.column("ord", .integer).notNull()
+                // Inline ingredient, used only when `foodItemId` IS NULL. Macros are PER SERVING, the
+                // same convention a `foodItem` uses, so `RecipeMath` scales both identically.
+                t.column("inlineName", .text)
+                t.column("inlineServingLabel", .text)
+                t.column("inlineKcal", .double)
+                t.column("inlineProtein", .double)
+                t.column("inlineCarbs", .double)
+                t.column("inlineFat", .double)
+                t.column("inlineFiber", .double)
+            }
+            // Column list spelled out rather than `SELECT *`: an implicit copy silently depends on the
+            // old table's column order, which is the kind of thing that works until someone adds a
+            // column to the migration above it.
+            try db.execute(sql: """
+                INSERT INTO recipeComponent_new (id, deviceId, recipeId, foodItemId, quantity, ord)
+                SELECT id, deviceId, recipeId, foodItemId, quantity, ord FROM recipeComponent
+                """)
+            try db.drop(table: "recipeComponent")
+            try db.rename(table: "recipeComponent_new", to: "recipeComponent")
+            // The index does not survive the rebuild — recreate it, or every recipe read becomes a scan.
+            try db.create(index: "idx_recipeComponent_device_recipe", on: "recipeComponent",
+                          columns: ["deviceId", "recipeId"], options: [.ifNotExists])
+        }
         return migrator
     }
 }

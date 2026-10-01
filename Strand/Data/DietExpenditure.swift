@@ -147,6 +147,51 @@ extension Repository {
             .reduce(0.0) { $0 + max(0, $1.energyKcal ?? 0) }
     }
 
+    // MARK: - Which step count the budget may use
+
+    /// The day's total step count, from the freshest instrument that can answer.
+    ///
+    /// THIS EXISTS BECAUSE THE BUDGET WAS NOT MOVING. `days` is the merged daily cache, and its `steps`
+    /// column for TODAY only gains a value once the strap has offloaded the window. Between offloads the
+    /// column is nil, `stepsAboveBaseline` was handed 0, and the budget sat at BMR x 1.2 - deficit all
+    /// day while the Today screen — which reads its own fresher series — showed thousands of steps. The
+    /// arithmetic was right; it was being fed a step count from hours ago.
+    ///
+    /// PRECEDENCE, not a sum, and not a maximum across instruments. These are alternative measurements of
+    /// the same legs, so adding them would double-count and taking whichever is highest would hand the
+    /// budget to whichever device over-reports. The order mirrors `MetricCatalog.todayStepsMetric`, which
+    /// already decided this question for the Today tile: the measured strap count, else Apple Health's.
+    ///
+    /// The ONE exception is the live phone pedometer, and only for today, and only upward. `CMPedometer`
+    /// is the only source that knows about the last ten minutes; the strap column and the Health series
+    /// both lag it. So for today it may RAISE a resolved figure, never lower one — if the strap has
+    /// already offloaded more steps than the phone saw, the phone was in a bag and the strap is right.
+    /// Taking the larger of two counts that both lag for different reasons is the least-wrong way to
+    /// track a day still in progress, and it cannot invent movement: both are measurements.
+    ///
+    /// Returns nil when nothing can answer, which the caller treats as no NEAT credit rather than a
+    /// guess — the conservative direction every other gap here errs in.
+    func dailyStepsForDiet(_ dayKey: String) async -> Int? {
+        var resolved: Int? = days.first(where: { $0.day == dayKey })?.steps
+        // Apple Health only when the strap has nothing. A zero column is "no answer", not "no steps":
+        // the daily cache writes 0 for a day it has not seen stepped, and treating that as measured
+        // would pin the budget at baseline for anyone whose steps come from their phone.
+        if (resolved ?? 0) <= 0 {
+            let series = await series(key: "steps", source: "apple-health", days: 2)
+            if let v = series.first(where: { $0.day == dayKey })?.value, v > 0 {
+                resolved = Int(v.rounded())
+            }
+        }
+        guard dayKey == Repository.localDayKey(Date()) else { return resolved }
+        // Today only: let the live pedometer raise the figure. iOS-only — on macOS this is nil and the
+        // resolved value stands unchanged.
+        guard let bounds = Self.dayBounds(dayKey),
+              let live = await WorkoutPedometer.steps(fromSec: bounds.start,
+                                                      toSec: min(bounds.end, Int(Date().timeIntervalSince1970))),
+              live > 0 else { return resolved }
+        return max(resolved ?? 0, live)
+    }
+
     // MARK: - The day
 
     /// Assemble the day's expenditure and budget.
@@ -158,7 +203,7 @@ extension Repository {
         let goal = await dietGoal(on: dayKey)
         let activity = ActivityLevel(rawValue: goal?.activityLevel ?? "") ?? .sedentary
 
-        let dailySteps = days.first(where: { $0.day == dayKey })?.steps
+        let dailySteps = await dailyStepsForDiet(dayKey)
         let workoutSteps = await workoutStepsForDay(dayKey, stepTicksPerStep: profile.stepTicksPerStep)
         // No step answer means no NEAT credit, not a guess. The budget is then baseline + workouts, which
         // under-credits rather than inventing movement — the same direction every other gap here errs in.

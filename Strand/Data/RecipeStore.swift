@@ -40,16 +40,65 @@ struct Recipe: Identifiable, Equatable {
     var effectiveMacros: MacroTotals { composed ?? item.macros }
 }
 
-/// One ingredient reference, as stored.
+/// One ingredient, as stored: either a library reference or an ad-hoc ingredient held inline.
 struct RecipePartRef: Identifiable, Equatable {
+    /// What the part points at.
+    enum Source: Equatable {
+        /// A library `FoodItem`. Macros resolve LIVE, so correcting the food corrects every recipe
+        /// containing it — and the food can be deleted, which is the only way a part goes missing.
+        case library(UUID)
+        /// Macros the part carries itself, for something used in one dish and not worth saving: the soy
+        /// sauce in a marinade. Nothing can delete it out from under the recipe.
+        case inline(name: String, servingLabel: String, macros: MacroTotals)
+    }
+
     let id: UUID
-    var foodItemId: UUID
+    var source: Source
     var quantity: Double
 
-    init(id: UUID = UUID(), foodItemId: UUID, quantity: Double) {
+    init(id: UUID = UUID(), source: Source, quantity: Double) {
         self.id = id
-        self.foodItemId = foodItemId
+        self.source = source
         self.quantity = quantity
+    }
+
+    /// The library id, or nil for an inline part.
+    var foodItemId: UUID? {
+        if case .library(let id) = source { return id }
+        return nil
+    }
+
+    /// The ingredient's own name, resolved against `library` for a reference. nil means a reference
+    /// whose food has been deleted — which is distinct from an inline part, and must stay distinct.
+    func name(in library: [UUID: FoodItem]) -> String? {
+        switch source {
+        case .inline(let name, _, _): return name
+        case .library(let id): return library[id]?.name
+        }
+    }
+
+    /// What one serving of this ingredient is, in the user's words.
+    func servingLabel(in library: [UUID: FoodItem]) -> String? {
+        switch source {
+        case .inline(_, let label, _): return label
+        case .library(let id): return library[id]?.servingLabel
+        }
+    }
+
+    /// Per-serving macros, or nil for a reference whose food is gone.
+    func macrosPerServing(in library: [UUID: FoodItem]) -> MacroTotals? {
+        switch source {
+        case .inline(_, _, let macros): return macros
+        case .library(let id): return library[id]?.macros
+        }
+    }
+
+    /// How `RecipeMath` should treat this part.
+    func reference(in library: [UUID: FoodItem]) -> RecipeMath.Reference {
+        switch source {
+        case .inline(_, _, let macros): return .inline(macros)
+        case .library(let id): return .library(id.uuidString)
+        }
     }
 }
 
@@ -120,8 +169,9 @@ extension Repository {
 
         // Cache the composed total onto the item, for the picker's deleted-ingredient fallback only.
         let byId = Dictionary(uniqueKeysWithValues: library.map { ($0.id.uuidString, $0) })
+        let byUUID = Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
         let composition = RecipeMath.resolve(
-            componentIds: kept.map { $0.foodItemId.uuidString },
+            references: kept.map { $0.reference(in: byUUID) },
             quantities: kept.map { $0.quantity },
             lookup: { byId[$0]?.macros })
         var saved = item
@@ -134,12 +184,31 @@ extension Repository {
             deviceId: FoodLogStore.sourceId,
             recipeId: saved.id.uuidString,
             with: zip(kept, ords).map { part, ord in
-                RecipeComponentRow(id: part.id.uuidString,
-                                   deviceId: FoodLogStore.sourceId,
-                                   recipeId: saved.id.uuidString,
-                                   foodItemId: part.foodItemId.uuidString,
-                                   quantity: part.quantity,
-                                   ord: ord)
+                switch part.source {
+                case .library(let foodId):
+                    return RecipeComponentRow(id: part.id.uuidString,
+                                              deviceId: FoodLogStore.sourceId,
+                                              recipeId: saved.id.uuidString,
+                                              foodItemId: foodId.uuidString,
+                                              quantity: part.quantity,
+                                              ord: ord)
+                case .inline(let name, let label, let macros):
+                    // foodItemId stays nil — that nil IS what marks the row inline, so the reader never
+                    // has to guess which of the two shapes it is holding.
+                    return RecipeComponentRow(id: part.id.uuidString,
+                                              deviceId: FoodLogStore.sourceId,
+                                              recipeId: saved.id.uuidString,
+                                              foodItemId: nil,
+                                              quantity: part.quantity,
+                                              ord: ord,
+                                              inlineName: name,
+                                              inlineServingLabel: label,
+                                              inlineKcal: macros.kcal,
+                                              inlineProtein: macros.protein,
+                                              inlineCarbs: macros.carbs,
+                                              inlineFat: macros.fat,
+                                              inlineFiber: macros.fiber)
+                }
             })
         await saveFoodItem(saved)
         return Recipe(item: saved, parts: kept, composed: composition.macros,
@@ -163,14 +232,36 @@ extension Repository {
 
 extension Recipe {
 
+    /// Which shape a stored row is. A non-nil `foodItemId` is a library reference; nil means the inline
+    /// columns hold the ingredient. A row with neither — which only a corrupt write could produce —
+    /// decodes as an inline ingredient with zero macros rather than as a reference to nothing, so it
+    /// contributes nothing instead of refusing the whole recipe's total.
+    static func source(of row: RecipeComponentRow) -> RecipePartRef.Source {
+        if let id = row.foodItemId, let uuid = UUID(uuidString: id) { return .library(uuid) }
+        return .inline(name: row.inlineName ?? "",
+                       servingLabel: row.inlineServingLabel ?? "",
+                       macros: MacroTotals(kcal: row.inlineKcal ?? 0,
+                                           protein: row.inlineProtein ?? 0,
+                                           carbs: row.inlineCarbs ?? 0,
+                                           fat: row.inlineFat ?? 0,
+                                           fiber: row.inlineFiber ?? 0))
+    }
+
+    static func reference(of row: RecipeComponentRow) -> RecipeMath.Reference {
+        switch source(of: row) {
+        case .library(let id): return .library(id.uuidString)
+        case .inline(_, _, let macros): return .inline(macros)
+        }
+    }
+
     /// Build a recipe from its stored rows, composing against the supplied library.
     static func make(item: FoodItem, rows: [RecipeComponentRow], byId: [String: FoodItem]) -> Recipe {
-        let parts = rows.map {
-            RecipePartRef(id: UUID(uuidString: $0.id) ?? UUID(),
-                          foodItemId: UUID(uuidString: $0.foodItemId) ?? UUID(),
-                          quantity: $0.quantity)
+        let parts = rows.map { row -> RecipePartRef in
+            RecipePartRef(id: UUID(uuidString: row.id) ?? UUID(),
+                          source: Recipe.source(of: row),
+                          quantity: row.quantity)
         }
-        let composition = RecipeMath.resolve(componentIds: rows.map { $0.foodItemId },
+        let composition = RecipeMath.resolve(references: rows.map(Recipe.reference(of:)),
                                             quantities: rows.map { $0.quantity },
                                             lookup: { byId[$0]?.macros })
         return Recipe(item: item,
