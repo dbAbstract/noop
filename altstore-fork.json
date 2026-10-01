@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1016",
-          "buildVersion": "1016",
+          "version": "11.8.0.1017",
+          "buildVersion": "1017",
           "date": "2026-10-01",
-          "localizedDescription": "fix(about): wrap the version pill text for LocalizedStringKey",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1016.ipa",
-          "size": 16182015,
+          "localizedDescription": "feat(diet): stage 2 — does the weight actually move, and when can we say",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1017.ipa",
+          "size": 16245255,
           "minOSVersion": "17.0"
         }
       ]
