@@ -217,6 +217,43 @@ final class FoodActionParseTests: XCTestCase {
         XCTAssertFalse(shown.contains("noop_food_action"))
     }
 
+    // MARK: - Mid-stream display
+
+    /// The reply arrives a chunk at a time. Without this the user watches the JSON type itself out
+    /// across the screen, which looks like a bug at the exact moment the feature is working.
+    func testAPartiallyStreamedBlockIsNotShown() {
+        let partial = "Got it, that's a new food.\n" + #"{"noop_food_action": {"action": "cre"#
+        let shown = FoodActionParse.displayText(partial)
+        XCTAssertEqual(shown, "Got it, that's a new food.")
+        XCTAssertFalse(shown.contains("noop_food_action"))
+        XCTAssertFalse(shown.contains("{"))
+    }
+
+    /// Even before the opening brace has arrived, the sentinel itself must not flash up.
+    func testTheSentinelAloneIsNotShown() {
+        let shown = FoodActionParse.displayText("Done.\nnoop_food_action")
+        XCTAssertFalse(shown.contains("noop_food_action"))
+    }
+
+    func testAPartialBlockInsideAFenceTakesTheFenceWithIt() {
+        let shown = FoodActionParse.displayText("Done.\n```json\n" + #"{"noop_food_action": {"act"#)
+        XCTAssertEqual(shown, "Done.")
+        XCTAssertFalse(shown.contains("```"))
+    }
+
+    func testACompleteBlockIsStrippedByTheDisplayPath() {
+        XCTAssertEqual(FoodActionParse.displayText("Done.\n\(createBlock)"), "Done.")
+    }
+
+    /// Streaming an ordinary reply must cost nothing and change nothing, character by character.
+    func testEveryPrefixOfAnOrdinaryReplyIsShownVerbatim() {
+        let reply = "Charge is **71** today — green light. Here's a split: {\"protein\": 150}"
+        for end in reply.indices {
+            let prefix = String(reply[reply.startIndex...end])
+            XCTAssertEqual(FoodActionParse.displayText(prefix), prefix)
+        }
+    }
+
     // MARK: - The locator directly
 
     /// The sentinel object must be found even when an unrelated object comes FIRST — the case the

@@ -486,7 +486,17 @@ struct CoachView: View {
                         // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(coach.messages) { message in
-                                bubble(message).id(message.id)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    bubble(message)
+                                    // The proposal card rides UNDER its own turn rather than inside the
+                                    // bubble: it is not prose, it is not selectable, and it must not be
+                                    // swept up by the bubble's Copy/Share context menu.
+                                    if let proposal = message.proposal {
+                                        FoodProposalCard(proposal: proposal, messageId: message.id)
+                                            .frame(maxWidth: 560, alignment: .leading)
+                                    }
+                                }
+                                .id(message.id)
                             }
                             if coach.sending {
                                 typingIndicator.id("typing")

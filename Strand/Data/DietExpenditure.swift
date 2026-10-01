@@ -244,6 +244,26 @@ extension Repository {
         return energy
     }
 
+    /// The budget LAST BANKED for a day, without recomputing it.
+    ///
+    /// Exists for readers that need the figure but hold no `ProfileStore` — the coach context being the
+    /// first. Reading the banked value rather than re-deriving is the point, not a shortcut: a second
+    /// derivation is a second answer to one question, and the repo's hard rules say two readouts of one
+    /// fact must not be able to disagree. `refreshDietDay` is what keeps this current, and the budget
+    /// card calls it on every appear and on every foreground.
+    ///
+    /// nil when no goal has ever banked a figure for that day, which a caller must render as "no budget"
+    /// rather than as zero.
+    func bankedBudgetKcal(day: String? = nil) async -> Double? {
+        let dayKey = day ?? Repository.localDayKey(Date())
+        guard let store = await storeHandle(),
+              let points = try? await store.metricSeries(deviceId: DietStore.sourceId,
+                                                         key: DietStore.Keys.target,
+                                                         from: dayKey, to: dayKey)
+        else { return nil }
+        return points.first(where: { $0.day == dayKey })?.value
+    }
+
     /// Local-day bounds as unix seconds, `[start, end)`.
     static func dayBounds(_ dayKey: String) -> (start: Int, end: Int)? {
         let f = DateFormatter()

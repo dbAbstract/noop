@@ -149,6 +149,33 @@ public enum FoodActionParse {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// What to SHOW for a reply that may be mid-stream.
+    ///
+    /// `strippingAction` only helps once the block has closed. While a reply is still arriving the user
+    /// would otherwise watch `{"noop_food_action": {"action": "cr` type itself out across the screen,
+    /// which looks like the app is broken at the exact moment it is working.
+    ///
+    /// So: a COMPLETE block is removed, and an INCOMPLETE one truncates the display at its opening brace.
+    /// Truncating is safe because the protocol puts the block last — anything after it has not arrived
+    /// yet, and the final pass re-renders the whole reply properly.
+    public static func displayText(_ reply: String) -> String {
+        guard reply.contains(sentinel) else { return reply }
+        if sentinelObjectRange(in: reply) != nil { return strippingAction(from: reply) }
+        // Incomplete. Cut at the brace that opens the object carrying the sentinel, or at the sentinel
+        // itself if even that brace has not arrived.
+        guard let s = reply.range(of: sentinel) else { return reply }
+        var cut = s.lowerBound
+        // Walk back to the enclosing `{`, then over an optional fence, so no stray punctuation is left.
+        var i = cut
+        while i > reply.startIndex {
+            i = reply.index(before: i)
+            if reply[i] == "{" { cut = i; break }
+            if reply[i].isNewline { break }
+        }
+        if let fence = fenceStart(in: reply, before: cut) { cut = fence }
+        return String(reply[reply.startIndex..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Locating the block
 
     /// The balanced `{…}` that CONTAINS the sentinel key — not merely the first object in the text, so a

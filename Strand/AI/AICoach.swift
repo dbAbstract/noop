@@ -28,11 +28,22 @@ struct ChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: Role
     let text: String
+    /// A food action the coach proposed on this turn, resolved and awaiting the user's tap.
+    ///
+    /// On the MESSAGE rather than on the engine, so it survives scrolling, re-render and the transcript's
+    /// own persistence boundary — and so a conversation that logs three things in a row keeps three
+    /// distinct cards in the order they were proposed, instead of one slot they fight over.
+    ///
+    /// Not persisted: `persistMessages` stores text only, so a proposal does not survive an app restart.
+    /// That is deliberate rather than unfinished — a card restored hours later would invite the user to
+    /// log a meal they have long since logged or forgotten, with no way to tell which.
+    var proposal: FoodProposal?
 
-    init(id: UUID = UUID(), role: Role, text: String) {
+    init(id: UUID = UUID(), role: Role, text: String, proposal: FoodProposal? = nil) {
         self.id = id
         self.role = role
         self.text = text
+        self.proposal = proposal
     }
 }
 
@@ -290,6 +301,27 @@ final class AICoachEngine: ObservableObject {
     Format replies in simple Markdown, chat-sized: short paragraphs, **bold** for key numbers, \
     bullet or numbered lists for plans, ### headings only when structure genuinely helps, and a \
     small table only for a week-ahead plan. No code blocks.
+
+    LOGGING FOOD. If SAVED FOODS appears in the data above, the user can log meals by describing them \
+    to you. When they tell you what they ate, end your reply with ONE action object and nothing after it:
+    {"noop_food_action": {"action": "log", "itemId": "<id from SAVED FOODS>", "portion": 1}}
+    {"noop_food_action": {"action": "create", "name": "...", "servingLabel": "...", "kcal": 0, \
+    "protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "portion": 1}}
+    {"noop_food_action": {"action": "edit", "itemId": "<id>", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}}
+    Rules, in order of importance:
+    • ASK FIRST WHEN YOU ARE NOT SURE, and emit NO action on that turn. If "an Oikos" could be two of \
+    their saved foods, name both and ask which. Guessing logs the wrong meal; asking costs one message.
+    • Never invent macros for a food you do not have figures for. Ask the user for them, or ask them to \
+    read the label. A plausible guess presented as data is the worst thing you can do here.
+    • Use `log` with an id from SAVED FOODS whenever the food is already there. Only `create` when it \
+    genuinely is not, and if the list says some foods were not shown, ask before assuming.
+    • `edit` is for correcting a saved food's numbers, not for logging. Never `edit` a food marked recipe.
+    • Macros are PER SERVING, and `portion` is how many servings. Your stated kcal must agree with your \
+    own macros (4 kcal/g protein and carbs, 9 kcal/g fat) or the action is discarded.
+    • One action per reply. For several foods, log one and ask about the next.
+    • Say in plain words what you are proposing — the user sees your text and a confirmation card, never \
+    the object itself. Do not mention the object, the id, or JSON. Nothing is logged until they confirm, \
+    so never say you have logged it, only that it is ready to confirm.
     """
 
     /// The system prompt actually sent, read FRESH from UserDefaults on every request so an edit in
@@ -300,6 +332,23 @@ final class AICoachEngine: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let stored, !stored.isEmpty { return stored }
         return Self.defaultSystemPrompt
+    }
+
+    /// True when a CUSTOM prompt is stored that does not teach the food-logging protocol.
+    ///
+    /// The protocol lives in `defaultSystemPrompt`, and a stored override replaces that wholesale — so a
+    /// user who edited their prompt before this feature existed keeps a coach that will discuss food
+    /// cheerfully and never once propose logging any. The failure is completely silent from the outside:
+    /// the coach answers, the answer is sensible, and no card ever appears.
+    ///
+    /// Surfaced so the settings screen can say so, rather than leaving it to be deduced. Detected by the
+    /// sentinel rather than by comparing against the default, because a prompt that has been edited AND
+    /// carries the protocol is perfectly fine and must not be nagged about.
+    var customPromptMissesFoodProtocol: Bool {
+        let stored = UserDefaults.standard.string(forKey: Self.systemPromptKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let stored, !stored.isEmpty else { return false }
+        return !stored.contains(FoodActionParse.sentinel)
     }
 
     /// The user's stored prompt override, or the default when nothing custom is set. The UI binds its
@@ -811,21 +860,32 @@ final class AICoachEngine: ObservableObject {
         do {
             try await streamProvider(key: key, messages: wire, inlineImage: imageBase64) { delta in
                 accumulated += delta
-                // Replace the last message's text with the accumulated stream so far.
+                // Replace the last message's text with the accumulated stream so far. Routed through
+                // `displayText` so a proposal block is hidden WHILE IT ARRIVES — otherwise the user
+                // watches raw JSON type itself across the screen at the exact moment the feature works.
                 if let lastIdx = self.messages.indices.last,
                    self.messages[lastIdx].role == .assistant {
                     self.messages[lastIdx] = ChatMessage(
-                        id: placeholder.id, role: .assistant, text: accumulated
+                        id: placeholder.id, role: .assistant,
+                        text: FoodActionParse.displayText(accumulated)
                     )
                 }
             }
-            // Finalize: trim whitespace. If the stream produced nothing, show "(no reply)".
-            let clean = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Finalize: strip any proposal block, trim, and resolve the action against the library.
+            //
+            // The reply can be ALL block and no prose (a terse model that just emits the action), which
+            // would otherwise render as an empty bubble above the card. `fallbackProposalNote` covers
+            // that case so the turn always says something.
+            let proposal = await resolveProposal(in: accumulated)
+            let clean = FoodActionParse.strippingAction(from: accumulated)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
-                messages[lastIdx] = ChatMessage(
-                    id: placeholder.id, role: .assistant,
-                    text: clean.isEmpty ? "(no reply)" : clean
-                )
+                let text: String
+                if !clean.isEmpty { text = clean }
+                else if proposal != nil { text = String(localized: "Here's what I've got:") }
+                else { text = "(no reply)" }
+                messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
+                                                text: text, proposal: proposal)
             }
         } catch let e as AICoachError {
             // Mid-stream error: keep the partial text + an interrupted marker (PRD K1 acceptance).
@@ -1009,7 +1069,84 @@ final class AICoachEngine: ObservableObject {
             let block = await onDeviceSignalsBlock()
             if !block.isEmpty { ctx += "\n\n" + block }
         }
+        // The food library and where today stands, so "just had an Oikos" can be answered with a
+        // question about WHICH Oikos rather than a guess. Gated on the food-logging feature itself
+        // rather than a switch of its own: a user who has not turned food logging on has no library to
+        // describe, and a second toggle for a block that would be empty anyway is just a thing to find.
+        let food = await foodContextBlock()
+        if !food.isEmpty { ctx += "\n\n" + food }
         return ctx
+    }
+
+    /// Parse a reply for a food action and resolve it against the CURRENT library.
+    ///
+    /// Resolved at finalize time rather than at render time, deliberately: the card must describe the
+    /// library as it was when the coach spoke. Resolving lazily in the view would re-resolve on every
+    /// redraw, so a food deleted while the card sat on screen would turn a valid proposal into an
+    /// "unrecognised food" the user never did anything to deserve.
+    ///
+    /// nil for the ordinary conversational turn, which is most of them.
+    func resolveProposal(in reply: String) async -> FoodProposal? {
+        guard case .success(let action) = FoodActionParse.action(fromReply: reply) else { return nil }
+        let library = await repo.foodLibrary()
+        let recipeIds = await repo.recipeItemIds()
+        return FoodProposal.resolve(action,
+                                    library: library,
+                                    recipeIds: recipeIds,
+                                    // The same default the Add food sheet uses, so a food created by
+                                    // either route reads identically in the log.
+                                    defaultServingLabel: String(localized: "1 serving"))
+    }
+
+    /// Mark a proposal applied (or dismissed) in place, so the card cannot fire twice.
+    ///
+    /// By message id rather than index: the transcript grows while a card is on screen — a reply can
+    /// arrive, or a stale conversation can be retired — and an index captured at render time would by
+    /// then point at somebody else's turn.
+    func updateProposalState(messageId: UUID, to state: FoodProposal.State) {
+        guard let idx = messages.firstIndex(where: { $0.id == messageId }),
+              messages[idx].proposal != nil else { return }
+        messages[idx].proposal?.state = state
+    }
+
+    /// The saved-food library plus one line on today, formatted by `FoodLibraryDigest`.
+    ///
+    /// The formatting lives in the pure package so it is CI-covered and twinnable; this is only the
+    /// read. Recipes are marked, because a recipe is the one food whose macros the coach must not offer
+    /// to edit directly — they come from its ingredients.
+    ///
+    /// Returns "" when food logging is off or the library is empty, so the block never says "you have no
+    /// saved foods" — an absent statement and a stated absence are different claims, and the second one
+    /// invites a model to insist the user has never eaten anything.
+    func foodContextBlock() async -> String {
+        guard UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) else { return "" }
+        let library = FoodLibrary.sorted(await repo.foodLibrary())
+        guard !library.isEmpty else { return "" }
+        let recipeIds = await repo.recipeItemIds()
+        let entries = library.map {
+            FoodDigestEntry(id: $0.id.uuidString, name: $0.name, servingLabel: $0.servingLabel,
+                            macros: $0.macros, isRecipe: recipeIds.contains($0.id))
+        }
+        var block = FoodLibraryDigest.block(entries: entries)
+
+        // Today's standing. The budget is READ BACK from what the day last banked rather than
+        // recomputed here — a second derivation would be a second answer to one question, and this
+        // engine holds no ProfileStore to derive it from honestly anyway.
+        let totals = await repo.foodTotals()
+        let budget = await repo.bankedBudgetKcal()
+        let goal = await repo.currentDietGoal()
+        var proteinTarget: Double?
+        if let rate = goal?.proteinGPerKg, let budget, let weight = goal?.startWeightKg {
+            // Weight from the goal rather than the profile, for the same reason: it is the figure already
+            // on hand. A few hundred grams of drift moves the protein target by under a gram.
+            proteinTarget = MacroTargets.targets(budgetKcal: budget, weightKg: weight,
+                                                 proteinGPerKg: rate).proteinG
+        }
+        block += "\n\n" + FoodLibraryDigest.todayLine(consumedKcal: totals.kcal,
+                                                       budgetKcal: budget,
+                                                       proteinG: totals.protein,
+                                                       proteinTargetG: proteinTarget)
+        return block
     }
 
     /// One derived stress line for the coach context: the Baevsky Stress Index over TODAY's R-R, read

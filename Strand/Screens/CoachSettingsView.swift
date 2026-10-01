@@ -218,6 +218,28 @@ struct CoachSettingsView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(promptExpanded ? "Collapse coach instructions" : "Edit coach instructions")
 
+                // A custom prompt replaces the default WHOLESALE, including the part that teaches the
+                // coach how to log food. Without this notice that failure is invisible: the coach
+                // discusses food perfectly well and simply never proposes logging any, which reads as
+                // the feature being broken rather than the prompt being older than it.
+                if coach.customPromptMissesFoodProtocol {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(StrandPalette.strain066)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Your custom instructions predate food logging, so the coach can talk about food but can't offer to log it. Reset to default to turn that back on — or copy the LOGGING FOOD section from the default into your own.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            NoopButton("Reset to default", kind: .secondary) {
+                                coach.resetSystemPrompt()
+                                promptDraft = coach.customSystemPrompt
+                            }
+                        }
+                    }
+                }
+
                 if promptExpanded {
                     TextEditor(text: $promptDraft)
                         .font(StrandFont.body)
