@@ -34,7 +34,18 @@ permissions:
 
 concurrency:
   group: testing-build
-  cancel-in-progress: true
+  # FORK-LOCAL: an AUTO build on `fork` is never cancelled; only a manual dispatch is.
+  #
+  # Cancelling is the right instinct for a hand-dispatched build — a newer one supersedes it and the
+  # runner time is wasted. It is wrong for the auto path, because an auto run also PUBLISHES the source
+  # the phone reads. Three pushes in quick succession cancelled two runs, so four commits landed and the
+  # published source stayed on the previous day's build with nothing anywhere saying so. The failure is
+  # silent and looks exactly like success: green-ish history, no error, a stale phone.
+  #
+  # Letting auto runs queue instead means each push's build completes and publishes in order. The cost is
+  # some redundant compute on a burst of commits; the benefit is that "I pushed it" and "it is on the
+  # phone" stop being different facts nobody is told about.
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   meta:
