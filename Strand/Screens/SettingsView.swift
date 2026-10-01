@@ -2361,9 +2361,12 @@ struct SettingsView: View {
     /// actually compare to decide an update exists. Printing the build again in brackets would then say
     /// the same number twice. A local build does not do that, so there the bracket is the only place the
     /// build appears and it stays.
-    private var versionPillText: String {
+    /// Built as a String and wrapped, because `StatePill` takes a LocalizedStringKey. Interpolating the
+    /// numbers into a literal would instead register them as translatable keys in the catalogue, which a
+    /// version number has no business being.
+    private var versionPillText: LocalizedStringKey {
         let v = bundleVersionString, b = bundleBuildString
-        return v.hasSuffix(".\(b)") ? "v\(v)" : "v\(v) (\(b))"
+        return LocalizedStringKey(v.hasSuffix(".\(b)") ? "v\(v)" : "v\(v) (\(b))")
     }
 
     private var aboutCard: some View {
