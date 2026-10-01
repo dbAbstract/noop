@@ -94,6 +94,7 @@ struct DataSourcesView: View {
                        // built cards — that observation can't be removed here (see the lane-B2 note).
                        lazy: true) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
+                noopBackupPointerCard.staggeredAppear(index: 0)
                 whoopCard.staggeredAppear(index: 0)
                 appleHealthCard.staggeredAppear(index: 1)
                 xiaomiCard.staggeredAppear(index: 2)
@@ -133,6 +134,30 @@ struct DataSourcesView: View {
             Button("Remove", role: .destructive) { deleteAppleHealthData() }
         } message: {
             Text("This permanently deletes everything imported from Apple Health: heart rate, HRV, sleep, steps, workouts and more. Your live strap data is untouched. This can't be undone.")
+        }
+    }
+
+    /// Points at the backup restore, which lives in Settings rather than here.
+    ///
+    /// This screen is for bringing in data from OTHER apps; a `.noopbak` is NOOP's own database and
+    /// restoring it replaces everything, so it is deliberately not one more importer in this list. But
+    /// "import my NOOP export" is an entirely reasonable thing to come to a screen called Data Sources
+    /// looking for — and the WHOOP importer below only accepts `.zip`, so a `.noopbak` is not even
+    /// selectable there. Without this line the screen silently fails the person looking for it.
+    ///
+    /// First in the list on purpose: someone restoring a backup wants that before any per-source import,
+    /// since a restore would overwrite whatever they imported first anyway.
+    private var noopBackupPointerCard: some View {
+        card(title: String(localized: "Restoring a NOOP backup?"), icon: "arrow.counterclockwise.circle.fill",
+             tint: StrandPalette.chargeColor,
+             subtitle: String(localized: "A .noopbak holds your whole NOOP database — every source at once, plus your settings. Restoring one replaces what's on \(Platform.deviceNounPhrase), so it lives in Settings rather than here with the per-source imports.")) {
+            Text("Settings → Backup & restore → Import")
+                .font(StrandFont.subhead)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text("The cards below are for pulling history out of other apps — WHOOP, Apple Health, a food tracker — not for NOOP's own backups.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
