@@ -2341,6 +2341,20 @@ struct SettingsView: View {
     /// the hand-maintained changelog version only if the Info.plist key is somehow missing.
     private var bundleVersionString: String { UpdateWatch.installedVersion }
 
+    /// CFBundleVersion — the BUILD, not the marketing version.
+    ///
+    /// Worth surfacing because on this fork the two move independently: MARKETING_VERSION sits still for
+    /// weeks while CI stamps a fresh build number on every push (derived from the run number, so it is
+    /// not in the repo and cannot be read anywhere else). "v11.8.0" is therefore the same string on a
+    /// build from this morning and one from a fortnight ago.
+    ///
+    /// That gap has already cost real debugging time: a sideloaded install looked like it was missing a
+    /// feature when it was simply several builds behind, and nothing on screen could distinguish those
+    /// two. This is the number to compare against the source listing.
+    private var bundleBuildString: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    }
+
     private var aboutCard: some View {
         SettingsSection(
             icon: "info.circle.fill",
@@ -2352,7 +2366,7 @@ struct SettingsView: View {
                     Text("NOOP")
                         .font(StrandFont.title2)
                         .foregroundStyle(StrandPalette.textPrimary)
-                    StatePill("v\(bundleVersionString)", tone: .neutral, showsDot: false)
+                    StatePill("v\(bundleVersionString) (\(bundleBuildString))", tone: .neutral, showsDot: false)
                     Spacer()
                     NoopButton("What's new", systemImage: "sparkles", kind: .secondary) {
                         showWhatsNew = true
