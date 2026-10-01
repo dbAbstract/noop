@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1017",
-          "buildVersion": "1017",
+          "version": "11.8.0.1018",
+          "buildVersion": "1018",
           "date": "2026-10-01",
-          "localizedDescription": "feat(diet): stage 2 — does the weight actually move, and when can we say",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1017.ipa",
-          "size": 16245255,
+          "localizedDescription": "chore(i18n): extract stage 2 strings",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1018.ipa",
+          "size": 16245232,
           "minOSVersion": "17.0"
         }
       ]
