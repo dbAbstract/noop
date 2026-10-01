@@ -25,10 +25,16 @@ struct FoodLogView: View {
     @State private var totals: MacroTotals = .zero
     @State private var history: [(day: String, kcal: Double)] = []
     @State private var library: [FoodItem] = []
+    /// Recipes, composed against `library` in the same reload — so a recipe can never be shown resolving
+    /// against a different library than the one on screen beside it.
+    @State private var recipes: [Recipe] = []
     @State private var weightToday: Double?
     @State private var reloadTick = 0
 
     @State private var showAddSheet = false
+    /// `.some(nil)` opens the builder for a NEW recipe; `.some(recipe)` edits one. A plain `Recipe?`
+    /// could not express "create", since nil would mean "closed".
+    @State private var buildingRecipe: RecipeEditTarget?
     @State private var editingEntry: FoodEntry?
     @State private var editingItem: FoodItem?
     @State private var weightHistory: [(day: String, kg: Double)] = []
@@ -62,6 +68,7 @@ struct FoodLogView: View {
                 daySection
                 totalsSection
                 entriesSection
+                recipesSection
                 quickAddSection
                 weightSection
                 historySection
@@ -69,7 +76,7 @@ struct FoodLogView: View {
         }
         .task(id: "\(reloadTick)-\(dayOffset)") { await reload() }
         .sheet(isPresented: $showAddSheet) {
-            AddFoodSheet(library: library) { item, portion, save in
+            AddFoodSheet(library: library, recipes: recipes) { item, portion, save in
                 Task {
                     if save { await repo.saveFoodItem(item) }
                     await repo.logFood(item: item, portion: portion, day: selectedDay,
@@ -81,6 +88,11 @@ struct FoodLogView: View {
         }
         .sheet(item: $editingItem) { item in
             EditFoodItemSheet(item: item, onSaved: { reloadTick += 1 }, onDeleted: { reloadTick += 1 })
+                .environmentObject(repo)
+        }
+        .sheet(item: $buildingRecipe) { target in
+            RecipeBuilderSheet(existing: target.recipe, library: library,
+                               onSaved: { reloadTick += 1 }, onDeleted: { reloadTick += 1 })
                 .environmentObject(repo)
         }
         .sheet(item: $editingWeightDay) { target in
@@ -318,6 +330,71 @@ struct FoodLogView: View {
         return String(localized: "\(p) × serving · \(intString(m.protein))P \(intString(m.carbs))C \(intString(m.fat))F")
     }
 
+    // MARK: - Recipes
+
+    /// Recipes get their own section rather than sitting in Recent, because what you do with one is
+    /// usually EDIT it — the whole reason a recipe exists is that its parts change — whereas Recent is
+    /// a one-tap log. Mixing the two would mean one list with two meanings per row.
+    private var recipesSection: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Recipes", overline: recipes.isEmpty ? "None yet" : "\(recipes.count)")
+            NoopCard {
+                VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                    if recipes.isEmpty {
+                        Text("A recipe is a food built from other saved foods — a shake, a bowl, a standing dinner. Its calories come from its ingredients, so correcting one ingredient corrects every recipe using it.")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        ForEach(recipes) { recipe in
+                            Button {
+                                buildingRecipe = RecipeEditTarget(recipe: recipe)
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(recipe.item.name)
+                                            .font(StrandFont.body)
+                                            .foregroundStyle(StrandPalette.textPrimary)
+                                        // States the ingredient count, and says so when one has gone
+                                        // missing — a recipe quietly showing a smaller number is the
+                                        // failure `RecipeMath` refuses to compute and this refuses to hide.
+                                        Text(recipe.isComplete
+                                             ? "\(recipe.parts.count) ingredients · per \(recipe.item.servingLabel)"
+                                             : "\(recipe.missingIngredientIds.count) ingredient(s) deleted — total is the last known one")
+                                            .font(StrandFont.caption)
+                                            .foregroundStyle(recipe.isComplete
+                                                             ? StrandPalette.textTertiary
+                                                             : StrandPalette.strain066)
+                                    }
+                                    Spacer(minLength: 8)
+                                    Text("\(intString(recipe.effectiveMacros.kcal)) kcal")
+                                        .font(StrandFont.footnote)
+                                        .foregroundStyle(StrandPalette.textSecondary)
+                                    Image(systemName: "chevron.right")
+                                        .font(StrandFont.caption)
+                                        .foregroundStyle(StrandPalette.textTertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            if recipe.id != recipes.last?.id {
+                                Divider().overlay(StrandPalette.hairline)
+                            }
+                        }
+                    }
+                    NoopButton("New recipe", systemImage: "plus", kind: .secondary) {
+                        buildingRecipe = RecipeEditTarget(recipe: nil)
+                    }
+                    .disabled(library.isEmpty)
+                    if library.isEmpty {
+                        Text("Save a food or two first — a recipe is made of them.")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Quick add (recents)
 
     @ViewBuilder private var quickAddSection: some View {
@@ -484,6 +561,9 @@ struct FoodLogView: View {
         entries = await repo.foodEntries(day: selectedDay)
         totals = FoodEntries.total(entries)
         library = await repo.foodLibrary()
+        // After the library, and passed it explicitly: composing a recipe needs the same snapshot of the
+        // library the rest of this screen is rendering.
+        recipes = await repo.recipes(library: library)
         history = await repo.foodHistory(days: 7)
         weightToday = await repo.weightToday(day: selectedDay)
         weightHistory = await repo.weightHistory(days: 30).reversed()
