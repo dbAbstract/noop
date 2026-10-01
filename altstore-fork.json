@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0",
-          "buildVersion": "1012",
+          "version": "11.8.0.1016",
+          "buildVersion": "1016",
           "date": "2026-10-01",
-          "localizedDescription": "fix(data sources): point at the backup restore, which is not on this screen",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1012.ipa",
-          "size": 16182063,
+          "localizedDescription": "fix(about): wrap the version pill text for LocalizedStringKey",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1016.ipa",
+          "size": 16182015,
           "minOSVersion": "17.0"
         }
       ]
