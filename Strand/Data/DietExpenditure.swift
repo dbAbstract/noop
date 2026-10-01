@@ -78,7 +78,8 @@ extension Repository {
     @discardableResult
     func setDietGoal(startWeightKg: Double, targetWeightKg: Double, months: Int,
                      activity: ActivityLevel, dailyDeficitKcal: Double,
-                     targetOverrideKcal: Double? = nil, on day: String? = nil) async -> Bool {
+                     targetOverrideKcal: Double? = nil, proteinGPerKg: Double? = nil,
+                     on day: String? = nil) async -> Bool {
         let dayKey = day ?? Repository.localDayKey(Date())
         guard let store = await storeHandle() else { return false }
         _ = try? await store.endOpenDietGoals(deviceId: DietStore.sourceId, on: dayKey)
@@ -91,7 +92,8 @@ extension Repository {
                               activityLevel: activity.rawValue,
                               dailyDeficitKcal: dailyDeficitKcal,
                               targetOverrideKcal: targetOverrideKcal,
-                              createdAt: Int(Date().timeIntervalSince1970))
+                              createdAt: Int(Date().timeIntervalSince1970),
+                              proteinGPerKg: proteinGPerKg)
         guard (try? await store.upsertDietGoals([row])) != nil else { return false }
         noteFoodChanged()
         return true

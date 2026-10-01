@@ -20,6 +20,8 @@ struct DietBudgetCard: View {
 
     @State private var energy: DietDayEnergy?
     @State private var consumed: Double = 0
+    @State private var macros: MacroTotals = .zero
+    @State private var targets: MacroTargetSet?
     @State private var showGoalSheet = false
     @State private var reloadTick = 0
 
@@ -80,6 +82,7 @@ struct DietBudgetCard: View {
                         headline
                         bar
                         breakdown
+                        proteinRow
                     }
                 }
             }
@@ -136,6 +139,41 @@ struct DietBudgetCard: View {
         }
     }
 
+    /// Protein alongside the calorie budget, because at a deficit the two together are the whole story:
+    /// the kcal figure says whether you will lose weight, and this says whether it will be fat.
+    ///
+    /// Shown only when a protein target exists — a bar with no target would read as 0% of something.
+    @ViewBuilder private var proteinRow: some View {
+        if let t = targets, t.proteinG > 0 {
+            let frac = MacroTargets.fraction(consumed: macros.protein, target: t.proteinG) ?? 0
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Protein")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                    Spacer()
+                    Text("\(intText(macros.protein)) of \(intText(t.proteinG)) g")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(frac >= 1 ? StrandPalette.statusPositive : StrandPalette.textSecondary)
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(StrandPalette.surfaceInset)
+                        Capsule()
+                            // Green at target rather than amber: unlike calories, MORE protein is not a
+                            // failure, so the bar filling is unambiguously good news.
+                            .fill(frac >= 1 ? StrandPalette.statusPositive : StrandPalette.metricPurple)
+                            .frame(width: max(2, geo.size.width * frac))
+                    }
+                }
+                .frame(height: 4)
+                .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Protein \(intText(macros.protein)) of \(intText(t.proteinG)) grams")
+        }
+    }
+
     // MARK: - Derived
 
     private var isOver: Bool { (remaining ?? 0) < 0 }
@@ -163,9 +201,16 @@ struct DietBudgetCard: View {
 
     private func reload() async {
         guard foodEnabled else { energy = nil; return }
-        consumed = await repo.foodTotals().kcal
+        macros = await repo.foodTotals()
+        consumed = macros.kcal
         // Recomputes and banks the day's figures, so the series backing the detail screen stays current
         // without a second pass.
         energy = await repo.refreshDietDay(profile: profile)
+        if let budget = energy?.budgetKcal(), let rate = await repo.currentDietGoal()?.proteinGPerKg {
+            targets = MacroTargets.targets(budgetKcal: budget, weightKg: profile.weightKg,
+                                           proteinGPerKg: rate)
+        } else {
+            targets = nil
+        }
     }
 }
