@@ -21,11 +21,11 @@
       "versions": [
         {
           "version": "11.8.0",
-          "buildVersion": "1008",
-          "date": "2026-09-30",
-          "localizedDescription": "chore(i18n): auto-generated comments for the diet strings",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1008.ipa",
-          "size": 16176979,
+          "buildVersion": "1012",
+          "date": "2026-10-01",
+          "localizedDescription": "fix(data sources): point at the backup restore, which is not on this screen",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1012.ipa",
+          "size": 16182063,
           "minOSVersion": "17.0"
         }
       ]
