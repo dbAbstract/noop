@@ -331,6 +331,13 @@ extension Repository {
             return FoodEntries.total(current)
         }
         _ = try? await store.upsertFoodEntries([entry.row(day: dayKey)])
+        // Clear a reminder already sitting in Notification Centre, now that there is something logged.
+        // Gated on the entry landing on TODAY: backfilling last Tuesday says nothing about whether today
+        // has been logged, and clearing on it would dismiss a nudge that is still owed. It cannot cancel
+        // a reminder yet to fire — see `FoodLogReminder.clearDeliveredIfAny` for why that is deliberate.
+        if dayKey == Repository.localDayKey(Date()) {
+            Task { @MainActor in FoodLogReminder.clearDeliveredIfAny() }
+        }
         if saveToLibrary {
             var used = item
             used.lastUsedAt = date
@@ -383,6 +390,8 @@ extension Repository {
             _ = try? await store.upsertMetricSeries(points, deviceId: FoodLogStore.sourceId)
         }
         noteFoodChanged()
+        // A reminder that already fired is now stale — see FoodLogReminder.clearDeliveredIfAny.
+        FoodLogReminder.clearDeliveredIfAny()
         return totals
     }
 

@@ -334,6 +334,10 @@ struct RootView: View {
             // #1862: the Today Coach card's launcher hands off here, so the send/stream/consent surface
             // stays in exactly one place.
             case .coach: selection = .coach
+            // The food log is pushed from Today's diet card rather than owning a sidebar row, so a
+            // routed request lands on Today where that card lives. One tap short of the screen itself,
+            // and deliberately not a new sidebar item for a reminder that is a phone feature in practice.
+            case .food: selection = .today
             case .alarms: selection = .smartAlarm
             case nil: break
             }

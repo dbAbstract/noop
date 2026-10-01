@@ -247,6 +247,12 @@ struct RootTabView: View {
                 // (InsightsView), matching the FAB's "Log journal" action. Calm sheet easing.
                 withAnimation(Self.sheetEase) { quickAction = .journal }
                 router.requestedDestination = nil
+            case .food:
+                // Where the food reminder's tap lands. Reuses the quick-action Food sheet rather than a
+                // route of its own, so the notification opens exactly the screen the FAB's "Log food"
+                // entry does — one food log, reached two ways.
+                withAnimation(Self.sheetEase) { quickAction = .food }
+                router.requestedDestination = nil
             case nil:
                 break
             }
@@ -336,6 +342,9 @@ struct RootTabView: View {
                 // .journal opens through the quick-action Journal sheet (handled above); this keeps the
                 // switch exhaustive and falls back to the journal's Insights host if it ever reaches here.
                 case .journal: InsightsView()
+                // .food opens through the quick-action Food sheet (handled above); this keeps the switch
+                // exhaustive and falls back to the food log itself if it ever reaches the host.
+                case .food: FoodLogView()
                 // .coach switches to the Coach tab (handled above — the morning-brief tap-through and the
                 // #1862 launcher both arrive that way, the launcher's question riding on
                 // `AICoachEngine.pendingPrompt`); this keeps the switch exhaustive and falls back to Coach if

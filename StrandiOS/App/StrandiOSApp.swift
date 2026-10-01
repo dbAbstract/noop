@@ -84,6 +84,12 @@ struct StrandiOSApp: App {
         let router = NavRouter()
         _router = StateObject(wrappedValue: router)
         NotificationPresenter.shared.onCoachBriefTapped = { [weak router] in router?.openCoach() }
+        NotificationPresenter.shared.onFoodReminderTapped = { [weak router] in router?.openFood() }
+        // Re-arm the food reminder's calendar trigger. Idempotent — `schedule()` returns immediately when
+        // the reminder is off, and adding with the same identifier replaces rather than duplicates. It is
+        // here to repair the one case that loses a pending request: a reinstall or a device restore, after
+        // which the stored "on" would otherwise describe a trigger that no longer exists.
+        FoodLogReminder.schedule()
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
         CoachBriefScheduler.register(generateBrief: { [weak coach = model.coach] in
