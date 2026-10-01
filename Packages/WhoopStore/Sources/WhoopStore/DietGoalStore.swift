@@ -26,10 +26,14 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
     /// A hand-set daily target that overrides the derivation entirely. nil means "use the derivation".
     public var targetOverrideKcal: Double?
     public var createdAt: Int
+    /// Protein target as grams per kilogram, so it follows the body it is for rather than going stale as
+    /// weight comes off. nil means protein is untargeted.
+    public var proteinGPerKg: Double?
 
     public init(id: String, deviceId: String, startedOn: String, endedOn: String? = nil,
                 startWeightKg: Double, targetWeightKg: Double, months: Int, activityLevel: String,
-                dailyDeficitKcal: Double, targetOverrideKcal: Double? = nil, createdAt: Int) {
+                dailyDeficitKcal: Double, targetOverrideKcal: Double? = nil, createdAt: Int,
+                proteinGPerKg: Double? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.startedOn = startedOn
@@ -41,6 +45,7 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
         self.dailyDeficitKcal = dailyDeficitKcal
         self.targetOverrideKcal = targetOverrideKcal
         self.createdAt = createdAt
+        self.proteinGPerKg = proteinGPerKg
     }
 
     static func decode(_ row: Row) -> DietGoalRow {
@@ -55,7 +60,8 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
             activityLevel: row["activityLevel"],
             dailyDeficitKcal: row["dailyDeficitKcal"],
             targetOverrideKcal: row["targetOverrideKcal"],
-            createdAt: row["createdAt"]
+            createdAt: row["createdAt"],
+            proteinGPerKg: row["proteinGPerKg"]
         )
     }
 }
@@ -70,8 +76,8 @@ extension WhoopStore {
                 try db.execute(sql: """
                     INSERT INTO dietGoal
                         (id, deviceId, startedOn, endedOn, startWeightKg, targetWeightKg, months,
-                         activityLevel, dailyDeficitKcal, targetOverrideKcal, createdAt)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         activityLevel, dailyDeficitKcal, targetOverrideKcal, createdAt, proteinGPerKg)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         startedOn = excluded.startedOn,
                         endedOn = excluded.endedOn,
@@ -80,10 +86,11 @@ extension WhoopStore {
                         months = excluded.months,
                         activityLevel = excluded.activityLevel,
                         dailyDeficitKcal = excluded.dailyDeficitKcal,
-                        targetOverrideKcal = excluded.targetOverrideKcal
+                        targetOverrideKcal = excluded.targetOverrideKcal,
+                        proteinGPerKg = excluded.proteinGPerKg
                     """, arguments: [r.id, r.deviceId, r.startedOn, r.endedOn, r.startWeightKg,
                                      r.targetWeightKg, r.months, r.activityLevel, r.dailyDeficitKcal,
-                                     r.targetOverrideKcal, r.createdAt])
+                                     r.targetOverrideKcal, r.createdAt, r.proteinGPerKg])
             }
             return rows.count
         }

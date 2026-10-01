@@ -54,7 +54,15 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `CalorieTarget.swift` | `CalorieTarget.kt` | **Mifflin-St Jeor** BMR (NOT the Harris–Benedict in `WorkoutDetector`), activity multipliers 1.2/1.375, day assembly, damped+clamped recalibration. |
 | `StepNeat.swift` | `StepNeat.kt` | Steps above a 3,000 baseline → kcal at `0.0004 × weightKg` per step. |
 | `TimeWindows.swift` | `TimeWindows.kt` | Interval merging so overlapping workouts never subtract a shared second twice. |
-| `WeightTrend.swift` | *(stage 2, on branch `diet-trend`)* | EWMA trend weight, regression slope + standard error, detectability window. Not yet merged. |
+| `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
+| `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
+| `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
+| `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. |
+
+**On the protein default.** 1.2 g/kg is deliberately below the usually-quoted 1.6–2.2. That range comes
+from studies on people training several times a week; the lifting stimulus is what creates the demand.
+The fork owner lifts roughly once a fortnight and holds their numbers at 1.2. Do not "correct" this in
+the Kotlin twin — a different default would make the two platforms prescribe different diets.
 
 **Two constants that must not drift:** `AdaptiveExpenditureEngine.kcalPerKg` (7,700) is shared by
 `DietGoal` and `WeightTrend` rather than redeclared, because one converts a deficit into expected loss
@@ -65,7 +73,7 @@ against one number and measure itself against another. Keep that sharing in Kotl
 
 ## 2. Storage — GRDB migrations needing Room twins
 
-Two migrations, both currently `ios_only` in the schema oracle.
+Three migrations, all currently `ios_only` in the schema oracle.
 
 ### `v48-food-log` — `foodItem`, `foodEntry`
 
@@ -100,9 +108,39 @@ Index: `idx_dietGoal_device_started (deviceId, startedOn)`.
 - `dailyDeficitKcal` is stored rather than recomputed, so a past day keeps the number it was judged
   against even after the weight it was derived from has moved.
 
+### `v50-diet-v3` — protein target, recipes, macro provenance
+
+Everything here is **ALTER-appended**, so the added columns land LAST in each table. Room's column order
+must match that, not the logical grouping a fresh `CREATE TABLE` would suggest.
+
+```
+dietGoal   … , proteinGPerKg                    (nullable; nil = untargeted)
+foodItem   … , macroSource                      (nullable text; nil = user-stated, "ai-estimate")
+foodEntry  … , macroSource                      (same vocabulary, snapshotted independently)
+recipeComponent  id, deviceId, recipeId, foodItemId, quantity, ord
+```
+
+Design points the twin must preserve:
+- **`macroSource` rides BOTH the item and the entry.** The entry's copy is not redundant: the snapshot
+  outlives library edits, and "this number was once a guess" is exactly the kind of fact a log should
+  keep. An estimate that reads as a label figure is the failure the column exists to prevent.
+- **A recipe has no `isRecipe` flag.** Having `recipeComponent` rows IS being a recipe. A flag would be a
+  second answer to a question the components already answer, and the two can disagree.
+- **A recipe's macros are computed, never authoritative in storage.** The item's `kcal`/macro columns are
+  kept in sync as a CACHE for one case only: the picker renders the whole library at once, and a recipe
+  whose ingredient has since been deleted has no computable total, so the last-known figure is shown and
+  marked incomplete. Everywhere else, compose from the parts.
+- **`recipeComponent.foodItemId` has no foreign key**, the same reason `foodEntry.itemId` has none.
+  Deleting an ingredient must NOT cascade away the recipe that mentioned it — the recipe keeps naming it
+  and reports itself incomplete, which is a visible problem the user can fix rather than a total that
+  silently shrank.
+- **Logging a recipe snapshots like any other food**, so a log-time quantity tweak affects only that
+  entry. On Apple, a tweaked recipe deliberately logs with `saveToLibrary: false` — otherwise the
+  re-save that stamps `lastUsedAt` would push today's amounts onto the saved recipe.
+
 ### `deviceScopedTables`
 
-`foodItem`, `foodEntry` and `dietGoal` are all registered in
+`foodItem`, `foodEntry`, `dietGoal` and `recipeComponent` are all registered in
 `Packages/WhoopStore/Sources/WhoopStore/DeviceRegistryStore.swift`. The Android twin needs the same, or
 "forget this source" deletes the day totals in `metricSeries` and leaves the detail on disk — a delete
 that looks complete on every chart and is not. A guard test catches this on the Swift side; add its
@@ -136,7 +174,11 @@ for the other on a chart, which is precisely the comparison the feature exists t
 |---|---|
 | `Strand/Data/FoodLogStore.swift` | `com.noop.analytics.FoodLogStore` over Room |
 | `Strand/Data/DietExpenditure.swift` | the day-assembly orchestration |
-| `Strand/Screens/FoodLogView.swift`, `AddFoodSheet.swift` | food logging UI |
+| `Strand/Screens/FoodLogView.swift`, `AddFoodSheet.swift` | food logging UI — includes the day stepper (**past-day logging**: every write threads a `day` key, defaulting to today only at the edge) |
+| `Strand/Screens/EditFoodItemSheet.swift`, `EditWeightSheet.swift` | editing a saved food / a past weigh-in |
+| `Strand/Data/RecipeStore.swift`, `Strand/Screens/RecipeBuilderSheet.swift` | recipes — builder plus the log-time per-ingredient tweak in `AddFoodSheet` |
+| `Strand/System/FoodLogReminder.swift` | **net-new on both sides** — Android has no food or meal notifier at all. See section 6. |
+| `AICoachEngine.estimateMacros(describing:)` (`Strand/AI/AICoach.swift`) | the AI macro-estimation egress path. See section 6. |
 | `Strand/Screens/DietGoalSheet.swift` | goal setup (target weight + months slider) |
 | `Strand/Screens/DietBudgetCard.swift` | Today's diet card |
 | `Strand/Screens/DietDetailView.swift` | diet detail screen |
@@ -176,12 +218,55 @@ flat walking rate — an under-credit of a hard session rather than an invented 
   an opt-in that prefers NOOP's own estimate over Apple Health's. Useful to anyone without an Apple
   Watch and the most plausible candidate for upstreaming, but currently entangled with food-log changes
   in the same files.
+- **The food-log reminder** (`Strand/System/FoodLogReminder.swift`) — **net-new on both platforms**.
+  Android has no food or meal notifier at all; `android/.../alarm/WindDownScheduler.kt` is the template.
+  What must carry over is the DESIGN rather than the code:
+  - A repeating daily trigger with a FIXED message, so nothing has to run at fire time. The Apple side is
+    deliberately not the `CoachBriefScheduler`/BGTask shape — that one needs a background task only
+    because it generates its payload with an AI call.
+  - Time stored as **minutes since local midnight**, an Int. A stored `Date`/timestamp would carry a
+    calendar day with it, so "20:00" would silently mean one particular evening.
+  - It **fires whether or not the day is logged**, and only an ALREADY-DELIVERED notification is cleared
+    once food is logged — gated on the entry landing on TODAY, since backfilling last Tuesday says
+    nothing about whether today has been logged. Suppressing today properly needs a background task, and
+    a reminder that silently misses days is the worse failure.
+  - Two dead-state guards: the settings toggle seeds from the scheduler rather than from stored prefs
+    (denial must persist as `false`, and a direct binding would write an "on" back over the refusal), and
+    turning food logging off cancels the reminder — otherwise it keeps firing nightly for a feature whose
+    screen and off switch are both gone.
+  - Tapping it must route to the food log (`NavRouter.food` / `openFood()` on Apple).
+- **AI macro estimation** (`AICoachEngine.estimateMacros`) — the parsing half is pure and lives in
+  `MacroEstimateParse` (section 1); this is the egress half. It is **prompt-only across all four
+  providers**, not native structured output: a native path means a second code path per provider, a
+  separate parser for Anthropic (tool-use only, no JSON mode), and the tolerant parser is still needed as
+  the Custom/Ollama fallback anyway. That choice was made partly so this twin stays cheap to write — keep
+  it prompt-only. The gate stack, in this order: coach master switch checked **at egress** (not just in
+  the UI) → provider configured → data consent → resolved key. The button must be **user-initiated**:
+  never on appear, never on a settings change. Estimated fields land **pre-filled but editable**, so the
+  user's confirmation is what turns an estimate into a stated figure.
 - **HealthKit entitlement removal** (`project.yml`) — Apple-only, nothing owed.
 - **Dev build markers** (`NOOP_DEV_BUILD`, `AppIcon-Dev`) — Apple-only, nothing owed.
 
 ---
 
-## 7. Known gaps NOT introduced here
+## 7. Translation debt (blocks upstreaming, not the fork)
+
+Every string added by this feature is **English only**. `i18n-coverage.yml` hard-fails on a missing de /
+es / fr / pt-PT translation, but it triggers only on PRs into `main` and on pushes to `main` — so it
+never sees this fork's branches, and the debt accumulates silently.
+
+That is fine for a personal build and is a hard blocker the first time any of this is offered upstream.
+Whoever does that should run `python3 Tools/i18n_audit.py --ci` first (it needs **Python 3.10+**; the
+`str | None` alias at module scope fails outright on 3.9) and expect a long list.
+
+Note also that `Tools/seed-string-catalog.py` is **not** the way to extract these. It rebuilds the
+catalogue from whatever `.stringsdata` happens to be in DerivedData, which on a machine that has built
+other targets means thousands of unrelated strings and a whole-file rewrite — not the small additive
+diff the previous extraction commits show.
+
+---
+
+## 8. Known gaps NOT introduced here
 
 Worth fixing while in the area, but pre-existing on both platforms:
 
@@ -196,5 +281,10 @@ Worth fixing while in the area, but pre-existing on both platforms:
 1. Pure analytics twins with oracle tests — cheapest, and everything else depends on their numbers.
 2. `v48` + `v49` Room migrations, schema oracle flipped to `"both"`, `deviceScopedTables` guard.
 3. Store layer and the day-assembly orchestration.
-4. UI: food logging, then goal setup, then the Today card and detail screen.
-5. Flip the oracle entries and delete the corresponding rows from this file as each lands.
+4. UI: food logging (with the day stepper from the start — retrofitting past-day writes means touching
+   every call site again), then goal setup, then the Today card and detail screen.
+5. `v50`: protein target, recipes, macro provenance. Last of the schema work, and the recipe UI depends
+   on the food library already existing.
+6. The reminder and the AI estimation path — both independent of everything above, and both safe to defer
+   since neither changes a stored number.
+7. Flip the oracle entries and delete the corresponding rows from this file as each lands.

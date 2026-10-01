@@ -52,6 +52,9 @@ enum FoodLogStore {
 /// A reusable food in the user's library. `macros` are PER SERVING; a log scales them by its portion.
 struct FoodItem: Identifiable, Equatable, Codable {
     let id: UUID
+    /// nil when the user stated these macros; `FoodMacroSource.aiEstimate` when a model proposed them and
+    /// the user accepted. An estimate that reads as a label figure is the failure this prevents.
+    var macroSource: String?
     var name: String
     /// What one serving IS, in the user's own words — "1 scoop", "100 g", "1 medium banana". Free text on
     /// purpose: a food's natural unit is not always mass, and forcing grams would make the user do the
@@ -63,9 +66,10 @@ struct FoodItem: Identifiable, Equatable, Codable {
     /// build (or an import) decode without a migration.
     var lastUsedAt: Date?
 
-    init(id: UUID = UUID(), name: String, servingLabel: String, macros: MacroTotals,
-         createdAt: Date = Date(), lastUsedAt: Date? = nil) {
+    init(id: UUID = UUID(), macroSource: String? = nil, name: String, servingLabel: String,
+         macros: MacroTotals, createdAt: Date = Date(), lastUsedAt: Date? = nil) {
         self.id = id
+        self.macroSource = macroSource
         self.name = name
         self.servingLabel = servingLabel
         self.macros = macros
@@ -82,6 +86,9 @@ struct FoodItem: Identifiable, Equatable, Codable {
 /// can offer "log this again" — nothing reads through it for macros.
 struct FoodEntry: Identifiable, Equatable, Codable {
     let id: UUID
+    /// Snapshotted alongside the macros, because the snapshot outlives library edits and "this number
+    /// was once a guess" is exactly the kind of fact a log should keep.
+    var macroSource: String?
     var itemId: UUID?
     var nameSnapshot: String
     var macrosSnapshot: MacroTotals
@@ -91,9 +98,11 @@ struct FoodEntry: Identifiable, Equatable, Codable {
     /// Carried but not surfaced in v0, so grouping by meal can arrive later without touching stored data.
     var mealType: MealType?
 
-    init(id: UUID = UUID(), itemId: UUID?, nameSnapshot: String, macrosSnapshot: MacroTotals,
-         portion: Double, loggedAt: Date = Date(), mealType: MealType? = nil) {
+    init(id: UUID = UUID(), macroSource: String? = nil, itemId: UUID?, nameSnapshot: String,
+         macrosSnapshot: MacroTotals, portion: Double, loggedAt: Date = Date(),
+         mealType: MealType? = nil) {
         self.id = id
+        self.macroSource = macroSource
         self.itemId = itemId
         self.nameSnapshot = nameSnapshot
         self.macrosSnapshot = macrosSnapshot
@@ -104,6 +113,15 @@ struct FoodEntry: Identifiable, Equatable, Codable {
 
     /// What this entry actually contributes to the day — the snapshot scaled by the portion.
     var effectiveMacros: MacroTotals { NutritionMath.scaled(macrosSnapshot, portion: portion) }
+}
+
+/// Where a macro figure came from.
+///
+/// A deliberately small vocabulary: the absence of a value means the user stated the numbers, which is
+/// the overwhelming case and should not need a marker. Only a guess needs labelling.
+enum FoodMacroSource {
+    /// Stored value for a figure a language model proposed and the user accepted.
+    static let aiEstimate = "ai-estimate"
 }
 
 enum MealType: String, Codable, CaseIterable, Equatable {
@@ -201,6 +219,7 @@ enum FoodLibrary {
 private extension FoodItem {
     init(row: FoodItemRow) {
         self.init(id: UUID(uuidString: row.id) ?? UUID(),
+                  macroSource: row.macroSource,
                   name: row.name,
                   servingLabel: row.servingLabel,
                   macros: MacroTotals(kcal: row.kcal, protein: row.protein, carbs: row.carbs,
@@ -214,13 +233,15 @@ private extension FoodItem {
                     servingLabel: servingLabel, kcal: macros.kcal, protein: macros.protein,
                     carbs: macros.carbs, fat: macros.fat, fiber: macros.fiber,
                     createdAt: Int(createdAt.timeIntervalSince1970),
-                    lastUsedTs: lastUsedAt.map { Int($0.timeIntervalSince1970) })
+                    lastUsedTs: lastUsedAt.map { Int($0.timeIntervalSince1970) },
+                    macroSource: macroSource)
     }
 }
 
 private extension FoodEntry {
     init(row: FoodEntryRow) {
         self.init(id: UUID(uuidString: row.id) ?? UUID(),
+                  macroSource: row.macroSource,
                   itemId: row.itemId.flatMap(UUID.init(uuidString:)),
                   nameSnapshot: row.nameSnapshot,
                   macrosSnapshot: MacroTotals(kcal: row.kcal, protein: row.protein, carbs: row.carbs,
@@ -235,7 +256,8 @@ private extension FoodEntry {
                      itemId: itemId?.uuidString, nameSnapshot: nameSnapshot, portion: portion,
                      kcal: macrosSnapshot.kcal, protein: macrosSnapshot.protein,
                      carbs: macrosSnapshot.carbs, fat: macrosSnapshot.fat, fiber: macrosSnapshot.fiber,
-                     loggedAt: Int(loggedAt.timeIntervalSince1970), mealType: mealType?.rawValue)
+                     loggedAt: Int(loggedAt.timeIntervalSince1970), mealType: mealType?.rawValue,
+                     macroSource: macroSource)
     }
 }
 
@@ -297,7 +319,8 @@ extension Repository {
                  at date: Date = Date(), mealType: MealType? = nil,
                  saveToLibrary: Bool = true) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(date)
-        let entry = FoodEntry(itemId: saveToLibrary ? item.id : nil,
+        let entry = FoodEntry(macroSource: item.macroSource,
+                              itemId: saveToLibrary ? item.id : nil,
                               nameSnapshot: item.name, macrosSnapshot: item.macros,
                               portion: portion, loggedAt: date, mealType: mealType)
         // Validated by the SAME pure helper the tests pin, so a bad portion is rejected identically
@@ -308,6 +331,13 @@ extension Repository {
             return FoodEntries.total(current)
         }
         _ = try? await store.upsertFoodEntries([entry.row(day: dayKey)])
+        // Clear a reminder already sitting in Notification Centre, now that there is something logged.
+        // Gated on the entry landing on TODAY: backfilling last Tuesday says nothing about whether today
+        // has been logged, and clearing on it would dismiss a nudge that is still owed. It cannot cancel
+        // a reminder yet to fire — see `FoodLogReminder.clearDeliveredIfAny` for why that is deliberate.
+        if dayKey == Repository.localDayKey(Date()) {
+            Task { @MainActor in FoodLogReminder.clearDeliveredIfAny() }
+        }
         if saveToLibrary {
             var used = item
             used.lastUsedAt = date
@@ -360,6 +390,8 @@ extension Repository {
             _ = try? await store.upsertMetricSeries(points, deviceId: FoodLogStore.sourceId)
         }
         noteFoodChanged()
+        // A reminder that already fired is now stale — see FoodLogReminder.clearDeliveredIfAny.
+        FoodLogReminder.clearDeliveredIfAny()
         return totals
     }
 

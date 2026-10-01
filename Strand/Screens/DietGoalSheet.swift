@@ -24,6 +24,7 @@ struct DietGoalSheet: View {
     @State private var targetWeight: Double
     @State private var months: Double
     @State private var saving = false
+    @State private var proteinGPerKg: Double
 
     /// Fixed, never picked — see `baselineSection`. Named so the reason travels with the value.
     private let activity = ActivityLevel.measuredMovementBaseline
@@ -33,6 +34,7 @@ struct DietGoalSheet: View {
         self.onSaved = onSaved
         _targetWeight = State(initialValue: existing?.targetWeightKg ?? 0)   // resolved on appear
         _months = State(initialValue: Double(existing?.months ?? 6))
+        _proteinGPerKg = State(initialValue: existing?.proteinGPerKg ?? MacroTargets.defaultProteinGPerKg)
     }
 
     private var startWeight: Double { profile.weightKg }
@@ -64,6 +66,7 @@ struct DietGoalSheet: View {
                 destinationSection
                 timelineSection
                 baselineSection
+                proteinSection
                 outcomeSection
                 actions
             }
@@ -209,6 +212,44 @@ struct DietGoalSheet: View {
         }
     }
 
+    /// Protein is the ONE macro the user sets, because it is the one with a genuine choice in it. Fat
+    /// has a physiological floor and carbs are whatever is left, so neither is a decision.
+    ///
+    /// The default sits at 1.2 g/kg rather than the usually-quoted 1.6–2.2, and the copy says why: those
+    /// figures come from studies on people training several times a week. Showing the range without that
+    /// context would make a reasonable 1.2 look like under-eating.
+    private var proteinSection: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+            SectionHeader("Protein", overline: "Target")
+            NoopCard {
+                VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(Int((proteinGPerKg * startWeight).rounded())) g")
+                            .font(StrandFont.title2)
+                            .foregroundStyle(StrandPalette.textPrimary)
+                        Text("a day")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                        Spacer()
+                        Text(String(format: "%.1f g/kg", locale: AppLanguage.activeLocale, proteinGPerKg))
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                    }
+                    Slider(value: $proteinGPerKg,
+                           in: MacroTargets.minProteinGPerKg...MacroTargets.maxProteinGPerKg,
+                           step: 0.1)
+                        .tint(StrandPalette.accent)
+                        .accessibilityLabel("Protein grams per kilogram")
+
+                    Text("Protein is what decides whether the weight you lose is fat or muscle. The often-quoted 1.6–2.2 g/kg comes from people training several times a week — if you lift less often than that, less is usually enough.")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
     // MARK: - Outcome
 
     @ViewBuilder private var outcomeSection: some View {
@@ -327,7 +368,8 @@ struct DietGoalSheet: View {
                                            targetWeightKg: p.targetWeightKg,
                                            months: p.months,
                                            activity: activity,
-                                           dailyDeficitKcal: p.dailyDeficitKcal)
+                                           dailyDeficitKcal: p.dailyDeficitKcal,
+                                           proteinGPerKg: proteinGPerKg)
                     await repo.refreshDietDay(profile: profile)
                     saving = false
                     onSaved()

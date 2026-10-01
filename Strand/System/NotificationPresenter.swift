@@ -23,6 +23,11 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     /// root has wired it.
     var onCoachBriefTapped: (() -> Void)?
 
+    /// Wired the same way, to route a tapped food-log reminder to the food log via
+    /// `NavRouter.openFood()`. A reminder to log that drops you on whatever screen you were last on is a
+    /// reminder with an extra step in it, which is exactly the friction the nudge exists to remove.
+    var onFoodReminderTapped: (() -> Void)?
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -31,16 +36,18 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         completionHandler([.banner, .sound, .list])
     }
 
-    /// Handle a tap on a delivered notification. Only the scheduled morning-brief category (K5) routes
-    /// anywhere; every other notification (wind-down, smart-alarm, battery/illness) just opens the app
-    /// to wherever it was, matching the pre-K5 behaviour.
+    /// Handle a tap on a delivered notification. Only the scheduled morning-brief category (K5) and the
+    /// food-log reminder route anywhere; every other notification (wind-down, smart-alarm,
+    /// battery/illness) just opens the app to wherever it was, matching the pre-K5 behaviour.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        if response.notification.request.content.categoryIdentifier == CoachBriefScheduler.notificationCategoryId {
-            onCoachBriefTapped?()
+        switch response.notification.request.content.categoryIdentifier {
+        case CoachBriefScheduler.notificationCategoryId: onCoachBriefTapped?()
+        case FoodLogReminder.notificationCategoryId: onFoodReminderTapped?()
+        default: break
         }
         completionHandler()
     }

@@ -28,6 +28,8 @@ struct DietDetailView: View {
     @State private var energy: DietDayEnergy?
     @State private var goal: DietGoalRow?
     @State private var consumedToday: Double = 0
+    @State private var macrosToday: MacroTotals = .zero
+    @State private var targets: MacroTargetSet?
     @State private var history: [DietDay] = []
     @State private var showGoalSheet = false
     @State private var reloadTick = 0
@@ -57,6 +59,7 @@ struct DietDetailView: View {
                        onRefresh: { await reload() }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 todaySection
+                macrosSection
                 proposalSection
                 trendSection
                 goalSection
@@ -293,8 +296,15 @@ struct DietDetailView: View {
         let t = await repo.dietTrend()
         trend = t
         proposed = repo.proposedDeficit(from: t)
-        consumedToday = await repo.foodTotals().kcal
+        macrosToday = await repo.foodTotals()
+        consumedToday = macrosToday.kcal
         energy = await repo.refreshDietDay(profile: profile)
+        if let budget = energy?.budgetKcal(), let rate = goal?.proteinGPerKg {
+            targets = MacroTargets.targets(budgetKcal: budget, weightKg: profile.weightKg,
+                                           proteinGPerKg: rate)
+        } else {
+            targets = nil
+        }
 
         let intake = await repo.foodHistory(days: 7)
         var targets: [String: Double] = [:]
@@ -318,6 +328,65 @@ struct DietDetailView: View {
             DietDay(day: row.day, intake: row.kcal, target: targets[row.day],
                     modelledBurn: modelled[row.day], noopBurn: noopByDay[row.day])
         }
+    }
+
+    /// The budget's composition. Protein has a target, fat has a floor, carbs are the remainder — three
+    /// different kinds of number, so the rows say which is which rather than presenting them as a
+    /// uniform set of goals to hit.
+    @ViewBuilder private var macrosSection: some View {
+        if let t = targets {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                SectionHeader("Macros", overline: "Today")
+                NoopCard {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        macroRow("Protein", eaten: macrosToday.protein, target: t.proteinG,
+                                 note: "aim for this", tint: StrandPalette.metricPurple)
+                        macroRow("Fat", eaten: macrosToday.fat, target: t.fatFloorG,
+                                 note: "a floor, not a ceiling", tint: StrandPalette.metricAmber)
+                        macroRow("Carbs", eaten: macrosToday.carbs, target: t.carbsG,
+                                 note: "whatever the budget has left", tint: StrandPalette.accent)
+                        if t.isOverCommitted {
+                            // Said plainly rather than rendered as 0 g of carbs, which would look like a
+                            // rounding artefact instead of a plan that does not fit.
+                            Text("Your protein target and the fat floor already use the whole budget. Either ease the deficit or lower the protein rate.")
+                                .font(StrandFont.footnote)
+                                .foregroundStyle(StrandPalette.statusWarning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .opacity(cardOpacity)
+            }
+        }
+    }
+
+    private func macroRow(_ label: String, eaten: Double, target: Double,
+                          note: String, tint: Color) -> some View {
+        let frac = MacroTargets.fraction(consumed: eaten, target: target) ?? 0
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                Spacer()
+                Text("\(int(eaten)) of \(int(target)) g")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textPrimary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(StrandPalette.surfaceInset)
+                    Capsule().fill(tint).frame(width: max(2, geo.size.width * frac))
+                }
+            }
+            .frame(height: 4)
+            .accessibilityHidden(true)
+            Text(note)
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(label) \(int(eaten)) of \(int(target)) grams, \(note)")
     }
 
     // MARK: - Is it working?

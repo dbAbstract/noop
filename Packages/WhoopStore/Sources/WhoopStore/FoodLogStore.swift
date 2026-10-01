@@ -35,10 +35,14 @@ public struct FoodItemRow: Equatable, Codable, Sendable {
     public var createdAt: Int
     /// Unix seconds; most-recently-used floats to the top of the picker. Nil until first used.
     public var lastUsedTs: Int?
+    /// Where these numbers came from: nil when the user stated them, `"ai-estimate"` when a model
+    /// proposed them and the user accepted. An estimate that looks like a label reading is the failure
+    /// this exists to prevent.
+    public var macroSource: String?
 
     public init(id: String, deviceId: String, name: String, servingLabel: String,
                 kcal: Double, protein: Double, carbs: Double, fat: Double, fiber: Double,
-                createdAt: Int, lastUsedTs: Int? = nil) {
+                createdAt: Int, lastUsedTs: Int? = nil, macroSource: String? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.name = name
@@ -50,6 +54,7 @@ public struct FoodItemRow: Equatable, Codable, Sendable {
         self.fiber = fiber
         self.createdAt = createdAt
         self.lastUsedTs = lastUsedTs
+        self.macroSource = macroSource
     }
 
     static func decode(_ row: Row) -> FoodItemRow {
@@ -64,7 +69,8 @@ public struct FoodItemRow: Equatable, Codable, Sendable {
             fat: row["fat"],
             fiber: row["fiber"],
             createdAt: row["createdAt"],
-            lastUsedTs: row["lastUsedTs"]
+            lastUsedTs: row["lastUsedTs"],
+            macroSource: row["macroSource"]
         )
     }
 }
@@ -94,10 +100,14 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
     public var loggedAt: Int
     /// "breakfast" / "lunch" / "dinner" / "snack", or nil. Stored but not yet surfaced.
     public var mealType: String?
+    /// Provenance, snapshotted like the macros beside it — see `FoodItemRow.macroSource`. Kept here as
+    /// well as on the item because the snapshot outlives library edits, and "this was once a guess" is
+    /// exactly the kind of fact a log should not quietly lose.
+    public var macroSource: String?
 
     public init(id: String, deviceId: String, day: String, itemId: String?, nameSnapshot: String,
                 portion: Double, kcal: Double, protein: Double, carbs: Double, fat: Double,
-                fiber: Double, loggedAt: Int, mealType: String? = nil) {
+                fiber: Double, loggedAt: Int, mealType: String? = nil, macroSource: String? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.day = day
@@ -111,6 +121,7 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
         self.fiber = fiber
         self.loggedAt = loggedAt
         self.mealType = mealType
+        self.macroSource = macroSource
     }
 
     static func decode(_ row: Row) -> FoodEntryRow {
@@ -127,7 +138,8 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
             fat: row["fat"],
             fiber: row["fiber"],
             loggedAt: row["loggedAt"],
-            mealType: row["mealType"]
+            mealType: row["mealType"],
+            macroSource: row["macroSource"]
         )
     }
 }
@@ -148,8 +160,8 @@ extension WhoopStore {
                 try db.execute(sql: """
                     INSERT INTO foodItem
                         (id, deviceId, name, servingLabel, kcal, protein, carbs, fat, fiber,
-                         createdAt, lastUsedTs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         createdAt, lastUsedTs, macroSource)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         deviceId = excluded.deviceId,
                         name = excluded.name,
@@ -159,9 +171,10 @@ extension WhoopStore {
                         carbs = excluded.carbs,
                         fat = excluded.fat,
                         fiber = excluded.fiber,
-                        lastUsedTs = excluded.lastUsedTs
+                        lastUsedTs = excluded.lastUsedTs,
+                        macroSource = excluded.macroSource
                     """, arguments: [r.id, r.deviceId, r.name, r.servingLabel, r.kcal, r.protein,
-                                     r.carbs, r.fat, r.fiber, r.createdAt, r.lastUsedTs])
+                                     r.carbs, r.fat, r.fiber, r.createdAt, r.lastUsedTs, r.macroSource])
             }
             return rows.count
         }
@@ -199,8 +212,8 @@ extension WhoopStore {
                 try db.execute(sql: """
                     INSERT INTO foodEntry
                         (id, deviceId, day, itemId, nameSnapshot, portion,
-                         kcal, protein, carbs, fat, fiber, loggedAt, mealType)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         kcal, protein, carbs, fat, fiber, loggedAt, mealType, macroSource)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         day = excluded.day,
                         itemId = excluded.itemId,
@@ -212,9 +225,11 @@ extension WhoopStore {
                         fat = excluded.fat,
                         fiber = excluded.fiber,
                         loggedAt = excluded.loggedAt,
-                        mealType = excluded.mealType
+                        mealType = excluded.mealType,
+                        macroSource = excluded.macroSource
                     """, arguments: [r.id, r.deviceId, r.day, r.itemId, r.nameSnapshot, r.portion,
-                                     r.kcal, r.protein, r.carbs, r.fat, r.fiber, r.loggedAt, r.mealType])
+                                     r.kcal, r.protein, r.carbs, r.fat, r.fiber, r.loggedAt, r.mealType,
+                                     r.macroSource])
             }
             return rows.count
         }

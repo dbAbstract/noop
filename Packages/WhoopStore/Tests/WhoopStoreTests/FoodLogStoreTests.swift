@@ -32,9 +32,10 @@ final class FoodLogStoreTests: XCTestCase {
         let itemIdx = try await store.indexNamesForTest(table: "foodItem")
         let entryIdx = try await store.indexNamesForTest(table: "foodEntry")
         XCTAssertEqual(itemCols, ["id", "deviceId", "name", "servingLabel", "kcal", "protein", "carbs",
-                                  "fat", "fiber", "createdAt", "lastUsedTs"])
+                                  "fat", "fiber", "createdAt", "lastUsedTs", "macroSource"])
         XCTAssertEqual(entryCols, ["id", "deviceId", "day", "itemId", "nameSnapshot", "portion", "kcal",
-                                   "protein", "carbs", "fat", "fiber", "loggedAt", "mealType"])
+                                   "protein", "carbs", "fat", "fiber", "loggedAt", "mealType",
+                                   "macroSource"])
         XCTAssertEqual(itemPk, ["id"])
         XCTAssertEqual(entryPk, ["id"])
         XCTAssertTrue(itemIdx.contains("idx_foodItem_device_used"))

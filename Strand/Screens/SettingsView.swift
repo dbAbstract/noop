@@ -154,6 +154,13 @@ struct SettingsView: View {
     // hidden. Mirrors the Android pref so the toggle reads the same on both platforms.
     @AppStorage(HydrationStore.enabledKey) private var hydrationEnabled = false
     @AppStorage(FoodLogStore.enabledKey) private var foodLoggingEnabled = false
+    /// Seeded from the scheduler rather than `@AppStorage`, deliberately: `FoodLogReminder.setEnabled`
+    /// persists `false` when the OS has notifications denied, and a binding straight to the key would
+    /// write an "on" back over that refusal — leaving a switch that says yes and a reminder that never
+    /// arrives.
+    @State private var foodReminderEnabled: Bool = FoodLogReminder.isEnabled
+    @State private var foodReminderMinutes: Int = FoodLogReminder.timeMinutes
+    @State private var foodReminderStatus: String?
 
     /// Opt-in "Auto-detect workouts" (default OFF). When ON, Today scans the last day or two of HR for a
     /// sustained-elevated window and offers — via a single dismissible card — to save it as a workout.
@@ -1700,6 +1707,14 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .tint(StrandPalette.accent)
                 .accessibilityHint("Adds a food log card to your dashboard")
+                .onChangeCompat(of: foodLoggingEnabled) { on in
+                    // Turning food logging off hides the reminder's row but would otherwise leave its
+                    // trigger armed, so a notification would keep arriving nightly for a feature with no
+                    // screen left to open — with the switch that could stop it no longer on display.
+                    guard !on, foodReminderEnabled else { return }
+                    foodReminderEnabled = false
+                    FoodLogReminder.setEnabled(false)
+                }
 
                 Text("Log what you eat and see your daily calories and macros. You enter the numbers yourself — there is no food database and nothing is looked up online. A daily weigh-in lives here too, which is what lets NOOP work out your real expenditure over a few weeks. On \(Platform.deviceNounPhrase) only.")
                     .font(StrandFont.caption)
@@ -1707,6 +1722,55 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 rowDivider
+
+                // Nested under food logging rather than beside it: a reminder to log food with food
+                // logging off has nothing to remind you about.
+                if foodLoggingEnabled {
+                    Toggle(isOn: $foodReminderEnabled) {
+                        Text("Food log reminder")
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textPrimary)
+                    }
+                    .toggleStyle(.switch)
+                    .tint(StrandPalette.accent)
+                    .accessibilityHint("Send a daily notification reminding you to log what you ate")
+                    .onChangeCompat(of: foodReminderEnabled) { on in
+                        FoodLogReminder.setEnabled(on) { outcome in
+                            if outcome == .denied {
+                                foodReminderEnabled = false
+                                foodReminderStatus = String(localized: "Notifications are off for NOOP — enable them in Settings first.")
+                            } else {
+                                foodReminderStatus = nil
+                            }
+                        }
+                    }
+
+                    Text("A daily notification at a time you choose. It fires whether or not you have logged — a calendar reminder cannot check first, and missing the day it mattered is the worse failure. A day you skip is a gap in your trend rather than a zero, and enough gaps stop NOOP working out your real expenditure at all.")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let foodReminderStatus {
+                        Text(foodReminderStatus)
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if foodReminderEnabled {
+                        HStack {
+                            Text("Time")
+                                .font(StrandFont.subhead)
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            Spacer()
+                            DatePicker("", selection: foodReminderTimeBinding, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                                .accessibilityLabel("Food log reminder time")
+                        }
+                    }
+
+                    rowDivider
+                }
 
                 Toggle(isOn: $autoDetectWorkoutsEnabled) {
                     Text("Auto-detect workouts")
@@ -1755,6 +1819,26 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// `DatePicker` speaks `Date`; the reminder stores minutes since local midnight (the house
+    /// convention shared with `windDown.wakeMinutes` and `coachBrief.timeMinutes`). A stored `Date`
+    /// would carry a calendar day with it, so "20:00" would silently mean one particular evening.
+    private var foodReminderTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c = DateComponents()
+                c.hour = foodReminderMinutes / 60
+                c.minute = foodReminderMinutes % 60
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let m = (c.hour ?? 20) * 60 + (c.minute ?? 0)
+                foodReminderMinutes = m
+                FoodLogReminder.setTimeMinutes(m)
+            }
+        )
     }
 
     #if os(iOS)
