@@ -562,13 +562,21 @@ struct LiquidTodayView: View {
                             .font(StrandFont.rounded(28))
                             .foregroundStyle(StrandPalette.textPrimary)
                             .shadow(color: .black.opacity(0.4), radius: 10, y: 1)
-                        HStack(spacing: NoopMetrics.space2) {
-                            Text(dateLine)
+                        // Weekday and date on separate lines. One line had to hold "Wednesday, 1 October"
+                        // AND any trailing chip, inside a width already reduced by the header controls'
+                        // fade reserve — so the chip was the first thing clipped. Two short lines fit
+                        // where one long one could not.
+                        if let weekdayLine {
+                            Text(weekdayLine)
                                 .font(StrandFont.caption)
                                 .foregroundStyle(StrandPalette.textSecondary)
                                 .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
-                            // Rides the date line rather than the title so it cannot push a long day name
-                            // into the trailing controls' fade mask.
+                        }
+                        HStack(spacing: NoopMetrics.space2) {
+                            Text(dateOnlyLine)
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                                .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
                             DevBuildBadge()
                         }
                     }
@@ -2134,12 +2142,22 @@ struct LiquidTodayView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var dateLine: String {
-        // #1013: localize the sub-header date. The old en_US_POSIX "EEEE, d MMMM" formatter forced English
-        // weekday + month names regardless of the UI language. A locale-aware field template localizes both
-        // the names AND the field order (e.g. fr "mercredi 4 juillet") in the user's locale.
-        return selectedLogicalDay.formatted(
-            .dateTime.weekday(.wide).day().month(.wide).locale(AppLanguage.activeLocale))
+    /// The weekday, and ONLY when the title is not already it.
+    ///
+    /// `dayTitle` reads "Today" / "Yesterday" for the first two days and then becomes the weekday name
+    /// itself. Printing it again below would be the same fact twice on one screen — the thing AGENTS.md
+    /// warns about — so from two days back this is nil and the date line stands alone.
+    private var weekdayLine: String? {
+        guard selectedDayOffset <= 1 else { return nil }
+        return selectedLogicalDay.formatted(.dateTime.weekday(.wide).locale(AppLanguage.activeLocale))
+    }
+
+    /// Day and month, without the weekday.
+    ///
+    /// #1013: a locale-aware field template rather than a fixed "d MMMM" pattern, so both the month names
+    /// and the field ORDER follow the user's locale instead of being forced to English order.
+    private var dateOnlyLine: String {
+        selectedLogicalDay.formatted(.dateTime.day().month(.wide).locale(AppLanguage.activeLocale))
     }
 
     /// Provenance caption for the recovery-vitals card, keyed on the row a vital actually came from — NOT a

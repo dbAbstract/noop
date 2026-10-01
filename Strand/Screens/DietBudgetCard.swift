@@ -52,7 +52,7 @@ struct DietBudgetCard: View {
 
     private var setGoalPrompt: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Diet", overline: "Budget")
+            SectionHeader("Diet")
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     Text("Set a goal weight and a timeline, and NOOP works out what to eat each day from what you actually burn.")
@@ -73,7 +73,7 @@ struct DietBudgetCard: View {
 
     private var budgetCard: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Diet", overline: "Budget")
+            SectionHeader("Diet")
             NavigationLink(value: TabRoute.diet) {
                 NoopCard(tint: tint) {
                     VStack(alignment: .leading, spacing: NoopMetrics.space3) {
