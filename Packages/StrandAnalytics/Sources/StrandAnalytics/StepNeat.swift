@@ -29,26 +29,47 @@ public enum StepNeat {
 
     /// Steps an ordinary day contains before it counts as movement worth charging for.
     ///
-    /// 3,000 is the user's own working figure, and it lines up with what a ×1.2 sedentary multiplier is
-    /// usually taken to represent. Tunable because it is a description of a person's baseline, not a
-    /// constant of nature.
-    public static let sedentaryBaselineSteps = 3_000
+    /// 4,000, raised from an initial 3,000 after checking it against the literature rather than intuition.
+    /// Tudor-Locke & Bassett's widely used classification puts SEDENTARY at under 5,000 steps/day, with
+    /// 5,000–7,499 as "low active" — characterised as someone doing no sport or exercise at all.
+    /// Accelerometer studies of US adults land around 4,800–5,100/day.
+    ///
+    /// So 3,000 was not a generous baseline, it was a LOW one — and a low baseline credits too many steps
+    /// as NEAT. 5,000 is arguably the better match for what a ×1.2 multiplier represents; 4,000 is the
+    /// deliberately cautious middle, because the baseline and the multiplier describe the SAME incidental
+    /// movement and moving one while assuming the other unchanged would subtract it twice.
+    ///
+    /// Tunable because it is a description of a person's baseline, not a constant of nature.
+    public static let sedentaryBaselineSteps = 4_000
 
     /// Net energy per step per kilogram of bodyweight.
     ///
-    /// Derivation, so this is a figure rather than a magic number. Walking at an ordinary pace is about
-    /// 3.5 METs. A MET is a multiple of resting metabolism, so the energy ABOVE resting — which is all
-    /// that should be charged here, since resting is already in the BMR term — is (3.5 − 1) = 2.5 METs.
+    /// 0.0003, revised DOWN from 0.0004. The original derivation priced every step as deliberate walking,
+    /// which is not what the steps reaching this function are:
     ///
     ///     kcal/min = METs × 3.5 × weightKg / 200
-    ///     net kcal/min at 2.5 METs = 2.5 × 3.5 × weightKg / 200 = 0.04375 × weightKg
     ///
-    /// At a typical ~110 steps/min that is 0.000398 kcal per step per kg, rounded here to 0.0004.
+    /// Purposeful walking at ~4.8 km/h is about 3.5 METs, so the energy above resting — all that should be
+    /// charged here, since resting is already in the BMR term — is (3.5 − 1) = 2.5 METs, which at a
+    /// typical ~110 steps/min gives 0.000398. That was the old figure.
     ///
-    /// For a 73 kg person: 0.0292 kcal/step, so 7,000 steps above baseline ≈ 204 kcal. That is the right
-    /// order of magnitude for a day's incidental walking, and deliberately on the conservative side —
-    /// over-crediting NEAT inflates the eating budget, which is the error that silently stalls a diet.
-    public static let netKcalPerStepPerKg = 0.0004
+    /// But the steps left HERE have already had workouts subtracted and the sedentary baseline removed, so
+    /// what remains is pottering: kitchen, office, shop — slow and fragmented. That is 2.0–2.5 METs, so
+    /// net-above-rest is 1.0–1.5, not 2.5. A slower cadence pushes the other way (fewer steps per minute
+    /// means more kcal per step), and the two do not cancel: the MET over-estimate dominates by roughly
+    /// 2×. The honest range is 0.00025–0.0003, and this takes the top of it — cautious without being
+    /// punitive.
+    ///
+    /// For a 73 kg person: 0.0219 kcal/step, so 6,000 steps above baseline ≈ 131 kcal.
+    ///
+    /// WHY ERR LOW, explicitly. Over-crediting NEAT inflates the eating budget, and at a small deficit
+    /// that is enough to erase it outright — a diet that stalls while every number on screen says it is
+    /// working, which is the hardest failure to diagnose from the inside. Under-crediting is visible
+    /// instead: you lose slightly faster than predicted. `AdaptiveExpenditureEngine` measures real
+    /// expenditure from the scale once it has the data and overrides this estimate entirely, so these
+    /// constants only govern the first few weeks — but that is exactly when someone is deciding whether
+    /// the app can be trusted.
+    public static let netKcalPerStepPerKg = 0.0003
 
     /// Steps that count toward NEAT: the daily total, less steps taken inside workouts, less the
     /// sedentary baseline. Floored at zero — a day quieter than baseline earns nothing, it does not go

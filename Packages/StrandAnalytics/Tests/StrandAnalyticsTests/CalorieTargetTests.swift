@@ -68,17 +68,24 @@ final class CalorieTargetTests: XCTestCase {
     /// tiers. A conventional activity factor stands in for movement nobody measured; here movement IS
     /// measured, so declaring yourself active charges for it twice.
     ///
-    /// The gap between the two multipliers is equivalent to claiming ~10,000 extra steps a day — steps
-    /// the pedometer would then count again. If this ever reads as a small number, the step coefficient
-    /// has moved and the double-count argument needs revisiting rather than the picker returning.
-    func testChoosingLightlyActiveWouldDoubleCountAboutTenThousandSteps() {
+    /// The gap between the two multipliers is equivalent to claiming ~13,400 extra steps a day — steps
+    /// the pedometer would then count again. The original figure was ~10,000; lowering the per-step rate
+    /// to 0.0003 RAISED this, because the same 294 kcal gap now buys more steps. So the double-count
+    /// argument got stronger with the revision, not weaker, and the picker stays gone.
+    ///
+    /// Asserted as a floor rather than a point value: the exact number tracks the step coefficient, and
+    /// what matters is that it stays implausibly large. If it ever drops near a real day's step count, the
+    /// coefficient has moved far enough that this argument needs re-deriving rather than re-asserting.
+    func testChoosingLightlyActiveWouldDoubleCountAnImplausibleNumberOfSteps() {
         let bmr = CalorieTarget.mifflinBMR(sex: sex, weightKg: weight, heightCm: height, age: age)
         let gap = CalorieTarget.baselineKcal(bmrKcal: bmr, activity: .lightlyActive)
                - CalorieTarget.baselineKcal(bmrKcal: bmr, activity: .sedentary)
         XCTAssertEqual(gap, 294, accuracy: 1.0)
 
         let impliedSteps = gap / StepNeat.kcal(stepsAboveBaseline: 1, weightKg: weight)
-        XCTAssertEqual(impliedSteps, 10_000, accuracy: 500)
+        XCTAssertEqual(impliedSteps, 13_425, accuracy: 500)
+        XCTAssertGreaterThan(impliedSteps, 9_000,
+                             "a multiplier gap worth fewer steps than an active day would weaken the case")
     }
 
     func testBaselineIsBMRTimesMultiplier() {
@@ -91,13 +98,13 @@ final class CalorieTargetTests: XCTestCase {
 
     func testDayExpenditureSumsItsParts() {
         let d = CalorieTarget.dayExpenditure(sex: sex, weightKg: weight, heightCm: height, age: age,
-                                             activity: .sedentary, neatSteps: 7_000, workoutKcal: 150)
+                                             activity: .sedentary, neatSteps: 6_000, workoutKcal: 150)
         XCTAssertEqual(d.bmrKcal, 1681.25, accuracy: 0.01)
         XCTAssertEqual(d.baselineKcal, 2017.5, accuracy: 0.01)
-        // 7,000 × 73 × 0.0004 = 204.4
-        XCTAssertEqual(d.stepNeatKcal, 204.4, accuracy: 0.01)
+        // 6,000 × 73 × 0.0003 = 131.4
+        XCTAssertEqual(d.stepNeatKcal, 131.4, accuracy: 0.01)
         XCTAssertEqual(d.workoutKcal, 150)
-        XCTAssertEqual(d.totalKcal, 2017.5 + 204.4 + 150, accuracy: 0.01)
+        XCTAssertEqual(d.totalKcal, 2017.5 + 131.4 + 150, accuracy: 0.01)
     }
 
     /// A sedentary day with no workout collapses to baseline alone — no invented movement.

@@ -52,12 +52,30 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `NutritionMath.swift` | `NutritionMath.kt` | `MacroTotals`, portion scaling, day totals, Atwater 4/4/9 consistency check. Non-finite/negative portions collapse to zero — pin that, it is the NaN guard. |
 | `DietGoal.swift` | `DietGoal.kt` | Goal weight + months → daily deficit. Pace bands (gradual/aggressive/unsafe) and the BMI 18.5 destination floor. |
 | `CalorieTarget.swift` | `CalorieTarget.kt` | **Mifflin-St Jeor** BMR (NOT the Harris–Benedict in `WorkoutDetector`), activity multipliers 1.2/1.375, day assembly, damped+clamped recalibration. |
-| `StepNeat.swift` | `StepNeat.kt` | Steps above a 3,000 baseline → kcal at `0.0004 × weightKg` per step. |
+| `StepNeat.swift` | `StepNeat.kt` | Steps above a **4,000** baseline → kcal at **`0.0003 × weightKg`** per step. **Use these numbers, not the ones in the first draft** (3,000 / 0.0004) — see the note below. |
 | `TimeWindows.swift` | `TimeWindows.kt` | Interval merging so overlapping workouts never subtract a shared second twice. |
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
 | `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
 | `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. A part is either a `Reference.library(id)` (looked up, can go missing) or a `Reference.inline(macros)` (carried, cannot) — an inline part must NEVER consult the lookup, or every ad-hoc recipe is refused. |
+
+**On the step constants, which were revised after real use.** The first pass used a 3,000-step baseline
+and 0.0004 kcal/step/kg; both over-credited NEAT, together by roughly 2x, and on a 10,000-step day that
+is 204 kcal of claimed burn against an honest ~131. For a user on a 169 kcal/day deficit that erased
+most of it — a diet that plateaus while every figure on screen says it is working, which is the hardest
+failure to notice from the inside.
+
+- **Baseline 4,000.** Tudor-Locke & Bassett class under 5,000 steps/day as sedentary and 5,000–7,499 as
+  low-active (no sport or exercise at all); adult accelerometer means sit near 4,800–5,100. 3,000 was not
+  a cautious baseline, it was a low one, and a low baseline charges for ordinary pottering. 4,000 is the
+  deliberately conservative middle, held below 5,000 because the baseline and the x1.2 multiplier
+  describe the SAME incidental movement and moving one alone would subtract it twice.
+- **Rate 0.0003.** 0.0004 derives from 2.5 net METs, which is DELIBERATE walking at ~4.8 km/h. The steps
+  reaching this function have already had workouts and the baseline removed, so what remains is slow,
+  fragmented movement at 1.0–1.5 net METs. Honest range is 0.00025–0.0003; the top of it is taken.
+- **Err low, on purpose.** Under-crediting is visible (you lose faster than predicted); over-crediting is
+  invisible. `AdaptiveExpenditureEngine` overrides this from the scale once it has the data, so these
+  constants only govern the first few weeks — which is exactly when trust is being decided.
 
 **On the protein default.** 1.2 g/kg is deliberately below the usually-quoted 1.6–2.2. That range comes
 from studies on people training several times a week; the lifting stimulus is what creates the demand.
