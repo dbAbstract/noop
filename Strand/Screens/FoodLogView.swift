@@ -33,6 +33,21 @@ struct FoodLogView: View {
     @State private var editingWeightDay: WeightEditTarget?
     @State private var weightDraft = ""
 
+    /// Which day is being logged to. Days BACK from today, so 0 is today and 1 is yesterday — the
+    /// direction the UI moves in, and it makes "never in the future" a type-level fact rather than a
+    /// check someone has to remember.
+    ///
+    /// This exists because a missed day was otherwise unfixable: the engine that judges whether the diet
+    /// is working needs 70% intake coverage over three weeks, and four forgotten days put that out of
+    /// reach permanently. Backfilling is the difference between a gap and a dead end.
+    @State private var dayOffset = 0
+
+    private var selectedDay: String {
+        Repository.localDayKey(Date().addingTimeInterval(-Double(dayOffset) * 86_400))
+    }
+
+    private var isToday: Bool { dayOffset == 0 }
+
     /// "Card transparency" (0–100), shared with every other card surface.
     @AppStorage(CardAppearancePrefs.opacityKey) private var cardOpacityPercent = CardAppearancePrefs.defaultPercent
     private var cardOpacity: Double { max(0, min(1, Double(cardOpacityPercent) / 100)) }
@@ -42,6 +57,7 @@ struct FoodLogView: View {
                        subtitle: "What you ate today, on \(Platform.deviceNounPhrase) only. Nothing is looked up online.",
                        onRefresh: { await reload() }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                daySection
                 totalsSection
                 entriesSection
                 quickAddSection
@@ -49,12 +65,13 @@ struct FoodLogView: View {
                 historySection
             }
         }
-        .task(id: reloadTick) { await reload() }
+        .task(id: "\(reloadTick)-\(dayOffset)") { await reload() }
         .sheet(isPresented: $showAddSheet) {
             AddFoodSheet(library: library) { item, portion, save in
                 Task {
                     if save { await repo.saveFoodItem(item) }
-                    await repo.logFood(item: item, portion: portion, saveToLibrary: save)
+                    await repo.logFood(item: item, portion: portion, day: selectedDay,
+                                       at: logTimestamp, saveToLibrary: save)
                     reloadTick += 1
                 }
             }
@@ -73,10 +90,90 @@ struct FoodLogView: View {
         .sheet(item: $editingEntry) { entry in
             EditPortionSheet(entry: entry) { newPortion in
                 Task {
-                    await repo.updateFoodEntry(id: entry.id, portion: newPortion)
+                    await repo.updateFoodEntry(id: entry.id, portion: newPortion, day: selectedDay)
                     reloadTick += 1
                 }
             }
+        }
+    }
+
+    // MARK: - Which day
+
+    /// Backfilled entries are stamped at MIDDAY of that day, not "now".
+    ///
+    /// Entries sort by `loggedAt`, so stamping a backfill with the current clock would file yesterday's
+    /// breakfast after yesterday's dinner. Midday is a deliberate admission that the real time is
+    /// unknown rather than a guess dressed as one, and it keeps a backfilled day's ordering stable.
+    private var logTimestamp: Date {
+        guard !isToday else { return Date() }
+        let start = Date().addingTimeInterval(-Double(dayOffset) * 86_400)
+        return Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: start) ?? start
+    }
+
+    @ViewBuilder private var daySection: some View {
+        // Hidden entirely on today, which is almost every use. A day picker permanently occupying the
+        // top of the screen would make the common case pay for the rare one.
+        if !isToday {
+            NoopCard(tint: StrandPalette.statusWarning) {
+                HStack {
+                    Image(systemName: "calendar.badge.clock")
+                        .foregroundStyle(StrandPalette.statusWarning)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Logging to \(dayLabel)")
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textPrimary)
+                        Text("Not today — anything you add lands on that day.")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                    }
+                    Spacer()
+                    Button("Today") { dayOffset = 0 }
+                        .buttonStyle(NoopButtonStyle(.secondary))
+                }
+            }
+            .opacity(cardOpacity)
+        }
+    }
+
+    /// The day stepper, kept in the entries card so the common path stays uncluttered.
+    private var dayStepper: some View {
+        HStack(spacing: NoopMetrics.space3) {
+            Button { dayOffset = min(13, dayOffset + 1) } label: {
+                Image(systemName: "chevron.left")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.accent)
+            }
+            .buttonStyle(.plain)
+            // Two weeks back is the practical limit: the coverage window this protects is three weeks,
+            // and beyond that someone is reconstructing rather than remembering.
+            .disabled(dayOffset >= 13)
+            .accessibilityLabel("Previous day")
+
+            Text(dayLabel)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .frame(minWidth: 90)
+
+            Button { dayOffset = max(0, dayOffset - 1) } label: {
+                Image(systemName: "chevron.right")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(dayOffset == 0 ? StrandPalette.textTertiary : StrandPalette.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(dayOffset == 0)
+            .accessibilityLabel("Next day")
+        }
+    }
+
+    private var dayLabel: String {
+        switch dayOffset {
+        case 0: return String(localized: "Today")
+        case 1: return String(localized: "Yesterday")
+        default:
+            let d = Date().addingTimeInterval(-Double(dayOffset) * 86_400)
+            return d.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)
+                .locale(AppLanguage.activeLocale))
         }
     }
 
@@ -84,7 +181,7 @@ struct FoodLogView: View {
 
     private var totalsSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Today", overline: "Intake")
+            SectionHeader(LocalizedStringKey(dayLabel), overline: "Intake")
             NoopCard(tint: StrandPalette.accent) {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -130,15 +227,19 @@ struct FoodLogView: View {
 
     private var entriesSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Logged", overline: "Today")
+            SectionHeader("Logged", overline: LocalizedStringKey(dayLabel))
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Label("Add food", systemImage: "plus.circle.fill")
+                    HStack {
+                        Button {
+                            showAddSheet = true
+                        } label: {
+                            Label("Add food", systemImage: "plus.circle.fill")
+                        }
+                        .buttonStyle(NoopButtonStyle(.primary))
+                        Spacer()
+                        dayStepper
                     }
-                    .buttonStyle(NoopButtonStyle(.primary))
 
                     if !entries.isEmpty {
                         Divider().overlay(StrandPalette.hairline)
@@ -220,7 +321,8 @@ struct FoodLogView: View {
                         ForEach(library.prefix(6)) { item in
                             Button {
                                 Task {
-                                    await repo.logFood(item: item, portion: 1)
+                                    await repo.logFood(item: item, portion: 1, day: selectedDay,
+                                                       at: logTimestamp)
                                     reloadTick += 1
                                 }
                             } label: {
@@ -263,7 +365,7 @@ struct FoodLogView: View {
 
     private var weightSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Weight", overline: "Today")
+            SectionHeader("Weight", overline: LocalizedStringKey(dayLabel))
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     // States the WHY plainly: a weigh-in is not decoration here, it is the second input the
@@ -314,7 +416,11 @@ struct FoodLogView: View {
                         Button("Log") {
                             Task {
                                 guard let kg = Double(weightDraft.trimmingCharacters(in: .whitespaces)) else { return }
-                                await repo.logWeight(kg: kg, profile: profile)
+                                // Only a weigh-in for TODAY updates the profile: that scalar is what the
+                                // expenditure model prices the body at right now, and backfilling last
+                                // Tuesday says nothing about today's mass.
+                                await repo.logWeight(kg: kg, day: selectedDay,
+                                                     profile: isToday ? profile : nil)
                                 weightDraft = ""
                                 reloadTick += 1
                             }
@@ -361,11 +467,11 @@ struct FoodLogView: View {
     // MARK: - Data
 
     private func reload() async {
-        entries = await repo.foodEntries()
+        entries = await repo.foodEntries(day: selectedDay)
         totals = FoodEntries.total(entries)
         library = await repo.foodLibrary()
         history = await repo.foodHistory(days: 7)
-        weightToday = await repo.weightToday()
+        weightToday = await repo.weightToday(day: selectedDay)
         weightHistory = await repo.weightHistory(days: 30).reversed()
     }
 

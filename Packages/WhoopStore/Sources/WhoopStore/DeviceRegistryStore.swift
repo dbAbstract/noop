@@ -176,6 +176,10 @@ public struct DeviceRegistryStore: Sendable {
         // v49-diet-goal: deviceId-keyed like everything above. Forgetting the source must clear the goal
         // too, or a re-added source would silently inherit the previous one's targets.
         "dietGoal",
+        // v50-diet-v3: recipe ingredients are deviceId-keyed like everything above. Forgetting the
+        // source must take them too, or a deleted library leaves orphaned components behind that no
+        // recipe references and nothing will ever clean up.
+        "recipeComponent",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all

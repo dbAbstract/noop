@@ -1205,6 +1205,51 @@ extension WhoopStore {
             try db.create(index: "idx_dietGoal_device_started", on: "dietGoal",
                           columns: ["deviceId", "startedOn"], options: [.ifNotExists])
         }
+        // FORK-LOCAL (diet stage 3). Three additive changes in one migration: a protein target on the
+        // goal, recipe components, and a provenance marker for AI-estimated macros.
+        migrator.registerMigration("v50-diet-v3") { db in
+            // Protein as GRAMS PER KILOGRAM rather than grams, so the target moves with the body it is
+            // for. A gram figure set at 73 kg is quietly wrong by the time someone reaches 69, which is
+            // the whole point of having a goal. NULL means protein is untargeted.
+            try db.alter(table: "dietGoal") { t in
+                t.add(column: "proteinGPerKg", .double)
+            }
+
+            // A recipe is an ordinary `foodItem` whose macros come from its parts. Components live here
+            // rather than as a blob on the item so a single ingredient can be corrected without
+            // rewriting the recipe, and so the quantities are queryable.
+            //
+            // A recipe's macros are COMPUTED from these rows and never stored on the item — the same
+            // rule the user's own backend follows. Storing them would create a second answer that goes
+            // stale the moment an ingredient is edited. Logging still snapshots, as every food does.
+            try db.create(table: "recipeComponent", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                // The `foodItem` acting as the recipe.
+                t.column("recipeId", .text).notNull()
+                // The `foodItem` used as an ingredient. No foreign key, matching `foodEntry.itemId`:
+                // deleting an ingredient must not cascade away the recipe that mentioned it.
+                t.column("foodItemId", .text).notNull()
+                // Servings of the ingredient, in ITS OWN serving unit — "2 scoops", not "2 grams".
+                t.column("quantity", .double).notNull()
+                t.column("ord", .integer).notNull()          // display order, as the user arranged it
+            }
+            try db.create(index: "idx_recipeComponent_device_recipe", on: "recipeComponent",
+                          columns: ["deviceId", "recipeId"], options: [.ifNotExists])
+
+            // Where a macro figure came from. NULL = the user stated it; "ai-estimate" = a model guessed
+            // and the user accepted it.
+            //
+            // On BOTH tables deliberately. `foodEntry` carries a snapshot that outlives library edits, so
+            // provenance recorded only on the item would be lost from history the first time the item
+            // was corrected — and "this number was once a guess" is exactly the fact a log should keep.
+            try db.alter(table: "foodItem") { t in
+                t.add(column: "macroSource", .text)
+            }
+            try db.alter(table: "foodEntry") { t in
+                t.add(column: "macroSource", .text)
+            }
+        }
         return migrator
     }
 }
