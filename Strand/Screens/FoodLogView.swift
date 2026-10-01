@@ -28,6 +28,9 @@ struct FoodLogView: View {
 
     @State private var showAddSheet = false
     @State private var editingEntry: FoodEntry?
+    @State private var editingItem: FoodItem?
+    @State private var weightHistory: [(day: String, kg: Double)] = []
+    @State private var editingWeightDay: WeightEditTarget?
     @State private var weightDraft = ""
 
     /// "Card transparency" (0–100), shared with every other card surface.
@@ -48,13 +51,24 @@ struct FoodLogView: View {
         }
         .task(id: reloadTick) { await reload() }
         .sheet(isPresented: $showAddSheet) {
-            AddFoodSheet(library: library) { item, portion in
+            AddFoodSheet(library: library) { item, portion, save in
                 Task {
-                    await repo.saveFoodItem(item)
-                    await repo.logFood(item: item, portion: portion)
+                    if save { await repo.saveFoodItem(item) }
+                    await repo.logFood(item: item, portion: portion, saveToLibrary: save)
                     reloadTick += 1
                 }
             }
+        }
+        .sheet(item: $editingItem) { item in
+            EditFoodItemSheet(item: item, onSaved: { reloadTick += 1 }, onDeleted: { reloadTick += 1 })
+                .environmentObject(repo)
+        }
+        .sheet(item: $editingWeightDay) { target in
+            EditWeightSheet(day: target.day,
+                            kg: weightHistory.first(where: { $0.day == target.day })?.kg ?? 0,
+                            onDone: { reloadTick += 1 })
+                .environmentObject(repo)
+                .environmentObject(profile)
         }
         .sheet(item: $editingEntry) { entry in
             EditPortionSheet(entry: entry) { newPortion in
@@ -230,6 +244,13 @@ struct FoodLogView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Log one serving of \(item.name)")
+                            // Editing is the rarer action, so it stays out of the way of the one-tap log
+                            // rather than competing with it for the row.
+                            .contextMenu {
+                                Button { editingItem = item } label: {
+                                    Label("Edit \(item.name)", systemImage: "pencil")
+                                }
+                            }
                         }
                     }
                 }
@@ -256,6 +277,32 @@ struct FoodLogView: View {
                         Text("Logged today: \(String(format: "%.1f", locale: AppLanguage.activeLocale, w)) kg")
                             .font(StrandFont.subhead)
                             .foregroundStyle(StrandPalette.statusPositive)
+                    }
+
+                    if !weightHistory.isEmpty {
+                        Divider().overlay(StrandPalette.hairline)
+                        Text("Recent weigh-ins")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                        ForEach(weightHistory.prefix(5), id: \.day) { row in
+                            Button { editingWeightDay = WeightEditTarget(day: row.day) } label: {
+                                HStack {
+                                    Text(row.day)
+                                        .font(StrandFont.footnote)
+                                        .foregroundStyle(StrandPalette.textTertiary)
+                                    Spacer()
+                                    Text(String(format: "%.1f kg", locale: AppLanguage.activeLocale, row.kg))
+                                        .font(StrandFont.subhead)
+                                        .foregroundStyle(StrandPalette.textPrimary)
+                                    Image(systemName: "pencil")
+                                        .font(StrandFont.caption)
+                                        .foregroundStyle(StrandPalette.textTertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit weigh-in for \(row.day)")
+                        }
+                        Divider().overlay(StrandPalette.hairline)
                     }
 
                     HStack(spacing: NoopMetrics.space3) {
@@ -319,6 +366,7 @@ struct FoodLogView: View {
         library = await repo.foodLibrary()
         history = await repo.foodHistory(days: 7)
         weightToday = await repo.weightToday()
+        weightHistory = await repo.weightHistory(days: 30).reversed()
     }
 
     // MARK: - Formatting

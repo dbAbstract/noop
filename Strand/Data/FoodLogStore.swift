@@ -246,11 +246,35 @@ extension Repository {
     // MARK: Entries
 
     /// A day's logged foods, oldest first. Empty when nothing was logged.
+    ///
+    /// The displayed NAME is resolved live from the library item when that item still exists, falling
+    /// back to the stored snapshot once it has been deleted. A rename therefore updates every past entry
+    /// at once, with no migration and no write that could half-succeed.
+    ///
+    /// Names and macros are treated differently ON PURPOSE. A name is a LABEL for a thing — correcting
+    /// "protein yogurt" to "Danone protein yogurt" describes the same yogurt better, and leaving history
+    /// on the old label would just be stale. Macros are a MEASUREMENT of what was eaten; rewriting those
+    /// retroactively would change the record rather than its description, so they stay snapshotted.
+    ///
+    /// It is also analytically free: nothing reads the name. Every total comes from `macrosSnapshot` on
+    /// the entry, never from the library item.
+    ///
+    /// The one case this gets wrong is REPURPOSING rather than correcting — renaming an item to a
+    /// genuinely different food relabels its history too. That cannot be told apart automatically, so the
+    /// edit sheet says the rename applies everywhere and offers saving a new food instead.
     func foodEntries(day: String? = nil) async -> [FoodEntry] {
         let dayKey = day ?? Repository.localDayKey(Date())
         guard let store = await storeHandle() else { return [] }
         let rows = (try? await store.foodEntries(deviceId: FoodLogStore.sourceId, day: dayKey)) ?? []
-        return rows.map(FoodEntry.init(row:))
+        guard !rows.isEmpty else { return [] }
+        let library = await foodLibrary()
+        var nameById: [UUID: String] = [:]
+        for item in library { nameById[item.id] = item.name }
+        return rows.map { row in
+            var entry = FoodEntry(row: row)
+            if let id = entry.itemId, let current = nameById[id] { entry.nameSnapshot = current }
+            return entry
+        }
     }
 
     /// The day's macro totals, derived from the entry rows rather than read back out of `metricSeries`,
@@ -261,11 +285,20 @@ extension Repository {
 
     /// Log `item` at `portion` servings: stamp the library item's recency, insert the entry, then
     /// re-derive and re-bank the day totals. Returns the new day totals.
+    /// `saveToLibrary: false` logs a ONE-OFF — the meal is recorded in full, but nothing is added to the
+    /// library and the entry carries no `itemId`.
+    ///
+    /// That is the common case and therefore the default in the UI. Most meals are eaten once; forcing
+    /// each into the library would fill it with "Pret sandwich 14 March" and make the picker useless for
+    /// the handful of foods actually eaten repeatedly. The entry still carries a full macro snapshot, so
+    /// nothing analytical is lost — only the offer to log it again in one tap.
     @discardableResult
     func logFood(item: FoodItem, portion: Double, day: String? = nil,
-                 at date: Date = Date(), mealType: MealType? = nil) async -> MacroTotals {
+                 at date: Date = Date(), mealType: MealType? = nil,
+                 saveToLibrary: Bool = true) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(date)
-        let entry = FoodEntry(itemId: item.id, nameSnapshot: item.name, macrosSnapshot: item.macros,
+        let entry = FoodEntry(itemId: saveToLibrary ? item.id : nil,
+                              nameSnapshot: item.name, macrosSnapshot: item.macros,
                               portion: portion, loggedAt: date, mealType: mealType)
         // Validated by the SAME pure helper the tests pin, so a bad portion is rejected identically
         // whether it came from the UI or from a future import — not re-checked inline here.
@@ -275,9 +308,11 @@ extension Repository {
             return FoodEntries.total(current)
         }
         _ = try? await store.upsertFoodEntries([entry.row(day: dayKey)])
-        var used = item
-        used.lastUsedAt = date
-        _ = try? await store.upsertFoodItems([used.row])
+        if saveToLibrary {
+            var used = item
+            used.lastUsedAt = date
+            _ = try? await store.upsertFoodItems([used.row])
+        }
         return await rebankFoodTotals(entries: next, day: dayKey)
     }
 
@@ -419,6 +454,18 @@ extension Repository {
                                                       key: WeightLogStore.key,
                                                       from: fromKey, to: toKey) else { return [] }
         return pts.map { (day: $0.day, kg: $0.value) }
+    }
+
+    /// Remove a weigh-in. The trend is a regression through these points, so one mistyped reading — 7.3
+    /// instead of 73 — drags the slope badly and cannot be out-voted by logging more. Being able to take
+    /// it back out is what makes the trend trustworthy.
+    @discardableResult
+    func deleteWeight(day: String) async -> Bool {
+        guard let store = await storeHandle() else { return false }
+        _ = try? await store.deleteMetricSeriesPoint(deviceId: WeightLogStore.sourceId,
+                                                    day: day, key: WeightLogStore.key)
+        noteFoodChanged()
+        return true
     }
 
     /// Today's weigh-in, if one was recorded.

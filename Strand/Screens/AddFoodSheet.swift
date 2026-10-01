@@ -16,8 +16,8 @@ import StrandAnalytics
 // fabricated macro is exactly the failure this codebase refuses elsewhere.
 struct AddFoodSheet: View {
     let library: [FoodItem]
-    /// Called with the item to save and the portion to log.
-    let onLog: (FoodItem, Double) -> Void
+    /// Called with the food, the portion, and whether to keep it in the library.
+    let onLog: (FoodItem, Double, Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -33,6 +33,11 @@ struct AddFoodSheet: View {
     @State private var carbs = ""
     @State private var fat = ""
     @State private var fiber = ""
+
+    /// Opt-IN, default off. Most meals are eaten once; saving each would fill the library with one-time
+    /// entries and make the picker useless for the few foods actually repeated. The log is identical
+    /// either way — this only decides whether it can be re-logged in one tap later.
+    @State private var saveForReuse = false
 
     private var isCreating: Bool { selected == nil }
 
@@ -58,8 +63,8 @@ struct AddFoodSheet: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
-                if !library.isEmpty { librarySection }
                 if isCreating { newItemSection } else { selectedSection }
+                if !library.isEmpty { librarySection }
                 portionSection
                 actions
             }
@@ -72,7 +77,7 @@ struct AddFoodSheet: View {
 
     private var librarySection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Your foods", overline: "Saved")
+            SectionHeader("Or pick a saved food", overline: "Library")
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     TextField("Search saved foods", text: $query)
@@ -142,13 +147,17 @@ struct AddFoodSheet: View {
 
     private var newItemSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("New food", overline: "Per serving")
+            SectionHeader("What did you eat?", overline: "Per serving")
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     TextField("Name", text: $name)
                         .textFieldStyle(.roundedBorder)
-                    TextField("One serving is… (e.g. 1 scoop, 100 g)", text: $servingLabel)
-                        .textFieldStyle(.roundedBorder)
+                    // Only meaningful for something being saved: a one-off is logged at one portion of
+                    // itself, so asking "what is one serving?" is a question with no consequence.
+                    if saveForReuse {
+                        TextField("One serving is… (e.g. 1 scoop, 100 g)", text: $servingLabel)
+                            .textFieldStyle(.roundedBorder)
+                    }
 
                     Divider().overlay(StrandPalette.hairline)
 
@@ -161,6 +170,21 @@ struct AddFoodSheet: View {
                     // The second opinion, never a correction. `NutritionMath` computes what the typed
                     // macros imply by Atwater; if that disagrees with the typed calories by more than the
                     // tolerance, say so and leave both numbers exactly as entered.
+                    Divider().overlay(StrandPalette.hairline)
+                    Toggle(isOn: $saveForReuse) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Save for next time")
+                                .font(StrandFont.subhead)
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            Text("Only worth it for something you eat often — it'll show up in your list to log in one tap.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(StrandPalette.accent)
+
                     if NutritionMath.kcalLooksInconsistent(draftMacros) {
                         let derived = Int(NutritionMath.kcalFromMacros(draftMacros).rounded())
                         Text("Those macros come to about \(derived) kcal. Both numbers are kept as you typed them — this is just a heads-up in case one is a slip.")
@@ -230,7 +254,7 @@ struct AddFoodSheet: View {
             Spacer()
             Button("Log") {
                 guard let p = portion else { return }
-                onLog(resolvedItem(), p)
+                onLog(resolvedItem(), p, selected != nil || saveForReuse)
                 dismiss()
             }
             .buttonStyle(NoopButtonStyle(.primary))
