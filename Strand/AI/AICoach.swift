@@ -941,6 +941,46 @@ final class AICoachEngine: ObservableObject {
     /// open and must never append to (or duplicate into) `messages`. Non-streaming (a background/BGTask
     /// context has no UI to stream into). Returns nil when not configured/consented, on any network
     /// failure, or when the reply is empty — the caller treats nil as "brief unavailable"; never throws.
+    /// The macro-estimation persona. Deliberately NOT the coach prompt — see `callProvider`.
+    ///
+    /// Asks for bare JSON and for honest uncertainty. The "say what you assumed" line matters: a model
+    /// guessing at portion size will otherwise present the guess as fact, and the user needs to see the
+    /// assumption to correct it.
+    static let macroEstimatePrompt = """
+    You estimate the nutrition of a described food. Reply with ONE JSON object and nothing else — no     prose, no markdown fence, no explanation.
+
+    Keys: kcal, protein, carbs, fat, fiber. All numbers, grams for the macros.
+
+    Rules:
+    - Make the macros consistent with the calories (protein 4 kcal/g, carbs 4, fat 9). A reply whose     numbers do not add up will be discarded.
+    - Estimate for the portion described. If no portion is given, assume one ordinary serving.
+    - Do not refuse, and do not ask clarifying questions. An approximate answer is the expected answer.
+    """
+
+    /// Ask the user's provider to estimate macros for a plain-text food description.
+    ///
+    /// Modelled on `generateBrief()`: returns nil rather than throwing, so a provider failure surfaces as
+    /// "couldn't estimate" in the sheet instead of an error propagating into a view.
+    ///
+    /// The gate stack is checked HERE rather than at the button, for the reason #2254 established: the
+    /// screen can already be open when the master switch goes off, and that path passes no tab. Refusing
+    /// at the egress makes "the AI is off" true however the sheet was reached.
+    func estimateMacros(describing text: String) async -> Result<MacroTotals, MacroEstimateParse.Failure>? {
+        guard CoachBriefScheduler.coachMasterEnabled else { return nil }
+        guard isConfigured, dataConsent, let key = resolvedKey else { return nil }
+        let description = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !description.isEmpty else { return nil }
+
+        // Snapshot the provider before the await: an estimate taking a few seconds while the user changes
+        // provider in another tab would otherwise apply a reply from the old one (#873's race).
+        let capturedProvider = provider
+        let wire: [(role: ChatMessage.Role, content: String)] = [(.user, description)]
+        guard let reply = try? await callProvider(key: key, messages: wire,
+                                                  overridingSystemPrompt: Self.macroEstimatePrompt),
+              capturedProvider == provider else { return nil }
+        return MacroEstimateParse.macros(fromReply: reply)
+    }
+
     func generateBrief() async -> String? {
         // Same master-switch gate as `send`, because this entry has NO UI at all: it is what the scheduler
         // calls, and a caller that skipped the scheduler's own gate would otherwise reach a provider with
@@ -1047,12 +1087,23 @@ final class AICoachEngine: ObservableObject {
     }
 
     /// Dispatch to the user's chosen provider client.
+    /// `overridingSystemPrompt` lets a non-chat caller supply its own persona.
+    ///
+    /// Defaulted so every existing caller is untouched. It exists because the coach prompt is wrong for
+    /// anything that is not a conversation — it ends with "No code blocks", which actively fights a
+    /// request for JSON, and it instructs the model to be a motivating coach citing the wearer's
+    /// numbers, which has nothing to do with reading a food label.
+    ///
+    /// The previous workaround (`summarizeDroppedMiddleIfNeeded`) stuffs its instruction into the USER
+    /// turn and leaves the coach persona in the system slot. That is tolerable for a summary and not for
+    /// structured output, where the system prompt's formatting rules are the thing being overridden.
     private func callProvider(key: String,
-                              messages: [(role: ChatMessage.Role, content: String)]) async throws -> String {
+                              messages: [(role: ChatMessage.Role, content: String)],
+                              overridingSystemPrompt: String? = nil) async throws -> String {
         try await provider.client.send(
             key: key,
             model: model,
-            systemPrompt: systemPrompt,
+            systemPrompt: overridingSystemPrompt ?? systemPrompt,
             messages: messages,
             session: session
         )

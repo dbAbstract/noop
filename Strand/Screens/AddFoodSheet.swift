@@ -20,6 +20,13 @@ struct AddFoodSheet: View {
     let onLog: (FoodItem, Double, Bool) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var coach: AICoachEngine
+
+    @State private var estimating = false
+    @State private var estimateNote: String?
+    /// Set once an estimate fills the fields, cleared the moment the user edits any of them — at which
+    /// point the numbers are theirs, not the model's, and the provenance would be a lie.
+    @State private var macrosAreEstimated = false
 
     @State private var query = ""
     @State private var selected: FoodItem?
@@ -161,6 +168,7 @@ struct AddFoodSheet: View {
 
                     Divider().overlay(StrandPalette.hairline)
 
+                    estimateRow
                     macroField(String(localized: "Calories (kcal)"), $kcal)
                     macroField(String(localized: "Protein (g)"), $protein)
                     macroField(String(localized: "Carbs (g)"), $carbs)
@@ -197,6 +205,78 @@ struct AddFoodSheet: View {
         }
     }
 
+    /// The AI estimate affordance.
+    ///
+    /// Shown only when the Coach is actually usable, so a user who has never set a key is not offered a
+    /// button that cannot work. User-initiated by construction — nothing estimates on appear or on a
+    /// field change, because nothing may reach the network as a side effect of typing.
+    @ViewBuilder private var estimateRow: some View {
+        if coach.isConfigured && coach.dataConsent && CoachBriefScheduler.coachMasterEnabled {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: NoopMetrics.space3) {
+                    Button {
+                        Task { await runEstimate() }
+                    } label: {
+                        Label(estimating ? "Estimating…" : "Estimate from the name",
+                              systemImage: "sparkles")
+                    }
+                    .buttonStyle(NoopButtonStyle(.secondary))
+                    .disabled(estimating || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    if estimating { ProgressView().controlSize(.small) }
+                }
+                if let estimateNote {
+                    Text(estimateNote)
+                        .font(StrandFont.caption)
+                        .foregroundStyle(macrosAreEstimated ? StrandPalette.textTertiary
+                                                            : StrandPalette.statusWarning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Fills the macro fields from the model, leaving them EDITABLE.
+    ///
+    /// The fields are pre-filled rather than applied, because the user tapping Log is what turns an
+    /// estimate into a figure they have stated. Nothing is logged without passing under their eyes.
+    private func runEstimate() async {
+        estimating = true
+        estimateNote = nil
+        defer { estimating = false }
+
+        guard let result = await coach.estimateMacros(describing: name) else {
+            estimateNote = String(localized: "Couldn't reach your AI provider. Check it in Settings, or just type the numbers.")
+            return
+        }
+        switch result {
+        case .success(let m):
+            kcal = trimmed(m.kcal)
+            protein = trimmed(m.protein)
+            carbs = trimmed(m.carbs)
+            fat = trimmed(m.fat)
+            fiber = trimmed(m.fiber)
+            macrosAreEstimated = true
+            estimateNote = String(localized: "Estimated — check these against the label if you have one, and edit anything that looks off.")
+        case .failure(let why):
+            // Each reason gets its own line, because the user's remedy differs: retrying helps a
+            // truncated reply and will not help a model that cannot do this at all.
+            macrosAreEstimated = false
+            switch why {
+            case .inconsistent:
+                estimateNote = String(localized: "The estimate contradicted itself, so it was discarded rather than shown. Try again, or type the numbers.")
+            case .truncated:
+                estimateNote = String(localized: "The reply was cut off. Try again — if it keeps happening, the model's context may be too small.")
+            case .noJSON, .noCalories:
+                estimateNote = String(localized: "Couldn't read an estimate from that reply. Try rephrasing, or type the numbers.")
+            }
+        }
+    }
+
+    private func trimmed(_ v: Double) -> String {
+        guard v > 0 else { return "" }
+        return v == v.rounded() ? String(Int(v)) : String(format: "%.1f", v)
+    }
+
     private func macroField(_ label: String, _ binding: Binding<String>) -> some View {
         HStack {
             Text(label)
@@ -206,6 +286,10 @@ struct AddFoodSheet: View {
             TextField("0", text: binding)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 110)
+                // Any hand edit makes these the user's numbers, so the estimate marker has to go — a
+                // corrected figure labelled "AI estimate" would be the wrong provenance, recorded
+                // permanently.
+                .onChangeCompat(of: binding.wrappedValue) { _ in macrosAreEstimated = false }
             #if os(iOS)
                 .keyboardType(.decimalPad)
             #endif
@@ -267,7 +351,8 @@ struct AddFoodSheet: View {
         if let selected { return selected }
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedServing = servingLabel.trimmingCharacters(in: .whitespaces)
-        return FoodItem(name: trimmedName,
+        return FoodItem(macroSource: macrosAreEstimated ? FoodMacroSource.aiEstimate : nil,
+                        name: trimmedName,
                         // A blank serving label would make the logged row read "1 × serving" with no idea
                         // what a serving is; a plain default at least states the unit is unspecified.
                         servingLabel: trimmedServing.isEmpty ? String(localized: "1 serving") : trimmedServing,

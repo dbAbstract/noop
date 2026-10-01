@@ -18,6 +18,8 @@ import StrandAnalytics
 struct FoodLogView: View {
     @EnvironmentObject var repo: Repository
     @EnvironmentObject var profile: ProfileStore
+    /// Injected app-wide on both roots; the sheet needs it for the estimate button.
+    @EnvironmentObject var coach: AICoachEngine
 
     @State private var entries: [FoodEntry] = []
     @State private var totals: MacroTotals = .zero
@@ -75,6 +77,7 @@ struct FoodLogView: View {
                     reloadTick += 1
                 }
             }
+            .environmentObject(coach)
         }
         .sheet(item: $editingItem) { item in
             EditFoodItemSheet(item: item, onSaved: { reloadTick += 1 }, onDeleted: { reloadTick += 1 })
@@ -260,9 +263,20 @@ struct FoodLogView: View {
         let macros = entry.effectiveMacros
         return HStack(alignment: .top, spacing: NoopMetrics.space3) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.nameSnapshot)
-                    .font(StrandFont.body)
-                    .foregroundStyle(StrandPalette.textPrimary)
+                HStack(spacing: 5) {
+                    Text(entry.nameSnapshot)
+                        .font(StrandFont.body)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                    // Marks a figure a model guessed at. Small and quiet — it is a caveat on the number,
+                    // not a warning about the food — but permanent, because weeks later "was that one
+                    // estimated?" is unanswerable without it.
+                    if entry.macroSource == FoodMacroSource.aiEstimate {
+                        Image(systemName: "sparkles")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .accessibilityLabel("Estimated macros")
+                    }
+                }
                 // The portion is spelled out rather than implied, because the stored macros are the
                 // item's PER-SERVING figures and the row shows the scaled ones — without this the two
                 // numbers look inconsistent to anyone checking the arithmetic.
