@@ -37,8 +37,10 @@ enum DietStore {
 /// One day's expenditure with the step accounting that produced it, so a screen can show its working.
 struct DietDayEnergy: Equatable {
     let expenditure: DayExpenditure
-    /// Steps the strap recorded for the whole day.
-    let dailySteps: Int
+    /// Steps the strap recorded for the whole day, or nil when it has not answered — a 4.0 has no
+    /// counter, and a 5.0 has nothing until the day's window offloads. Distinct from 0, which means the
+    /// strap DID answer and the answer was "you did not move".
+    let dailySteps: Int?
     /// Steps attributed to workouts and therefore excluded from NEAT.
     let workoutSteps: Int
     /// Steps that actually earned NEAT calories, after workouts and the sedentary baseline.
@@ -154,9 +156,11 @@ extension Repository {
         let goal = await dietGoal(on: dayKey)
         let activity = ActivityLevel(rawValue: goal?.activityLevel ?? "") ?? .sedentary
 
-        let dailySteps = days.first(where: { $0.day == dayKey })?.steps ?? 0
+        let dailySteps = days.first(where: { $0.day == dayKey })?.steps
         let workoutSteps = await workoutStepsForDay(dayKey, stepTicksPerStep: profile.stepTicksPerStep)
-        let neatSteps = StepNeat.stepsAboveBaseline(dailySteps: dailySteps, workoutSteps: workoutSteps)
+        // No step answer means no NEAT credit, not a guess. The budget is then baseline + workouts, which
+        // under-credits rather than inventing movement — the same direction every other gap here errs in.
+        let neatSteps = StepNeat.stepsAboveBaseline(dailySteps: dailySteps ?? 0, workoutSteps: workoutSteps)
         let workoutKcal = await workoutKcalForDay(dayKey)
 
         // Weight comes from the profile rather than the goal's stored start weight: expenditure scales

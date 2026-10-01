@@ -108,11 +108,19 @@ struct DietDetailView: View {
 
     /// Spells out the step accounting, because "steps: 155 kcal" on a day with a 40-minute run looks
     /// wrong until you know the run's steps were removed and counted at their real intensity instead.
+    ///
+    /// "No step data yet" is deliberately distinct from "0 steps". The first means the strap has not
+    /// answered — a 4.0 has no counter, a 5.0 has nothing until the window offloads — and the budget is
+    /// short its NEAT until it does. The second means it answered and you did not move. Rendering both as
+    /// "0 of 0 steps" would hide a missing input behind a plausible reading.
     private func stepNote(_ e: DietDayEnergy) -> String {
-        if e.workoutSteps > 0 {
-            return String(localized: "\(e.neatSteps) of \(e.dailySteps) steps — \(e.workoutSteps) counted with training instead")
+        guard let daily = e.dailySteps else {
+            return String(localized: "No step data yet — this budget is resting energy and training only")
         }
-        return String(localized: "\(e.neatSteps) of \(e.dailySteps) steps, above a \(StepNeat.sedentaryBaselineSteps)-step baseline")
+        if e.workoutSteps > 0 {
+            return String(localized: "\(e.neatSteps) of \(daily) steps — \(e.workoutSteps) counted with training instead")
+        }
+        return String(localized: "\(e.neatSteps) of \(daily) steps, above a \(StepNeat.sedentaryBaselineSteps)-step baseline")
     }
 
     // MARK: - Goal
