@@ -31,6 +31,9 @@ struct DietDetailView: View {
     @State private var history: [DietDay] = []
     @State private var showGoalSheet = false
     @State private var reloadTick = 0
+    @State private var trend: DietTrendReading?
+    @State private var proposed: Double?
+    @State private var applying = false
 
     /// One day's intake against the target that governed it, plus both burn figures.
     struct DietDay: Identifiable, Equatable {
@@ -54,6 +57,8 @@ struct DietDetailView: View {
                        onRefresh: { await reload() }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 todaySection
+                proposalSection
+                trendSection
                 goalSection
                 adherenceSection
                 burnComparisonSection
@@ -206,6 +211,22 @@ struct DietDetailView: View {
                             let gap = e.expenditure.totalKcal - noop
                             line("Difference", "\(gap >= 0 ? "+" : "")\(int(gap)) kcal", emphasis: true)
                         }
+                        // The empirical one, once there is enough logging to support it. It supersedes
+                        // nothing — AdaptiveExpenditureEngine's own header forbids it feeding anything,
+                        // and it is right: a figure inferred from a food diary must not quietly replace
+                        // one measured from heart rate. It is here to be COMPARED, which is the only
+                        // honest use for a third answer to the same question.
+                        if let a = trend?.adaptive {
+                            Divider().overlay(StrandPalette.hairline)
+                            line("From your own results",
+                                 "\(int(a.estimatedDailyKcal)) kcal",
+                                 note: "±\(int((a.upperKcal - a.lowerKcal) / 2) ) · \(a.confidence.rawValue) confidence · \(a.intakeDays) days logged",
+                                 emphasis: true)
+                            Text("Worked back from what you ate and how your weight moved, rather than from a formula. This is the one that knows about you specifically — it just needs weeks of logging before it can say anything.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         // The gap is the point of the card, so it is explained rather than left to be
                         // read as one of them being broken.
                         Text("NOOP counts active energy only above 50% heart-rate reserve, so ordinary walking and standing don't reach it. This model adds those back from your step count. Neither figure overwrites the other.")
@@ -269,6 +290,9 @@ struct DietDetailView: View {
 
     private func reload() async {
         goal = await repo.currentDietGoal()
+        let t = await repo.dietTrend()
+        trend = t
+        proposed = repo.proposedDeficit(from: t)
         consumedToday = await repo.foodTotals().kcal
         energy = await repo.refreshDietDay(profile: profile)
 
@@ -294,6 +318,149 @@ struct DietDetailView: View {
             DietDay(day: row.day, intake: row.kcal, target: targets[row.day],
                     modelledBurn: modelled[row.day], noopBurn: noopByDay[row.day])
         }
+    }
+
+    // MARK: - Is it working?
+
+    /// Shows a verdict ONLY when the measurement supports one. The rest of the time it says when it will,
+    /// which is the honest answer and the useful one — a number delivered before the signal clears the
+    /// noise is reading water, and the user has no way to tell that from the real thing.
+    @ViewBuilder private var trendSection: some View {
+        if let t = trend, t.targetDeficitKcal != nil {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                SectionHeader("Is it working?", overline: "Trend")
+                NoopCard(tint: t.hasVerdict ? StrandPalette.accent : nil) {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        if t.hasVerdict, let actual = t.actualKgPerWeek, let fit = t.fit {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(kgPerWeek(actual))
+                                    .font(StrandFont.title2)
+                                    .foregroundStyle(StrandPalette.textPrimary)
+                                Text("per week")
+                                    .font(StrandFont.footnote)
+                                    .foregroundStyle(StrandPalette.textTertiary)
+                            }
+                            // The interval, always. A rate without one invites being read as exact, and
+                            // this one is fitted through a handful of noisy points.
+                            line("Confidence", "± \(String(format: "%.2f", fit.weeklyMarginKg)) kg/week")
+                            if let expected = t.expectedKgPerWeek {
+                                line("Your target", kgPerWeek(expected))
+                                Divider().overlay(StrandPalette.hairline)
+                                Text(verdictText(expected: expected, actual: actual))
+                                    .font(StrandFont.footnote)
+                                    .foregroundStyle(StrandPalette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else {
+                            notYet(t)
+                        }
+                    }
+                }
+                .opacity(cardOpacity)
+            }
+        }
+    }
+
+    /// The "not yet" state, with the arithmetic that justifies it. Showing the predicted rate beside the
+    /// measured scatter is what makes the wait legible rather than arbitrary — the user can see that the
+    /// signal is genuinely smaller than the noise, not that the app is being coy.
+    @ViewBuilder private func notYet(_ t: DietTrendReading) -> some View {
+        Text("Not enough to tell yet.")
+            .font(StrandFont.headline)
+            .foregroundStyle(StrandPalette.textPrimary)
+        if let expected = t.expectedKgPerWeek {
+            line("Your deficit predicts", kgPerWeek(expected))
+        }
+        if let fit = t.fit {
+            line("Your weigh-ins scatter", "± \(String(format: "%.2f", fit.scatterKg)) kg")
+            line("Weigh-in days", "\(fit.dayCount)")
+        } else {
+            line("Weigh-in days", "fewer than 3")
+        }
+        line("Days with food logged", "\(t.intakeDays)")
+        Divider().overlay(StrandPalette.hairline)
+        if let days = t.daysToDetect, days > 0 {
+            Text("About \(days) more days of logging before a change can be told apart from normal fluctuation.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Log your weight most days and your food every day. Weight moves slower than a small deficit suggests, so this takes a few weeks before it can say anything honest.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func verdictText(expected: Double, actual: Double) -> String {
+        let gap = (-expected) - (-actual)        // positive = losing slower than planned
+        if abs(gap) < 0.05 {
+            return String(localized: "That's on plan. Your real expenditure is close to the estimate.")
+        }
+        if gap > 0 {
+            return String(localized: "You're losing more slowly than the plan predicts, which means you're spending less than the estimate assumed.")
+        }
+        return String(localized: "You're losing faster than the plan predicts, which means you're spending more than the estimate assumed.")
+    }
+
+    // MARK: - Recalibration
+
+    /// Appears only when the trend is measurable AND the implied change is big enough to matter — never
+    /// on a schedule. A proposal made from noise is worse than no proposal, because once it is on screen
+    /// the user cannot tell which kind it is.
+    @ViewBuilder private var proposalSection: some View {
+        if let p = proposed, let t = trend, let current = t.targetDeficitKcal,
+           let expected = t.expectedKgPerWeek, let actual = t.actualKgPerWeek {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                SectionHeader("Target review", overline: "Ready")
+                NoopCard(tint: StrandPalette.metricAmber) {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        line("Expected", kgPerWeek(expected))
+                        line("Actual", kgPerWeek(actual))
+                        Divider().overlay(StrandPalette.hairline)
+                        line("Daily deficit", "\(int(current)) → \(int(p)) kcal", emphasis: true)
+                        Text(proposalReason(current: current, proposed: p))
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button("Keep current") { proposed = nil }
+                                .buttonStyle(NoopButtonStyle(.secondary))
+                            Spacer()
+                            Button(applying ? "Applying…" : "Accept") { Task { await applyProposal(p) } }
+                                .buttonStyle(NoopButtonStyle(.primary))
+                                .disabled(applying)
+                        }
+                    }
+                }
+                .opacity(cardOpacity)
+            }
+        }
+    }
+
+    private func proposalReason(current: Double, proposed: Double) -> String {
+        proposed > current
+            ? String(localized: "Eating a little less keeps you on the pace you set. The change is deliberately half of what the gap suggests, so a noisy fortnight can't swing your target.")
+            : String(localized: "You're ahead of pace, so the deficit can ease off. The change is deliberately half of what the gap suggests, so a noisy fortnight can't swing your target.")
+    }
+
+    /// Supersedes the goal rather than editing it, so the day-by-day history still resolves against
+    /// whichever target was actually in force at the time.
+    private func applyProposal(_ newDeficit: Double) async {
+        guard let g = goal else { return }
+        applying = true
+        await repo.setDietGoal(startWeightKg: g.startWeightKg,
+                               targetWeightKg: g.targetWeightKg,
+                               months: g.months,
+                               activity: ActivityLevel(rawValue: g.activityLevel) ?? .sedentary,
+                               dailyDeficitKcal: newDeficit)
+        await repo.refreshDietDay(profile: profile)
+        applying = false
+        reloadTick += 1
+    }
+
+    private func kgPerWeek(_ v: Double) -> String {
+        String(format: "%+.2f kg", locale: AppLanguage.activeLocale, v)
     }
 
     // MARK: - Formatting
