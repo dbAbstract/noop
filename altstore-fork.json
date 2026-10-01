@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1020",
-          "buildVersion": "1020",
+          "version": "11.8.0.1021",
+          "buildVersion": "1021",
           "date": "2026-10-01",
           "localizedDescription": "Merge the CI source-manifest bump",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1020.ipa",
-          "size": 16398558,
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1021.ipa",
+          "size": 16447078,
           "minOSVersion": "17.0"
         }
       ]
