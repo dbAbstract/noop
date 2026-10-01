@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1018",
-          "buildVersion": "1018",
+          "version": "11.8.0.1019",
+          "buildVersion": "1019",
           "date": "2026-10-01",
-          "localizedDescription": "chore(i18n): extract stage 2 strings",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1018.ipa",
-          "size": 16245232,
+          "localizedDescription": "Merge the CI source-manifest bump (build 1018) into stage 3",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1019.ipa",
+          "size": 16377207,
           "minOSVersion": "17.0"
         }
       ]
