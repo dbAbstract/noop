@@ -59,10 +59,26 @@ final class CalorieTargetTests: XCTestCase {
         XCTAssertEqual(ActivityLevel.lightlyActive.multiplier, 1.375)
     }
 
-    /// Only two levels, because exercise is added separately from measured workouts. Tiers like
-    /// "very active" would double-count the thing they describe.
-    func testOnlyTwoActivityLevelsExist() {
-        XCTAssertEqual(ActivityLevel.allCases.count, 2)
+    /// The diet path pins the no-measured-movement baseline, and this names why.
+    func testTheDietBaselineIsSedentary() {
+        XCTAssertEqual(ActivityLevel.measuredMovementBaseline, .sedentary)
+    }
+
+    /// THE REASON THERE IS NO ACTIVITY PICKER, pinned so it survives someone "restoring" the familiar
+    /// tiers. A conventional activity factor stands in for movement nobody measured; here movement IS
+    /// measured, so declaring yourself active charges for it twice.
+    ///
+    /// The gap between the two multipliers is equivalent to claiming ~10,000 extra steps a day — steps
+    /// the pedometer would then count again. If this ever reads as a small number, the step coefficient
+    /// has moved and the double-count argument needs revisiting rather than the picker returning.
+    func testChoosingLightlyActiveWouldDoubleCountAboutTenThousandSteps() {
+        let bmr = CalorieTarget.mifflinBMR(sex: sex, weightKg: weight, heightCm: height, age: age)
+        let gap = CalorieTarget.baselineKcal(bmrKcal: bmr, activity: .lightlyActive)
+               - CalorieTarget.baselineKcal(bmrKcal: bmr, activity: .sedentary)
+        XCTAssertEqual(gap, 294, accuracy: 1.0)
+
+        let impliedSteps = gap / StepNeat.kcal(stepsAboveBaseline: 1, weightKg: weight)
+        XCTAssertEqual(impliedSteps, 10_000, accuracy: 500)
     }
 
     func testBaselineIsBMRTimesMultiplier() {

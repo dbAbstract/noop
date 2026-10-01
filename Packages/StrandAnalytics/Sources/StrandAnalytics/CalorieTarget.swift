@@ -22,27 +22,47 @@ import Foundation
 // intake and the weight trend within a few weeks, and that empirical figure supersedes this estimate.
 // What follows is a starting point, chosen to be defensible rather than exact.
 
-/// How much movement a person's ordinary day contains, before any deliberate exercise.
+/// The baseline multiplier applied to resting energy.
 ///
-/// Only two levels, and that is not an omission. Exercise is NOT folded into the multiplier here — it is
-/// added separately from measured workouts — so the familiar "moderately/very/extra active" tiers would be
-/// double-counting the thing they exist to describe. What is left to choose between is genuinely binary:
-/// does your day involve being on your feet, or not.
+/// THE DIET PATH ALWAYS USES `.sedentary`, AND THERE IS NO PICKER. That is deliberate, and it is the one
+/// thing about this model most likely to be "fixed" back into a bug by someone adding the familiar
+/// activity tiers.
+///
+/// A conventional activity factor is a STAND-IN for movement nobody measured. Here movement IS measured —
+/// steps above a baseline, plus heart-rate-derived workout energy — so letting the user also declare
+/// themselves active charges for the same movement twice. Concretely, at a 1,681 kcal BMR the step from
+/// ×1.2 to ×1.375 adds 294 kcal, which at 0.0004 kcal/step/kg is a claim of roughly **ten thousand extra
+/// steps a day** — steps the pedometer then counts again.
+///
+/// So `.sedentary` is not a description of the user's job. It is "a day with no measured movement in it",
+/// which is exactly the floor that `StepNeat`'s baseline subtraction and the measured workout term are
+/// designed to build on top of.
+///
+/// `.lightlyActive` is kept for one reason: the goal row records which multiplier produced a past
+/// target, and deleting the case would make old rows undecodable. Nothing in the diet path selects it.
+///
+/// The genuine gap this leaves — someone who STANDS all day without walking, where steps under-report
+/// real expenditure — is small (a few tens of kcal) and is exactly what `AdaptiveExpenditureEngine`
+/// corrects empirically within a few weeks. Far better than a picker that silently inflates the budget
+/// for everyone who touches it.
 public enum ActivityLevel: String, Equatable, Sendable, CaseIterable {
-    /// Desk job, driving or transit, minimal walking. No exercise assumed.
+    /// A day with no measured movement — the floor that measured steps and workouts are added to.
     case sedentary
-    /// On your feet as part of the routine — retail, teaching, nursing, an active commute. Incidental
-    /// movement only, still not exercise.
+    /// Retained so historical goal rows decode. NOT offered, and not selected by the diet path: it
+    /// double-counts movement the step counter already sees.
     case lightlyActive
 
-    /// Multiplier applied to BMR. The standard Harris–Benedict activity factors, which are also what the
-    /// user's own diet backend has used for months.
+    /// Multiplier applied to BMR. The standard activity factors.
     public var multiplier: Double {
         switch self {
         case .sedentary: return 1.2
         case .lightlyActive: return 1.375
         }
     }
+
+    /// The only level the diet path may use. Named rather than spelled `.sedentary` at each call site, so
+    /// the reason travels with the choice.
+    public static let measuredMovementBaseline = ActivityLevel.sedentary
 }
 
 /// One day's expenditure, broken into the parts it was built from.

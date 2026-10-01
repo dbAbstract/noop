@@ -23,15 +23,16 @@ struct DietGoalSheet: View {
 
     @State private var targetWeight: Double
     @State private var months: Double
-    @State private var activity: ActivityLevel
     @State private var saving = false
+
+    /// Fixed, never picked — see `baselineSection`. Named so the reason travels with the value.
+    private let activity = ActivityLevel.measuredMovementBaseline
 
     init(existing: DietGoalRow?, onSaved: @escaping () -> Void) {
         self.existing = existing
         self.onSaved = onSaved
         _targetWeight = State(initialValue: existing?.targetWeightKg ?? 0)   // resolved on appear
         _months = State(initialValue: Double(existing?.months ?? 6))
-        _activity = State(initialValue: ActivityLevel(rawValue: existing?.activityLevel ?? "") ?? .sedentary)
     }
 
     private var startWeight: Double { profile.weightKg }
@@ -62,7 +63,7 @@ struct DietGoalSheet: View {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 destinationSection
                 timelineSection
-                activitySection
+                baselineSection
                 outcomeSection
                 actions
             }
@@ -169,29 +170,42 @@ struct DietGoalSheet: View {
 
     // MARK: - Activity
 
-    private var activitySection: some View {
+    /// NOT an activity picker. The conventional "sedentary / lightly active / very active" choice is a
+    /// stand-in for movement nobody measured — and here movement IS measured, from the step counter and
+    /// from workout heart rate. Offering the choice would charge for the same movement twice: stepping
+    /// from x1.2 to x1.375 adds ~294 kcal, which is a claim of roughly ten thousand extra steps a day,
+    /// steps the pedometer then counts again.
+    ///
+    /// So the baseline is fixed and the screen explains what it is instead of asking.
+    private var baselineSection: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Your usual day", overline: "Baseline")
+            SectionHeader("How this is worked out", overline: "Baseline")
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
-                    Picker("Activity", selection: $activity) {
-                        Text("Sedentary").tag(ActivityLevel.sedentary)
-                        Text("Lightly active").tag(ActivityLevel.lightlyActive)
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityLabel("Everyday activity level")
-
-                    // Says explicitly that exercise is NOT in this choice, because every other app's
-                    // activity picker folds it in — and here it would double-count against the measured
-                    // workout calories that are added separately.
-                    Text(activity == .sedentary
-                         ? "Desk job, driving or transit, minimal walking. Workouts and steps are counted separately and added on top."
-                         : "On your feet through the day — retail, teaching, nursing, an active commute. Workouts and steps are still counted separately.")
+                    bullet("Your resting energy, from your height, weight, age and sex.")
+                    bullet("Plus what your steps show you actually moved — your strap counts them.")
+                    bullet("Plus what you burn training, measured from your heart rate.")
+                    Divider().overlay(StrandPalette.hairline)
+                    Text("There's no \"how active are you?\" question because NOOP can see the answer. Your budget moves with the day you actually had, not the one you described.")
                         .font(StrandFont.caption)
                         .foregroundStyle(StrandPalette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+        }
+    }
+
+    private func bullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 5))
+                .foregroundStyle(StrandPalette.accent)
+                .padding(.top, 6)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
