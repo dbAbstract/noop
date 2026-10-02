@@ -52,7 +52,8 @@
     "v48-food-log",
     "v49-diet-goal",
     "v50-diet-v3",
-    "v51-inline-recipe-ingredients"
+    "v51-inline-recipe-ingredients",
+    "v52-measured-baseline"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android — the per-row upload flag belongs to an upload path that does not exist there — so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2520,7 +2521,7 @@
     },
     "dietGoal": {
       "platform": "ios_only",
-      "reason": "v49 diet goal: a target weight and a timeline, from which the daily deficit is derived. Rows rather than one row because a goal changes and a past day must still resolve against the target that governed it; superseding sets endedOn, never deletes. iOS-only pending the Kotlin twin (matching column ORDER) and its Room migration.",
+      "reason": "v49 diet goal: a target weight and a timeline, from which the daily deficit is derived. Rows rather than one row because a goal changes and a past day must still resolve against the target that governed it; superseding sets endedOn, never deletes. iOS-only pending the Kotlin twin (matching column ORDER) and its Room migration. v52 adds measuredBaselineKcal: the user's own measured resting+NEAT baseline, inferred from intake and the weight trend, with the calibration window's mean ACTIVITY already subtracted so the per-day step/workout terms can ride on top without double-counting. NULL = use the Mifflin model. Note targetOverrideKcal remains unread by anything.",
       "columns": [
         {
           "name": "id",
@@ -2594,6 +2595,12 @@
         },
         {
           "name": "proteinGPerKg",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "measuredBaselineKcal",
           "affinity": "REAL",
           "notNull": false,
           "default": null

@@ -55,6 +55,14 @@ struct AddFoodSheet: View {
     /// either way — this only decides whether it can be re-logged in one tap later.
     @State private var saveForReuse = false
 
+    /// The user admits this is a guess — a restaurant meal, a day out, something with no label.
+    ///
+    /// Exists to compete with the real alternative, which is logging NOTHING. An omitted day is worse
+    /// evidence than a bad guess twice over: it holes the coverage the adaptive engine gates on, and it
+    /// biases that engine DOWNWARD, because the days people skip are the big ones. Marking the guess is
+    /// what lets the engine widen its interval honestly rather than treating the figure as a label.
+    @State private var isRoughGuess = false
+
     private var isCreating: Bool { selected == nil }
 
     /// The selected item as a recipe, if it is one. Having parts IS being a recipe — there is no flag.
@@ -316,6 +324,23 @@ struct AddFoodSheet: View {
                     .toggleStyle(.switch)
                     .tint(StrandPalette.accent)
 
+                    Divider().overlay(StrandPalette.hairline)
+                    Toggle(isOn: $isRoughGuess) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("This is a rough guess")
+                                .font(StrandFont.subhead)
+                                .foregroundStyle(StrandPalette.textPrimary)
+                            // States WHY it is worth ticking rather than skipping the day, because that is
+                            // the actual decision being made here and the honest answer is unobvious.
+                            Text("For a restaurant meal or a day out. A wide guess is much better than logging nothing — a skipped day both leaves a gap and quietly drags your measured burn down. Flagging it lets NOOP widen its own margin instead of trusting the number.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(StrandPalette.accent)
+
                     if NutritionMath.kcalLooksInconsistent(draftMacros) {
                         let derived = Int(NutritionMath.kcalFromMacros(draftMacros).rounded())
                         Text("Those macros come to about \(derived) kcal. Both numbers are kept as you typed them — this is just a heads-up in case one is a slip.")
@@ -491,7 +516,11 @@ struct AddFoodSheet: View {
         }
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedServing = servingLabel.trimmingCharacters(in: .whitespaces)
-        return FoodItem(macroSource: macrosAreEstimated ? FoodMacroSource.aiEstimate : nil,
+        // A rough guess takes precedence over the AI marker. Both say "not a label figure", but the
+        // user's own admission is the one that should survive, and it is what the engine reads.
+        let source = isRoughGuess ? FoodMacroSource.roughGuess
+                   : (macrosAreEstimated ? FoodMacroSource.aiEstimate : nil)
+        return FoodItem(macroSource: source,
                         name: trimmedName,
                         // A blank serving label would make the logged row read "1 × serving" with no idea
                         // what a serving is; a plain default at least states the unit is unspecified.

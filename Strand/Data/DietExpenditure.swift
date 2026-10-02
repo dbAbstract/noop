@@ -29,8 +29,19 @@ enum DietStore {
         /// What this model reckons they actually spent. Deliberately NOT `energy_kcal`, which is NOOP's
         /// own heart-rate figure — two different answers to one question must not share a key.
         static let expenditure = "diet_expenditure"
+        /// The ACTIVITY half of that expenditure: step NEAT plus workout energy, excluding the baseline.
+        ///
+        /// Banked so a measured baseline can be derived without re-deriving every past day's steps. The
+        /// adaptive engine reports an average TDEE over three to six weeks, which already contains that
+        /// window's average activity — so turning it into a BASELINE means subtracting the window's mean
+        /// activity, and this is the series that makes that a cheap read rather than a replay.
+        ///
+        /// Banked rather than computed on demand for a second reason: a past day's step count can no
+        /// longer be reconstructed once the strap's window has rolled off, so the figure has to be kept
+        /// when it is known.
+        static let activity = "diet_activity_kcal"
 
-        static let all = [target, expenditure]
+        static let all = [target, expenditure, activity]
     }
 }
 
@@ -47,6 +58,10 @@ struct DietDayEnergy: Equatable {
     let neatSteps: Int
     /// nil when no goal is set — there is a burn figure, but nothing to eat toward.
     let deficitKcal: Double?
+    /// True when the baseline came from the user's own measured expenditure rather than Mifflin-St Jeor.
+    /// Drives the label on the Today card's working — two readouts of one fact must not be able to
+    /// disagree about which number is in play.
+    var usesMeasuredBaseline: Bool = false
 
     /// What may still be eaten today. nil without a goal.
     func budgetKcal() -> Double? {
@@ -69,6 +84,26 @@ extension Repository {
     func currentDietGoal() async -> DietGoalRow? {
         guard let store = await storeHandle() else { return nil }
         return try? await store.currentDietGoal(deviceId: DietStore.sourceId)
+    }
+
+    /// Adopt (or clear) a measured baseline on the CURRENT goal.
+    ///
+    /// Edits the open goal in place rather than starting a new one, deliberately: this changes how the
+    /// same plan is costed, not what the plan is. Superseding the goal would restart `startedOn` and so
+    /// rewrite the history every adherence figure is measured against — a calibration must not look like
+    /// a new diet.
+    ///
+    /// Pass nil to revert to the model.
+    @discardableResult
+    func setMeasuredBaseline(_ kcal: Double?) async -> Bool {
+        guard let store = await storeHandle(),
+              var goal = try? await store.currentDietGoal(deviceId: DietStore.sourceId) else {
+            return false
+        }
+        goal.measuredBaselineKcal = kcal
+        _ = try? await store.upsertDietGoals([goal])
+        noteFoodChanged()
+        return true
     }
 
     /// Replace the current goal with a new one, effective today.
@@ -219,12 +254,25 @@ extension Repository {
                                                        age: Double(profile.age),
                                                        activity: activity,
                                                        neatSteps: neatSteps,
-                                                       workoutKcal: workoutKcal)
+                                                       workoutKcal: workoutKcal,
+                                                       // Replaces ONLY the baseline, so the step and
+                                                       // workout terms above still move the budget with
+                                                       // the day. nil on every goal until the user opts
+                                                       // in at the review card.
+                                                       baselineOverrideKcal: goal?.measuredBaselineKcal)
         return DietDayEnergy(expenditure: expenditure,
                              dailySteps: dailySteps,
                              workoutSteps: workoutSteps,
                              neatSteps: neatSteps,
-                             deficitKcal: goal?.dailyDeficitKcal)
+                             deficitKcal: goal?.dailyDeficitKcal,
+                             // Reported so a screen can label the baseline honestly. Taken from the
+                             // EXPENDITURE rather than from the goal, so it reflects what the sanity
+                             // floor actually allowed rather than merely what was stored: a sub-BMR
+                             // figure is refused inside `dayExpenditure`, and a card that read the goal
+                             // would then claim a measured baseline was in use when it was not.
+                             usesMeasuredBaseline: CalorieTarget.sanitisedBaselineOverride(
+                                 goal?.measuredBaselineKcal,
+                                 bmrKcal: expenditure.bmrKcal) != nil)
     }
 
     /// Compute the day and bank the two derived figures, so history survives and the charts have a series.
@@ -239,6 +287,9 @@ extension Repository {
             _ = try? await store.upsertMetricSeries([
                 MetricPoint(day: dayKey, key: DietStore.Keys.target, value: budget),
                 MetricPoint(day: dayKey, key: DietStore.Keys.expenditure, value: energy.expenditure.totalKcal),
+                // Written from the SAME assembly as the total above, so the two can never describe
+                // different days' activity.
+                MetricPoint(day: dayKey, key: DietStore.Keys.activity, value: energy.expenditure.activityKcal),
             ], deviceId: DietStore.sourceId)
         }
         return energy
@@ -312,5 +363,32 @@ extension Repository {
         let wake = Date(timeIntervalSince1970: TimeInterval(latest.endTs))
         let comps = Calendar.current.dateComponents([.hour, .minute], from: wake)
         return ((comps.hour ?? 0) * 60 + (comps.minute ?? 0), Repository.localDayKey(wake))
+    }
+}
+
+// MARK: - Mean banked activity over a window
+
+extension Repository {
+
+    /// Mean per-day activity energy (step NEAT + workouts) over the last `days`, from the series
+    /// `refreshDietDay` banks.
+    ///
+    /// Averaged over days that HAVE a figure, not over the window: a day the app never assembled has no
+    /// activity reading, and counting it as zero would understate the mean and so overstate the derived
+    /// baseline — which is the direction that inflates a budget.
+    ///
+    /// nil when no day in the window banked one, so the caller cannot derive a baseline from nothing.
+    func meanDietActivityKcal(days: Int, now: Date = Date()) async -> Double? {
+        let n = max(1, days)
+        let fromKey = Repository.localDayKey(now.addingTimeInterval(-Double(n - 1) * 86_400))
+        let toKey = Repository.localDayKey(now)
+        guard let store = await storeHandle(),
+              let points = try? await store.metricSeries(deviceId: DietStore.sourceId,
+                                                        key: DietStore.Keys.activity,
+                                                        from: fromKey, to: toKey),
+              !points.isEmpty else { return nil }
+        let values = points.map(\.value).filter { $0.isFinite && $0 >= 0 }
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 }

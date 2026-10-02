@@ -7,9 +7,20 @@ public struct AdaptiveExpenditureDay: Equatable, Sendable {
     public let day: String          // "yyyy-MM-dd", the app's day key
     public let caloriesIn: Double?
     public let weightKg: Double?
+    /// The day's intake was logged as an admitted GUESS — a restaurant meal, a day out — rather than
+    /// read off labels.
+    ///
+    /// Counts toward coverage, which is the entire point of having it: the alternative behaviour is
+    /// omitting the day, and an omitted day is both a coverage hole AND a silent bias, because the days
+    /// people fail to log are the big ones. A wide guess is strictly better evidence than no guess.
+    ///
+    /// It does widen the interval, upward. Defaulted so every existing caller and test is untouched.
+    public let intakeIsRough: Bool
 
-    public init(day: String, caloriesIn: Double? = nil, weightKg: Double? = nil) {
+    public init(day: String, caloriesIn: Double? = nil, weightKg: Double? = nil,
+                intakeIsRough: Bool = false) {
         self.day = day; self.caloriesIn = caloriesIn; self.weightKg = weightKg
+        self.intakeIsRough = intakeIsRough
     }
 }
 
@@ -34,14 +45,26 @@ public struct AdaptiveExpenditureEstimate: Equatable, Sendable {
     public let weightReadings: Int
     public let windowDays: Int
     public let confidence: AdaptiveExpenditureConfidence
+    /// How many of the logged days were admitted guesses.
+    public let roughIntakeDays: Int
+
+    /// True when the interval is deliberately LOPSIDED upward, because unlogged or rough days make this
+    /// estimate more likely to be too low than too high.
+    ///
+    /// Exposed rather than left for a caller to infer from the bounds: a screen that wants to say "your
+    /// real burn is probably at or above this" must not have to re-derive why, and a second derivation
+    /// is free to disagree with this one.
+    public var isLikelyUnderstated: Bool {
+        (upperKcal - estimatedDailyKcal) - (estimatedDailyKcal - lowerKcal) > 1
+    }
 
     public init(estimatedDailyKcal: Double, lowerKcal: Double, upperKcal: Double, meanIntakeKcal: Double,
                 weightSlopeKgPerDay: Double, intakeDays: Int, weightReadings: Int, windowDays: Int,
-                confidence: AdaptiveExpenditureConfidence) {
+                confidence: AdaptiveExpenditureConfidence, roughIntakeDays: Int = 0) {
         self.estimatedDailyKcal = estimatedDailyKcal; self.lowerKcal = lowerKcal; self.upperKcal = upperKcal
         self.meanIntakeKcal = meanIntakeKcal; self.weightSlopeKgPerDay = weightSlopeKgPerDay
         self.intakeDays = intakeDays; self.weightReadings = weightReadings; self.windowDays = windowDays
-        self.confidence = confidence
+        self.confidence = confidence; self.roughIntakeDays = roughIntakeDays
     }
 }
 
@@ -77,6 +100,29 @@ public enum AdaptiveExpenditureEngine {
     public static let minIntakeCoverage = 0.70
     public static let minWeightReadings = 6
 
+    /// Symmetric reporting error, as a share of mean intake. A food log can be wrong in either
+    /// direction even on a day someone tried, so this half of the margin stays even-handed.
+    public static let baseReportingError = 0.05
+
+    /// How much bigger an UNLOGGED day is assumed to be than a logged one, as a share of mean intake.
+    ///
+    /// 0.35. This is the only genuinely assumed figure in the engine and it is stated as one. It is not
+    /// arbitrary: the days that go unlogged are the ones that are hard to log — eating out, travelling,
+    /// a holiday — and those plainly run well above a normal day rather than beside it. 35% of a ~2,100
+    /// kcal mean is ~735 kcal, which is a restaurant meal and a couple of drinks.
+    ///
+    /// It drives the UPWARD half of the interval only. Set it too low and the engine presents a biased
+    /// figure as a precise one; too high and the interval is too wide to act on. If it is ever revised,
+    /// revise it for the same reason it exists — evidence about what an unlogged day actually contains.
+    public static let unloggedDayExcess = 0.35
+
+    /// What fraction of the unlogged penalty a ROUGH day carries. 0.4 — a guess is poor evidence but it
+    /// is evidence, and it is anchored to a real meal the user remembers eating.
+    ///
+    /// This number is what makes guessing worth doing rather than omitting: the same day costs 0.4 of the
+    /// uncertainty when guessed that it costs when skipped, and it keeps coverage intact on top.
+    public static let roughGuessDiscount = 0.4
+
     /// nil when the history cannot support an estimate — the normal answer for most installs, and the
     /// point of the gates. `days` need not be sorted or contiguous.
     public static func estimate(days: [AdaptiveExpenditureDay]) -> AdaptiveExpenditureEstimate? {
@@ -93,7 +139,9 @@ public enum AdaptiveExpenditureEngine {
             return back <= window
         }
 
-        let intake = recent.compactMap { $0.caloriesIn }.filter { $0 > 0 }
+        let logged = recent.filter { ($0.caloriesIn ?? 0) > 0 }
+        let intake = logged.compactMap { $0.caloriesIn }
+        let roughCount = logged.filter { $0.intakeIsRough }.count
         let weights = recent.compactMap { d -> (Int, Double)? in
             guard let w = d.weightKg, w > 0, let i = dayCount(from: first, to: d.day) else { return nil }
             return (i, w)
@@ -110,8 +158,7 @@ public enum AdaptiveExpenditureEngine {
         let estimate = meanIntake - slope * kcalPerKg
 
         // Interval. Half a kilo of water across the window is an everyday swing and translates directly
-        // into an apparent daily gap; the intake half widens as coverage falls, because the days someone
-        // fails to log are not a random sample of their eating.
+        // into an apparent daily gap.
         let waterKcalPerDay = (0.5 * kcalPerKg) / Double(window)
         // Clamped: `coverage` is "share of the window that was logged", so it cannot exceed 1. A caller
         // that merged its two sparse series badly and passed a day twice would otherwise push it above 1,
@@ -119,8 +166,27 @@ public enum AdaptiveExpenditureEngine {
         // its data, the one direction this engine must never err in. Clamping rather than de-duplicating
         // on purpose: silently picking one of two conflicting values for a day would hide the caller's bug.
         let coverage = min(1.0, Double(intake.count) / Double(window))
-        let intakeUncertainty = meanIntake * 0.10 * (1.0 - coverage) + meanIntake * 0.05
-        let margin = waterKcalPerDay + intakeUncertainty
+
+        // THE INTERVAL IS DELIBERATELY LOPSIDED, and this is the part that was wrong before.
+        //
+        // Two of the three error sources are symmetric: water weight can swing either way, and a food
+        // log can be over- as well as under-stated. The third is not. The days someone fails to log are
+        // not a random sample of their eating — they are the restaurant, the day out, the holiday — so
+        // `meanIntake` taken over LOGGED days understates true mean intake, which makes the estimate
+        // biased LOW by (1 − coverage) × (how much bigger an unlogged day is).
+        //
+        // The previous version noted that asymmetry in a comment and then added the term to BOTH bounds,
+        // which presents a bias as if it were noise and hands out a budget that is systematically tight.
+        // At 86% coverage it contributed ~29 kcal where the real bias is nearer 100.
+        let symmetricMargin = waterKcalPerDay + meanIntake * baseReportingError
+
+        // Upward only. Unlogged days first, then rough days — a day logged as an admitted guess is better
+        // evidence than no day at all, so it carries a FRACTION of the unlogged penalty rather than the
+        // whole of it, which is what makes guessing worth doing.
+        let unloggedShare = 1.0 - coverage
+        let roughShare = Double(roughCount) / Double(window)
+        let upwardMargin = meanIntake * unloggedDayExcess * unloggedShare
+                         + meanIntake * unloggedDayExcess * roughGuessDiscount * roughShare
 
         // DISTINCT days, not readings. Two weigh-ins on one morning are one day of evidence about the
         // trend, and counting both would let a chatty scale — or a caller that passed a day twice — buy
@@ -133,10 +199,11 @@ public enum AdaptiveExpenditureEngine {
 
         return AdaptiveExpenditureEstimate(
             estimatedDailyKcal: estimate,
-            lowerKcal: estimate - margin, upperKcal: estimate + margin,
+            lowerKcal: estimate - symmetricMargin,
+            upperKcal: estimate + symmetricMargin + upwardMargin,
             meanIntakeKcal: meanIntake, weightSlopeKgPerDay: slope,
             intakeDays: min(intake.count, window), weightReadings: weightDays, windowDays: window,
-            confidence: confidence)
+            confidence: confidence, roughIntakeDays: roughCount)
     }
 
     /// Ordinary least-squares slope in kg per DAY. nil when every reading shares one day, which would

@@ -42,6 +42,10 @@ struct DietDetailView: View {
     @State private var trend: DietTrendReading?
     @State private var proposed: Double?
     @State private var applying = false
+    @State private var adoptingBaseline = false
+    /// Dismissing the baseline card is per-session, not persisted. A persisted dismissal would need a
+    /// re-offer schedule of its own, and the card already only appears when the measurement earns it.
+    @State private var baselineCardDismissed = false
 
     /// One day's intake against the target that governed it, plus both burn figures.
     struct DietDay: Identifiable, Equatable {
@@ -67,6 +71,7 @@ struct DietDetailView: View {
                 todaySection
                 macrosSection
                 proposalSection
+                measuredBaselineSection
                 trendSection
                 goalSection
                 adherenceSection
@@ -122,8 +127,14 @@ struct DietDetailView: View {
 
                         // The working. Each line is a different estimator, so naming them separately is
                         // what lets a wrong total be traced to the part that is wrong.
-                        line("Baseline", int(e.expenditure.baselineKcal),
-                             note: "resting energy × your usual day")
+                        // The LABEL changes with the source, because the number does. A line reading
+                        // "resting energy × your usual day" over a figure measured from the user's own
+                        // weight trend would be the two-readouts-disagreeing failure in one row.
+                        line(e.usesMeasuredBaseline ? "Baseline (measured)" : "Baseline",
+                             int(e.expenditure.baselineKcal),
+                             note: e.usesMeasuredBaseline
+                                 ? "from your own logs and weigh-ins, not a formula"
+                                 : "resting energy × your usual day")
                         line("Steps", int(e.expenditure.stepNeatKcal),
                              note: stepNote(e))
                         line("Training", int(e.expenditure.workoutKcal),
@@ -535,6 +546,131 @@ struct DietDetailView: View {
                 .opacity(cardOpacity)
             }
         }
+    }
+
+    // MARK: - The measured baseline
+
+    /// Offers to cost the budget from the user's OWN measured expenditure instead of Mifflin-St Jeor.
+    ///
+    /// Opt-in, and the figure never moves anything until it is accepted. That is not caution for its own
+    /// sake: the measurement is derived partly from the user's food log, so accepting it is a judgement
+    /// about how good their logging has been — which is a judgement only they can make, and the card's job
+    /// is to give them what they need to make it.
+    ///
+    /// Appears only when the measurement has earned it: moderate or high confidence, and a gap from the
+    /// model worth acting on. Below that threshold the two figures disagree by less than the method's own
+    /// error and switching would be theatre.
+    @ViewBuilder private var measuredBaselineSection: some View {
+        if let t = trend, let adaptive = t.adaptive, let measured = t.measuredBaselineKcal,
+           let e = energy, !baselineCardDismissed,
+           adaptive.confidence != .building,
+           // Compared against the MODEL's baseline, which is the term being replaced — comparing whole
+           // expenditures would fold in today's activity and make the gap look different every day.
+           abs(measured - modelBaselineKcal(e)) >= Self.minBaselineGapKcal {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                SectionHeader(e.usesMeasuredBaseline ? "Measured burn" : "Use your measured burn?",
+                              overline: adaptive.confidence == .high ? "High confidence" : "Moderate")
+                NoopCard(tint: StrandPalette.accent) {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        line("Model says", "\(int(modelBaselineKcal(e))) kcal")
+                        line("Your data says", "\(int(measured)) kcal", emphasis: true)
+                        // The interval, always — the estimate is a range and a bare figure would be the
+                        // fabrication the rest of the app refuses to make.
+                        line("Range", "\(int(adaptive.lowerKcal)) – \(int(adaptive.upperKcal)) kcal")
+
+                        Divider().overlay(StrandPalette.hairline)
+
+                        Text(baselineExplanation(adaptive: adaptive, measured: measured, energy: e))
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        // Says which way the range leans and WHY, because an unlogged day biases the
+                        // figure down rather than scattering it — so the honest reading of a lopsided
+                        // range is "probably at least this", not "somewhere in here".
+                        if adaptive.isLikelyUnderstated {
+                            Text(understatementNote(adaptive))
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.metricAmber)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        if e.usesMeasuredBaseline {
+                            HStack {
+                                Text("In use")
+                                    .font(StrandFont.footnote)
+                                    .foregroundStyle(StrandPalette.textTertiary)
+                                Spacer()
+                                Button(adoptingBaseline ? "Reverting…" : "Back to the model") {
+                                    Task { await adoptBaseline(nil) }
+                                }
+                                .buttonStyle(NoopButtonStyle(.secondary))
+                                .disabled(adoptingBaseline)
+                            }
+                        } else {
+                            HStack {
+                                Button("Not now") { baselineCardDismissed = true }
+                                    .buttonStyle(NoopButtonStyle(.secondary))
+                                Spacer()
+                                Button(adoptingBaseline ? "Applying…" : "Use mine") {
+                                    Task { await adoptBaseline(measured) }
+                                }
+                                .buttonStyle(NoopButtonStyle(.primary))
+                                .disabled(adoptingBaseline)
+                            }
+                        }
+                    }
+                }
+                .opacity(cardOpacity)
+            }
+        }
+    }
+
+    /// Below this the two figures disagree by less than the method's own error, and switching would be
+    /// theatre that moved the user's budget for no reason the data supports.
+    private static let minBaselineGapKcal = 50.0
+
+    /// What the MODEL would put the baseline at — the term an override replaces.
+    ///
+    /// Re-derived from the reported BMR rather than read off `expenditure.baselineKcal`, because once an
+    /// override is live that field holds the measured figure and the card must still be able to state what
+    /// the model says. Reading it would make the card show the same number on both lines.
+    private func modelBaselineKcal(_ e: DietDayEnergy) -> Double {
+        CalorieTarget.baselineKcal(bmrKcal: e.expenditure.bmrKcal,
+                                   activity: ActivityLevel(rawValue: goal?.activityLevel ?? "") ?? .sedentary)
+    }
+
+    private func baselineExplanation(adaptive: AdaptiveExpenditureEstimate,
+                                     measured: Double, energy: DietDayEnergy) -> String {
+        if energy.usesMeasuredBaseline {
+            return String(localized: "Your budget is costed from your own \(adaptive.windowDays) days of food logs and weigh-ins, not from a population formula. Your steps and workouts still move it day to day on top of this.")
+        }
+        let direction = measured > modelBaselineKcal(energy)
+            ? String(localized: "higher")
+            : String(localized: "lower")
+        return String(localized: "Worked out from \(adaptive.intakeDays) days of your own logs and \(adaptive.weightReadings) weigh-ins over \(adaptive.windowDays) days — your weight trend says what you actually spend, which is \(direction) than the formula guessed. Your steps and workouts would still move the budget day to day on top of this.")
+    }
+
+    /// Names the asymmetry in words. A lopsided range is easy to misread as a symmetric one, and the
+    /// difference matters: it means the figure is more likely too LOW than too high.
+    private func understatementNote(_ adaptive: AdaptiveExpenditureEstimate) -> String {
+        if adaptive.roughIntakeDays > 0 && adaptive.intakeDays < adaptive.windowDays {
+            return String(localized: "\(adaptive.windowDays - adaptive.intakeDays) days weren't logged and \(adaptive.roughIntakeDays) were a rough guess, so your real burn is likely at or above this range rather than in the middle of it.")
+        }
+        if adaptive.roughIntakeDays > 0 {
+            return String(localized: "\(adaptive.roughIntakeDays) of these days were a rough guess, so your real burn is likely at or above this range rather than in the middle of it.")
+        }
+        return String(localized: "\(adaptive.windowDays - adaptive.intakeDays) days in this window weren't logged, and unlogged days are usually bigger ones — so your real burn is likely at or above this range rather than in the middle of it.")
+    }
+
+    /// Writes (or clears) the measured baseline on the open goal, then re-banks so every figure on screen
+    /// comes from the new costing rather than a mix of the old and the new.
+    private func adoptBaseline(_ kcal: Double?) async {
+        adoptingBaseline = true
+        await repo.setMeasuredBaseline(kcal)
+        await repo.refreshDietDay(profile: profile)
+        adoptingBaseline = false
+        reloadTick += 1
     }
 
     private func proposalReason(current: Double, proposed: Double) -> String {

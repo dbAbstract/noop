@@ -293,6 +293,15 @@ struct FoodLogView: View {
                             .foregroundStyle(StrandPalette.textTertiary)
                             .accessibilityLabel("Estimated macros")
                     }
+                    // The user's own admitted guess, marked for the same reason and distinctly: weeks
+                    // later, "was that the restaurant day I guessed at?" is exactly the question a tight
+                    // measured budget sends you back here to answer.
+                    if entry.macroSource == FoodMacroSource.roughGuess {
+                        Image(systemName: "questionmark.circle")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .accessibilityLabel("Rough guess")
+                    }
                 }
                 // The portion is spelled out rather than implied, because the stored macros are the
                 // item's PER-SERVING figures and the row shows the scaled ones — without this the two

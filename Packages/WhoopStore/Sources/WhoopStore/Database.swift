@@ -1305,6 +1305,28 @@ extension WhoopStore {
             try db.create(index: "idx_recipeComponent_device_recipe", on: "recipeComponent",
                           columns: ["deviceId", "recipeId"], options: [.ifNotExists])
         }
+
+        // The measured baseline: what the user's body actually spends existing, inferred from their own
+        // intake and weight trend rather than from Mifflin-St Jeor.
+        //
+        // WHY A BASELINE AND NOT A TOTAL. `AdaptiveExpenditureEngine` reports average TDEE over three to
+        // six weeks, which already contains that window's average steps and workouts. Storing the total
+        // and adding today's activity on top would charge the average twice; storing the total and NOT
+        // adding it would freeze the budget. So the window's mean activity is subtracted before storing,
+        // and the per-day terms ride on this exactly as they ride on the modelled baseline.
+        //
+        // NULL means "use the model", which is the default and the state every existing row lands in.
+        // Per-GOAL rather than a global setting, because it is calibrated against a particular plan: a
+        // new goal at a new weight deserves to be measured again rather than inheriting a stale figure.
+        //
+        // NOT reusing `targetOverrideKcal`, which is unread by anything despite existing since v49. It is
+        // named for a different quantity — a hard budget override — and quietly repurposing a column
+        // whose name means something else is how the next reader is misled. It stays as it is.
+        migrator.registerMigration("v52-measured-baseline") { db in
+            try db.alter(table: "dietGoal") { t in
+                t.add(column: "measuredBaselineKcal", .double)
+            }
+        }
         return migrator
     }
 }

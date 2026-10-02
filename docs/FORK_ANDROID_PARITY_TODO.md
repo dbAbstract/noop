@@ -42,6 +42,27 @@ From `AGENTS.md`, unchanged and non-negotiable when the twin is written:
 
 ---
 
+## 0. READ FIRST — stage 5 MODIFIED shared analytics, it did not only add to them
+
+Every stage before this one only ADDED pure files, so the Kotlin side was merely incomplete. Stage 5 is
+the first to change an engine that **already has a Kotlin twin**: `AdaptiveExpenditureEngine`.
+
+Two consequences:
+
+- **The Kotlin twin and its oracle test now disagree with Swift**, and that disagreement is the parity
+  contract doing its job rather than a bug to route around. Do not silence it by regenerating the Kotlin
+  expectations from Kotlin — re-derive them from the Swift side, per the oracle rule in `AGENTS.md`.
+- **The change is behavioural, not cosmetic.** `lowerKcal`/`upperKcal` are no longer symmetric about
+  `estimatedDailyKcal`, there is a new `intakeIsRough` input and a new `roughIntakeDays` output, and
+  three new constants (`baseReportingError`, `unloggedDayExcess`, `roughGuessDiscount`). A Kotlin twin
+  that keeps the old symmetric margin will hand Android users a measurably tighter budget.
+
+What changed and why, in one line: the days someone fails to log are the big ones, so an estimate taken
+over logged days is biased LOW — the old code said so in a comment and then widened the interval evenly,
+which presents a bias as noise.
+
+---
+
 ## 1. Pure analytics — `Packages/StrandAnalytics/` → `com.noop.analytics`
 
 All of these are pure functions with no store or UI. They are the highest-value twins to write first,
@@ -55,6 +76,8 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `StepNeat.swift` | `StepNeat.kt` | Steps above a **4,000** baseline → kcal at **`0.0003 × weightKg`** per step. **Use these numbers, not the ones in the first draft** (3,000 / 0.0004) — see the note below. |
 | `TimeWindows.swift` | `TimeWindows.kt` | Interval merging so overlapping workouts never subtract a shared second twice. |
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
+| `AdaptiveExpenditureEngine.swift` | **twin EXISTS and now diverges** | See section 0. Asymmetric interval (upward only, for unlogged and rough days), `intakeIsRough` in, `roughIntakeDays` + `isLikelyUnderstated` out. `unloggedDayExcess` (0.35) is the one assumed figure and must match exactly or the two platforms price budgets differently. |
+| `CalorieTarget.swift` (additions) | `CalorieTarget.kt` | `measuredBaseline(measuredTdeeKcal:meanActivityKcal:)` and `sanitisedBaselineOverride`. The subtraction is the double-count guard — a measured average TDEE already contains its window's average activity. The BMR floor REFUSES rather than clamps. |
 | `WakeBriefWindow.swift` | `WakeBriefWindow.kt` | When a wake-triggered morning brief is due. Pure minute-of-day arithmetic. The case to get right: the target has usually ALREADY PASSED, because a strap reports its night on offload rather than on waking — so "late" is normal and must fire, while "hours late" must not. The cutoff is checked against the TARGET before the waiting check, or a target already past the cutoff reports `waiting` for something that can never become due. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
 | `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
@@ -92,7 +115,7 @@ against one number and measure itself against another. Keep that sharing in Kotl
 
 ## 2. Storage — GRDB migrations needing Room twins
 
-Four migrations, all currently `ios_only` in the schema oracle.
+Five migrations, all currently `ios_only` in the schema oracle.
 
 ### `v48-food-log` — `foodItem`, `foodEntry`
 
@@ -177,6 +200,38 @@ recipeComponent  id, deviceId, recipeId, foodItemId, quantity, ord,
 - The index does **not** survive the rebuild — the migration recreates it afterwards. A Room twin doing
   its own rebuild has the same trap.
 - Inline macros are PER SERVING, the same convention `foodItem` uses, so one scaling path covers both.
+
+### `v52-measured-baseline` — closing the loop
+
+`dietGoal` gains `measuredBaselineKcal` (nullable, ALTER-appended so it lands LAST; Room must match).
+
+```
+dietGoal   … , measuredBaselineKcal
+```
+
+- **A BASELINE, not a total.** The engine reports average TDEE over 3–6 weeks, which already contains
+  that window's average steps and workouts. The window's mean activity is subtracted BEFORE storing, so
+  the per-day terms ride on top exactly as they ride on the modelled baseline. Store a total instead and
+  you either double-count today's activity or freeze the budget — the twin must get this right.
+- **The mean activity must come from the SAME window the estimate spans** (`adaptive.windowDays`, which
+  is what the engine kept, not what the caller asked for). A different span shifts the baseline silently.
+- **BMR floor, refused not clamped.** A measured baseline under resting metabolism is a food log missing
+  meals; clamping to BMR would still be a figure nobody measured.
+- **Opt-in and revertible**, written by editing the OPEN goal in place — superseding it would reset
+  `startedOn` and rewrite the history adherence is measured against.
+- `targetOverrideKcal` remains **unread by anything** on both platforms. Left deliberately.
+
+### Two new `metricSeries` keys — no migration
+
+`metricSeries` is tall, so these need no schema change, but the Kotlin writer must use the same key
+strings and the same semantics:
+
+- **`diet_activity_kcal`** (source `diet`) — step NEAT + workout kcal for the day, banked by
+  `refreshDietDay` so a measured baseline can be derived without replaying every past day's steps. Must
+  be in the "clear all keys" list, or a stale figure survives the last entry of a day being deleted.
+- **`intake_rough`** (source `food-log`) — 1 when any of the day's entries was an admitted guess. Banked
+  beside the day totals because the engine needs it for every day in a six-week window; re-derived on
+  every write so deleting the rough entry clears the flag.
 
 ### `deviceScopedTables`
 

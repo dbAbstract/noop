@@ -24,7 +24,13 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
     /// number it was judged against even after the weight it was derived from has moved.
     public var dailyDeficitKcal: Double
     /// A hand-set daily target that overrides the derivation entirely. nil means "use the derivation".
+    /// A hard override of the day's budget. Written by `setDietGoal` since v49 and **read by nothing** —
+    /// left in place deliberately rather than removed or repurposed, see the v52 migration comment.
     public var targetOverrideKcal: Double?
+    /// The user's own measured baseline (resting + habitual NEAT), with the calibration window's mean
+    /// ACTIVITY already subtracted so per-day steps and workouts ride on top without double-counting.
+    /// nil = use the Mifflin model.
+    public var measuredBaselineKcal: Double?
     public var createdAt: Int
     /// Protein target as grams per kilogram, so it follows the body it is for rather than going stale as
     /// weight comes off. nil means protein is untargeted.
@@ -33,7 +39,7 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
     public init(id: String, deviceId: String, startedOn: String, endedOn: String? = nil,
                 startWeightKg: Double, targetWeightKg: Double, months: Int, activityLevel: String,
                 dailyDeficitKcal: Double, targetOverrideKcal: Double? = nil, createdAt: Int,
-                proteinGPerKg: Double? = nil) {
+                proteinGPerKg: Double? = nil, measuredBaselineKcal: Double? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.startedOn = startedOn
@@ -46,6 +52,7 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
         self.targetOverrideKcal = targetOverrideKcal
         self.createdAt = createdAt
         self.proteinGPerKg = proteinGPerKg
+        self.measuredBaselineKcal = measuredBaselineKcal
     }
 
     static func decode(_ row: Row) -> DietGoalRow {
@@ -61,7 +68,8 @@ public struct DietGoalRow: Equatable, Codable, Sendable {
             dailyDeficitKcal: row["dailyDeficitKcal"],
             targetOverrideKcal: row["targetOverrideKcal"],
             createdAt: row["createdAt"],
-            proteinGPerKg: row["proteinGPerKg"]
+            proteinGPerKg: row["proteinGPerKg"],
+            measuredBaselineKcal: row["measuredBaselineKcal"]
         )
     }
 }
@@ -76,8 +84,9 @@ extension WhoopStore {
                 try db.execute(sql: """
                     INSERT INTO dietGoal
                         (id, deviceId, startedOn, endedOn, startWeightKg, targetWeightKg, months,
-                         activityLevel, dailyDeficitKcal, targetOverrideKcal, createdAt, proteinGPerKg)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         activityLevel, dailyDeficitKcal, targetOverrideKcal, createdAt, proteinGPerKg,
+                         measuredBaselineKcal)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         startedOn = excluded.startedOn,
                         endedOn = excluded.endedOn,
@@ -87,10 +96,12 @@ extension WhoopStore {
                         activityLevel = excluded.activityLevel,
                         dailyDeficitKcal = excluded.dailyDeficitKcal,
                         targetOverrideKcal = excluded.targetOverrideKcal,
-                        proteinGPerKg = excluded.proteinGPerKg
+                        proteinGPerKg = excluded.proteinGPerKg,
+                        measuredBaselineKcal = excluded.measuredBaselineKcal
                     """, arguments: [r.id, r.deviceId, r.startedOn, r.endedOn, r.startWeightKg,
                                      r.targetWeightKg, r.months, r.activityLevel, r.dailyDeficitKcal,
-                                     r.targetOverrideKcal, r.createdAt, r.proteinGPerKg])
+                                     r.targetOverrideKcal, r.createdAt, r.proteinGPerKg,
+                                     r.measuredBaselineKcal])
             }
             return rows.count
         }

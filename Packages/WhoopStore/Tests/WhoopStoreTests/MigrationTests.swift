@@ -304,6 +304,61 @@ final class MigrationTests: XCTestCase {
         }
     }
 
+    // MARK: - v52: the measured baseline
+
+    /// An ALTER-appended column lands LAST, and that order is the Room contract.
+    func testV52AppendsMeasuredBaselineToDietGoal() async throws {
+        let store = try await WhoopStore.inMemory()
+        let cols = try await store.columnNamesForTest(table: "dietGoal")
+        XCTAssertEqual(cols.last, "measuredBaselineKcal")
+        // The v49 column it deliberately did NOT reuse is still there, still unread.
+        XCTAssertTrue(cols.contains("targetOverrideKcal"))
+    }
+
+    /// An existing goal must survive the migration with its own values intact and the new column nil —
+    /// nil being what makes every pre-v52 install keep using the Mifflin model until it opts in.
+    func testV52LeavesExistingGoalsOnTheModel() async throws {
+        let dbQueue = try DatabaseQueue()
+        try WhoopStore.makeMigrator().migrate(dbQueue, upTo: "v51-inline-recipe-ingredients")
+        try await dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO dietGoal (id, deviceId, startedOn, startWeightKg, targetWeightKg, months,
+                                      activityLevel, dailyDeficitKcal, createdAt, proteinGPerKg)
+                VALUES ('g1', 'diet', '2026-09-01', 73.0, 69.0, 6, 'sedentary', 168.6, 1756000000, 1.2)
+                """)
+        }
+        try WhoopStore.makeMigrator().migrate(dbQueue)
+
+        try await dbQueue.read { db in
+            XCTAssertEqual(try Double.fetchOne(db, sql: "SELECT dailyDeficitKcal FROM dietGoal WHERE id = 'g1'"),
+                           168.6)
+            XCTAssertEqual(try Double.fetchOne(db, sql: "SELECT proteinGPerKg FROM dietGoal WHERE id = 'g1'"),
+                           1.2)
+            XCTAssertNil(try Double.fetchOne(db, sql: "SELECT measuredBaselineKcal FROM dietGoal WHERE id = 'g1'"),
+                         "nil is what keeps an existing install on the model until it opts in")
+        }
+    }
+
+    /// Round-trips through the row model, including the upsert's new column.
+    func testV52MeasuredBaselineRoundTrips() async throws {
+        let store = try await WhoopStore.inMemory()
+        let row = DietGoalRow(id: "g2", deviceId: "diet", startedOn: "2026-10-01",
+                              startWeightKg: 73, targetWeightKg: 69, months: 6,
+                              activityLevel: "sedentary", dailyDeficitKcal: 168.6,
+                              createdAt: 1_759_000_000, proteinGPerKg: 1.2,
+                              measuredBaselineKcal: 2_150)
+        _ = try await store.upsertDietGoals([row])
+        let back = try await store.dietGoals(deviceId: "diet")
+        XCTAssertEqual(back.first?.measuredBaselineKcal ?? .nan, 2_150, accuracy: 0.01)
+
+        // And clearing it must stick — the Revert control depends on this.
+        var cleared = row
+        cleared.measuredBaselineKcal = nil
+        _ = try await store.upsertDietGoals([cleared])
+        let afterClear = try await store.dietGoals(deviceId: "diet").first?.measuredBaselineKcal
+        XCTAssertNil(afterClear, "the Revert control depends on a nil surviving the upsert")
+    }
+
     func testV5AddsSyncedColumnToDecodedTables() async throws {
         let store = try await WhoopStore.inMemory()
         for table in ["hrSample", "rrInterval", "event", "battery",

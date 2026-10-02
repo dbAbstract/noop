@@ -90,6 +90,14 @@ public struct DayExpenditure: Equatable, Sendable {
 
     public var totalKcal: Double { baselineKcal + stepNeatKcal + workoutKcal }
 
+    /// The part of the day's spend that came from MOVING, as opposed to existing.
+    ///
+    /// Named and derived here rather than re-added at each call site, because it is one half of a
+    /// subtraction that has to be exact: a measured average TDEE already contains the calibration
+    /// window's average activity, so deriving a baseline from it means subtracting precisely this. Two
+    /// spellings of "activity" — one here and one in the deriving code — is how a double-count gets in.
+    public var activityKcal: Double { stepNeatKcal + workoutKcal }
+
     /// What may be eaten today to hit the deficit. Never negative: a deficit larger than the day's
     /// expenditure is a broken plan, not a negative budget, and the clamp keeps a nonsense input from
     /// rendering as a nonsense instruction.
@@ -161,13 +169,62 @@ public enum CalorieTarget {
     public static func dayExpenditure(sex: String, weightKg: Double, heightCm: Double, age: Double,
                                       activity: ActivityLevel,
                                       neatSteps: Int,
-                                      workoutKcal: Double) -> DayExpenditure {
+                                      workoutKcal: Double,
+                                      baselineOverrideKcal: Double? = nil) -> DayExpenditure {
         let bmr = mifflinBMR(sex: sex, weightKg: weightKg, heightCm: heightCm, age: age)
         return DayExpenditure(
             bmrKcal: bmr,
-            baselineKcal: baselineKcal(bmrKcal: bmr, activity: activity),
+            // ONLY the baseline is overridable, and that is the whole design. The per-day activity terms
+            // below stay exactly as they were, so a measured baseline does not freeze the budget — it
+            // still rises with today's steps and workouts, which is the behaviour the budget needs.
+            //
+            // Overriding the TOTAL instead would do one of two wrong things: double-count today's
+            // activity (because a measured average already contains the window's average activity), or
+            // flatten the budget into a fixed number. See `measuredBaseline(from:)`.
+            baselineKcal: sanitisedBaselineOverride(baselineOverrideKcal, bmrKcal: bmr)
+                ?? baselineKcal(bmrKcal: bmr, activity: activity),
             stepNeatKcal: StepNeat.kcal(stepsAboveBaseline: neatSteps, weightKg: weightKg),
             workoutKcal: max(0, workoutKcal))
+    }
+
+    // MARK: - Turning a measured TDEE into a baseline
+
+    /// The floor an override has to clear: resting metabolism itself.
+    ///
+    /// A measured baseline BELOW the user's BMR is not a slow metabolism, it is a food log that is missing
+    /// meals — and acting on it would hand out a starvation budget derived from the user's own bad data,
+    /// which is the single most harmful thing this feature could do. Refused rather than clamped: clamping
+    /// to BMR would still be a figure nobody measured, presented as though it were.
+    ///
+    /// Returns nil for an absent, non-finite, or sub-BMR override, so the caller falls back to the model.
+    public static func sanitisedBaselineOverride(_ override: Double?, bmrKcal: Double) -> Double? {
+        guard let override, override.isFinite, bmrKcal.isFinite, override >= bmrKcal else { return nil }
+        return override
+    }
+
+    /// Convert a measured average daily expenditure into a BASELINE the per-day terms can ride on.
+    ///
+    /// `AdaptiveExpenditureEngine` reports average TDEE across three to six weeks, which already contains
+    /// that window's average steps and workouts. Adding today's activity on top of it would therefore
+    /// charge the average twice. Subtracting the window's mean activity first leaves a baseline — what the
+    /// body spent existing — and today's real activity then sits on top of it exactly as it does with the
+    /// modelled baseline.
+    ///
+    ///     measuredBaseline = measuredTDEE − mean(stepNeat + workoutKcal) over the same window
+    ///
+    /// The subtraction MUST use the same window the estimate came from. A mean taken over a different
+    /// span is a different number and the error would be invisible — the budget would simply be wrong by
+    /// however much the two windows' activity differed.
+    ///
+    /// nil when either input is unusable, rather than a figure built from a non-finite.
+    public static func measuredBaseline(measuredTdeeKcal: Double,
+                                        meanActivityKcal: Double) -> Double? {
+        guard measuredTdeeKcal.isFinite, meanActivityKcal.isFinite, meanActivityKcal >= 0 else {
+            return nil
+        }
+        let baseline = measuredTdeeKcal - meanActivityKcal
+        guard baseline.isFinite, baseline > 0 else { return nil }
+        return baseline
     }
 
     // MARK: - Recalibration (used in Stage 2; the arithmetic belongs with the rest of the model)
