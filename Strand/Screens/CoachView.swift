@@ -493,7 +493,9 @@ struct CoachView: View {
                                     // The proposal card rides UNDER its own turn rather than inside the
                                     // bubble: it is not prose, it is not selectable, and it must not be
                                     // swept up by the bubble's Copy/Share context menu.
-                                    if let proposal = message.proposal {
+                                    // One card per proposed action, each confirmed independently — a
+                                    // described meal of three things should not be all-or-nothing.
+                                    ForEach(message.proposals) { proposal in
                                         FoodProposalCard(proposal: proposal, messageId: message.id)
                                             .frame(maxWidth: 560, alignment: .leading)
                                     }

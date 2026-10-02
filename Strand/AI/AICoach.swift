@@ -28,7 +28,10 @@ struct ChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: Role
     let text: String
-    /// A food action the coach proposed on this turn, resolved and awaiting the user's tap.
+    /// Food actions the coach proposed on this turn, resolved and awaiting the user's taps.
+    ///
+    /// A LIST, because "eggs, toast and a coffee" is one sentence and should be one turn. Each is confirmed
+    /// independently, so a wrong item can be dropped without losing the two that were right.
     ///
     /// On the MESSAGE rather than on the engine, so it survives scrolling, re-render and the transcript's
     /// own persistence boundary — and so a conversation that logs three things in a row keeps three
@@ -37,13 +40,13 @@ struct ChatMessage: Identifiable, Equatable {
     /// Not persisted: `persistMessages` stores text only, so a proposal does not survive an app restart.
     /// That is deliberate rather than unfinished — a card restored hours later would invite the user to
     /// log a meal they have long since logged or forgotten, with no way to tell which.
-    var proposal: FoodProposal?
+    var proposals: [FoodProposal] = []
 
-    init(id: UUID = UUID(), role: Role, text: String, proposal: FoodProposal? = nil) {
+    init(id: UUID = UUID(), role: Role, text: String, proposals: [FoodProposal] = []) {
         self.id = id
         self.role = role
         self.text = text
-        self.proposal = proposal
+        self.proposals = proposals
     }
 }
 
@@ -302,26 +305,51 @@ final class AICoachEngine: ObservableObject {
     bullet or numbered lists for plans, ### headings only when structure genuinely helps, and a \
     small table only for a week-ahead plan. No code blocks.
 
-    LOGGING FOOD. If SAVED FOODS appears in the data above, the user can log meals by describing them \
-    to you. When they tell you what they ate, end your reply with ONE action object and nothing after it:
-    {"noop_food_action": {"action": "log", "itemId": "<id from SAVED FOODS>", "portion": 1}}
-    {"noop_food_action": {"action": "create", "name": "...", "servingLabel": "...", "kcal": 0, \
-    "protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "portion": 1}}
-    {"noop_food_action": {"action": "edit", "itemId": "<id>", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}}
-    Rules, in order of importance:
-    • ASK FIRST WHEN YOU ARE NOT SURE, and emit NO action on that turn. If "an Oikos" could be two of \
-    their saved foods, name both and ask which. Guessing logs the wrong meal; asking costs one message.
-    • Never invent macros for a food you do not have figures for. Ask the user for them, or ask them to \
-    read the label. A plausible guess presented as data is the worst thing you can do here.
-    • Use `log` with an id from SAVED FOODS whenever the food is already there. Only `create` when it \
-    genuinely is not, and if the list says some foods were not shown, ask before assuming.
-    • `edit` is for correcting a saved food's numbers, not for logging. Never `edit` a food marked recipe.
-    • Macros are PER SERVING, and `portion` is how many servings. Your stated kcal must agree with your \
-    own macros (4 kcal/g protein and carbs, 9 kcal/g fat) or the action is discarded.
-    • One action per reply. For several foods, log one and ask about the next.
-    • Say in plain words what you are proposing — the user sees your text and a confirmation card, never \
-    the object itself. Do not mention the object, the id, or JSON. Nothing is logged until they confirm, \
-    so never say you have logged it, only that it is ready to confirm.
+    LOGGING FOOD AND WEIGHT. When SAVED FOODS appears above, the user logs by TELLING YOU, and you are \
+    the main way they do it. Take the work off them: read what they ate, work out the macros, and hand back \
+    something to confirm. End the reply with one action block and nothing after it:
+    {"noop_food_action": {"actions": [ … ]}}
+    Each entry is one of:
+    {"action": "log",    "itemId": "<id from SAVED FOODS>", "portion": 1, "day": "today"}
+    {"action": "create", "name": "...", "servingLabel": "...", "kcal": 0, "protein": 0, "carbs": 0, \
+    "fat": 0, "fiber": 0, "portion": 1, "day": "today"}
+    {"action": "save",   "name": "...", "servingLabel": "...", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
+    {"action": "edit",   "itemId": "<id>", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
+    {"action": "weight", "kg": 72.4, "day": "today"}
+
+    ESTIMATE THE MACROS YOURSELF. You know roughly what food contains — use that. "Two scrambled eggs on \
+    sourdough", "a flat white", "chicken katsu curry from Wasabi" are all things you can price to within \
+    the accuracy this app needs, and the user came to you precisely so they do not have to look it up. \
+    Never tell them to check another app, a website, or a database; there is no food database here and \
+    sending them away is a dead end. Give your best figures, say in one short clause how confident you are \
+    ("packet figures", "standard recipe", "rough — restaurant portions vary"), and let them correct you. \
+    They see every number on a card before anything is saved, so a wrong estimate costs one tap.
+    Do ask when the AMBIGUITY IS ABOUT WHICH FOOD, not about its macros: if "an Oikos" matches two saved \
+    foods, name both and ask which, and emit no action that turn. Guessing the wrong food logs the wrong \
+    meal; guessing its calories slightly wrong is what this feature expects. Also ask when a portion is \
+    genuinely unguessable in a way that changes the answer a lot ("a bowl of pasta" could be 300 or 900) — \
+    offer your assumption rather than a blank question: "I'll call it a large bowl, ~700, say if it was \
+    smaller."
+    Rules:
+    • SEVERAL FOODS IN ONE REPLY. "Eggs, toast and a coffee" is three entries in one actions array, not \
+    three conversations. Up to six.
+    • `log` with an id from SAVED FOODS whenever the food is already there — prefer it over `create`, and \
+    if the list says some foods were not shown, ask before assuming something is new.
+    • `create` logs a food. `save` only adds it to their library and logs NOTHING: use it when they ask to \
+    save something for later, or want to log it against a day themselves.
+    • `day` is "today" (the default), "yesterday", or "YYYY-MM-DD". Use it when they say when they ate. \
+    Never invent a date from a vague phrase — if they say "a few days ago", ask which day.
+    • `edit` corrects a saved food's numbers. Never `edit` a food marked recipe.
+    • Macros are PER SERVING; `portion` is how many servings. Your kcal must agree with your own macros \
+    (4 kcal/g protein and carbs, 9 kcal/g fat) within about 10%, or the entry is discarded — so do the \
+    arithmetic rather than stating a remembered calorie count beside unrelated macros.
+    • COACH THE DIET, not just the logging. You can see their budget, what is left, and their protein \
+    target. Say something useful about it in a line or two — whether that fits what is left, whether \
+    protein is short with one meal to go, what would make the rest of the day work. Keep it brief and \
+    specific to the numbers in front of you, and do not moralise about food.
+    • Say in plain words what you are proposing. The user sees your text and a confirmation card, never the \
+    block itself, so do not mention it, the ids, or JSON. Nothing is saved until they confirm — so never \
+    say you HAVE logged anything, only that it is ready.
     """
 
     /// The system prompt actually sent, read FRESH from UserDefaults on every request so an edit in
@@ -876,16 +904,16 @@ final class AICoachEngine: ObservableObject {
             // The reply can be ALL block and no prose (a terse model that just emits the action), which
             // would otherwise render as an empty bubble above the card. `fallbackProposalNote` covers
             // that case so the turn always says something.
-            let proposal = await resolveProposal(in: accumulated)
+            let proposals = await resolveProposals(in: accumulated)
             let clean = FoodActionParse.strippingAction(from: accumulated)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                 let text: String
                 if !clean.isEmpty { text = clean }
-                else if proposal != nil { text = String(localized: "Here's what I've got:") }
+                else if !proposals.isEmpty { text = String(localized: "Here's what I've got:") }
                 else { text = "(no reply)" }
                 messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
-                                                text: text, proposal: proposal)
+                                                text: text, proposals: proposals)
             }
         } catch let e as AICoachError {
             // Mid-stream error: keep the partial text + an interrupted marker (PRD K1 acceptance).
@@ -1086,16 +1114,23 @@ final class AICoachEngine: ObservableObject {
     /// "unrecognised food" the user never did anything to deserve.
     ///
     /// nil for the ordinary conversational turn, which is most of them.
-    func resolveProposal(in reply: String) async -> FoodProposal? {
-        guard case .success(let action) = FoodActionParse.action(fromReply: reply) else { return nil }
+    func resolveProposals(in reply: String) async -> [FoodProposal] {
+        guard case .success(let requests) = FoodActionParse.actions(fromReply: reply) else { return [] }
         let library = await repo.foodLibrary()
         let recipeIds = await repo.recipeItemIds()
-        return FoodProposal.resolve(action,
-                                    library: library,
-                                    recipeIds: recipeIds,
-                                    // The same default the Add food sheet uses, so a food created by
-                                    // either route reads identically in the log.
-                                    defaultServingLabel: String(localized: "1 serving"))
+        // The user's own recent weight, which is the only thing that can tell a 160 kg measurement from a
+        // 160 lb figure stated in the wrong unit. nil on a first weigh-in, which is correct: there is
+        // nothing for it to be inconsistent with.
+        let lastWeight = await repo.weightHistory(days: 60).last?.kg
+        return requests.compactMap {
+            FoodProposal.resolve($0,
+                                 library: library,
+                                 recipeIds: recipeIds,
+                                 // The same default the Add food sheet uses, so a food created by either
+                                 // route reads identically in the log.
+                                 defaultServingLabel: String(localized: "1 serving"),
+                                 lastKnownWeightKg: lastWeight)
+        }
     }
 
     /// Mark a proposal applied (or dismissed) in place, so the card cannot fire twice.
@@ -1103,10 +1138,11 @@ final class AICoachEngine: ObservableObject {
     /// By message id rather than index: the transcript grows while a card is on screen — a reply can
     /// arrive, or a stale conversation can be retired — and an index captured at render time would by
     /// then point at somebody else's turn.
-    func updateProposalState(messageId: UUID, to state: FoodProposal.State) {
+    func updateProposalState(messageId: UUID, proposalId: UUID, to state: FoodProposal.State) {
         guard let idx = messages.firstIndex(where: { $0.id == messageId }),
-              messages[idx].proposal != nil else { return }
-        messages[idx].proposal?.state = state
+              let pIdx = messages[idx].proposals.firstIndex(where: { $0.id == proposalId })
+        else { return }
+        messages[idx].proposals[pIdx].state = state
     }
 
     /// The saved-food library plus one line on today, formatted by `FoodLibraryDigest`.
