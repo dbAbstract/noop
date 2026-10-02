@@ -471,3 +471,48 @@ extension FoodActionParseTests {
                        .noAction)
     }
 }
+
+// MARK: - The meal a user named
+
+/// "For lunch I had X" is the only way a BACKDATED entry ever gets grouped — a past day has no usable
+/// timestamp to infer a meal from.
+extension FoodActionParseTests {
+
+    private func firstRequest(_ s: String) -> FoodActionRequest? {
+        if case .success(let r) = FoodActionParse.actions(fromReply: s) { return r.first }
+        return nil
+    }
+
+    func testAMealIsCarriedThrough() throws {
+        let r = try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "meal": "lunch"}}"#))
+        XCTAssertEqual(r.meal, .lunch)
+    }
+
+    func testTheMealPairsWithABackdatedDay() throws {
+        let r = try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "yesterday", "meal": "dinner"}}"#))
+        XCTAssertEqual(r.day, .daysAgo(1))
+        XCTAssertEqual(r.meal, .dinner)
+    }
+
+    func testMealIsCaseInsensitiveAndAcceptsTheAlternativeKey() throws {
+        XCTAssertEqual(try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "meal": "Dinner"}}"#)).meal, .dinner)
+        XCTAssertEqual(try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "mealType": "snack"}}"#)).meal, .snack)
+    }
+
+    func testAnAbsentMealIsNil() throws {
+        XCTAssertNil(try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1"}}"#)).meal)
+    }
+
+    /// An unparseable meal must not discard the log — a meal nobody can read is simply not known, and the
+    /// entry is still worth having.
+    func testAnUnrecognisedMealIsIgnoredNotFatal() throws {
+        let r = try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "meal": "brunch"}}"#))
+        XCTAssertNil(r.meal)
+    }
+
+    /// `unassigned` is a DISPLAY state for an entry with no meal. Accepting it as input would let a model
+    /// state the absence of a fact as a fact.
+    func testUnassignedIsNotAnAcceptableInput() throws {
+        XCTAssertNil(try XCTUnwrap(firstRequest(#"{"noop_food_action": {"action": "log", "itemId": "A1", "meal": "unassigned"}}"#)).meal)
+    }
+}

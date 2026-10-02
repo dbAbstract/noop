@@ -315,6 +315,31 @@ extension Repository {
         return points.first(where: { $0.day == dayKey })?.value
     }
 
+    /// The whole-day expenditure last banked for a day, and whether a measured baseline produced it.
+    ///
+    /// Read back rather than recomputed for the same reason `bankedBudgetKcal` is: a second derivation is a
+    /// second answer to one question. Callers that hold no `ProfileStore` — the Today calorie tile — could
+    /// not derive it honestly anyway.
+    ///
+    /// The `measured` flag comes from the CURRENT goal, which is the truth about today. It is used only to
+    /// caption the figure, so a stale flag on a backdated day would mislabel rather than miscount; reading
+    /// the open goal keeps today's caption right, which is the day the tile shows.
+    ///
+    /// nil when nothing is banked — no goal, or food logging never used — and the caller then falls back to
+    /// whatever it showed before.
+    func bankedDietExpenditure(day: String? = nil) async -> (kcal: Double, measured: Bool)? {
+        let dayKey = day ?? Repository.localDayKey(Date())
+        guard let store = await storeHandle(),
+              let points = try? await store.metricSeries(deviceId: DietStore.sourceId,
+                                                         key: DietStore.Keys.expenditure,
+                                                         from: dayKey, to: dayKey),
+              let value = points.first(where: { $0.day == dayKey })?.value,
+              value > 0 else { return nil }
+        let measured = (try? await store.currentDietGoal(deviceId: DietStore.sourceId))?
+            .measuredBaselineKcal != nil
+        return (value, measured)
+    }
+
     /// Local-day bounds as unix seconds, `[start, end)`.
     static func dayBounds(_ dayKey: String) -> (start: Int, end: Int)? {
         let f = DateFormatter()

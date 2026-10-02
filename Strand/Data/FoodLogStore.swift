@@ -119,7 +119,8 @@ struct FoodEntry: Identifiable, Equatable, Codable {
     /// Servings eaten. 1.0 = one serving as the item defines it.
     var portion: Double
     var loggedAt: Date
-    /// Carried but not surfaced in v0, so grouping by meal can arrive later without touching stored data.
+    /// Which meal this was, when it is known. nil means unknown rather than "no meal" — see
+    /// `MealGrouping` for why an unknown time is not inferred into one.
     var mealType: MealType?
 
     init(id: UUID = UUID(), macroSource: String? = nil, itemId: UUID?, nameSnapshot: String,
@@ -156,8 +157,45 @@ enum FoodMacroSource {
     static let roughGuess = "rough-guess"
 }
 
+/// The STORED meal vocabulary: four cases, and nullable.
+///
+/// Deliberately NOT `StrandAnalytics.Meal`, which carries a fifth `unassigned` case for display. nil here
+/// already means unassigned, so making it storable too would give two spellings of one state — and every
+/// reader would then have to handle both or be subtly wrong about one.
 enum MealType: String, Codable, CaseIterable, Equatable {
     case breakfast, lunch, dinner, snack
+
+    /// How this renders. nil maps to `.unassigned`, which is the whole reason that case exists.
+    static func displayMeal(_ stored: MealType?) -> Meal? {
+        guard let stored else { return nil }
+        return Meal(rawValue: stored.rawValue)
+    }
+
+    /// The stored form of an inferred meal. `.unassigned` deliberately does not round-trip: there is
+    /// nothing to store for it, and writing the string "unassigned" would be the second spelling this type
+    /// exists to prevent.
+    static func fromMeal(_ meal: Meal) -> MealType? {
+        MealType(rawValue: meal.rawValue)
+    }
+}
+
+extension FoodEntry {
+
+    /// The meal this renders under.
+    ///
+    /// A stored `mealType` wins. Failing that the time is used — EXCEPT when it is the backfill sentinel,
+    /// which is not a time at all.
+    ///
+    /// THE SENTINEL CHECK IS A LEGACY PATH. `FoodLogView.logTimestamp` stamps a backfilled entry at exactly
+    /// 12:00:00 local as "the real time is unknown", and it was the only writer of that instant — a live
+    /// `Date()` landing on 12:00:00.000 is not a real case. Every entry written from now on stores its meal
+    /// (or nil for a backfill), so this only has to resolve entries logged before that change. It is
+    /// deliberately narrow rather than "anything near midday", which would misread a real noon lunch.
+    var displayMeal: Meal {
+        MealGrouping.meal(explicit: MealType.displayMeal(mealType),
+                          minuteOfDay: FoodEntries.minuteOfDay(loggedAt),
+                          isUnknownTime: FoodEntries.isBackfillSentinel(loggedAt))
+    }
 }
 
 // MARK: - Pure list operations (unit-testable without a store)
@@ -165,6 +203,39 @@ enum MealType: String, Codable, CaseIterable, Equatable {
 /// Add / remove / re-portion / total over a day's entries. Kept free of persistence and UI so the list math
 /// is testable in isolation — the same split `HydrationEntries` uses.
 enum FoodEntries {
+
+    /// Minutes since local midnight for a logged-at instant.
+    static func minuteOfDay(_ date: Date, calendar: Calendar = .current) -> Int {
+        let c = calendar.dateComponents([.hour, .minute], from: date)
+        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
+    }
+
+    /// Whether an instant is the backfill sentinel — exactly 12:00:00 local, to the second.
+    ///
+    /// Checked to the SECOND on purpose. A looser "around midday" test would swallow a genuine 12:05 lunch,
+    /// and the whole point is to tell "time unknown" apart from "ate at noon". See `FoodEntry.displayMeal`
+    /// for why this only concerns entries written before meals were stored.
+    static func isBackfillSentinel(_ date: Date, calendar: Calendar = .current) -> Bool {
+        let c = calendar.dateComponents([.hour, .minute, .second, .nanosecond], from: date)
+        return c.hour == 12 && c.minute == 0 && c.second == 0 && (c.nanosecond ?? 0) < 1_000_000
+    }
+
+    /// The meal to STORE for a log, or nil when it genuinely is not known.
+    ///
+    /// Inferred from the clock only for a log landing on the day it is being made — that is the one case
+    /// where the timestamp is a real time. A backfill gets nil: the user is reconstructing, and guessing
+    /// which meal they are reconstructing is worse than admitting the gap, because a stored guess then
+    /// looks exactly like a stated fact to every later reader.
+    static func mealToStore(dayKey: String, loggedAt: Date, today: String,
+                            explicit: MealType?) -> MealType? {
+        if let explicit { return explicit }
+        guard dayKey == today else { return nil }
+        let meal = MealGrouping.meal(explicit: nil,
+                                     minuteOfDay: minuteOfDay(loggedAt),
+                                     isUnknownTime: false)
+        return MealType.fromMeal(meal)
+    }
+
     /// Append an entry. A non-positive or non-finite portion is rejected outright rather than stored and
     /// silently scaled to zero later, so the list never holds a row that contributes nothing.
     static func adding(_ entries: [FoodEntry], _ entry: FoodEntry) -> [FoodEntry] {
@@ -351,10 +422,16 @@ extension Repository {
                  at date: Date = Date(), mealType: MealType? = nil,
                  saveToLibrary: Bool = true) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(date)
+        // Resolved rather than taken verbatim, so the meal is STORED from now on instead of being inferred
+        // again by every reader. A caller that states one is honoured; otherwise it comes from the clock for
+        // a same-day log and stays nil for a backfill.
+        let resolvedMeal = FoodEntries.mealToStore(dayKey: dayKey, loggedAt: date,
+                                                  today: Repository.localDayKey(Date()),
+                                                  explicit: mealType)
         let entry = FoodEntry(macroSource: item.macroSource,
                               itemId: saveToLibrary ? item.id : nil,
                               nameSnapshot: item.name, macrosSnapshot: item.macros,
-                              portion: portion, loggedAt: date, mealType: mealType)
+                              portion: portion, loggedAt: date, mealType: resolvedMeal)
         // Validated by the SAME pure helper the tests pin, so a bad portion is rejected identically
         // whether it came from the UI or from a future import — not re-checked inline here.
         let current = await foodEntries(day: dayKey)

@@ -64,10 +64,15 @@ public enum FoodAction: Equatable, Sendable {
 public struct FoodActionRequest: Equatable, Sendable {
     public let action: FoodAction
     public let day: FoodActionDay
+    /// The meal the user named, if they did. Worth carrying because "for lunch I had" is how people
+    /// actually describe a backfilled meal — and a backfill has no usable timestamp to infer one from, so
+    /// this is the only way such an entry ever gets grouped.
+    public let meal: Meal?
 
-    public init(action: FoodAction, day: FoodActionDay = .today) {
+    public init(action: FoodAction, day: FoodActionDay = .today, meal: Meal? = nil) {
         self.action = action
         self.day = day
+        self.meal = meal
     }
 }
 
@@ -194,8 +199,21 @@ public enum FoodActionParse {
         switch day(from: body) {
         case .failure(let f): return .failure(f)
         case .success(let day):
-            return single(from: body).map { FoodActionRequest(action: $0, day: day) }
+            return single(from: body).map {
+                FoodActionRequest(action: $0, day: day, meal: meal(from: body))
+            }
         }
+    }
+
+    /// The meal named on an action, if any. Unrecognised and absent both give nil — a meal nobody can parse
+    /// is simply not known, and refusing the whole action over it would lose a perfectly good log.
+    ///
+    /// `unassigned` is rejected too: it is a DISPLAY state for an entry with no meal, so accepting it as an
+    /// input would let a model state the absence of a fact as a fact.
+    static func meal(from body: [String: Any]) -> Meal? {
+        guard let raw = nonEmpty(body["meal"]) ?? nonEmpty(body["mealType"]) else { return nil }
+        guard let parsed = Meal(rawValue: raw.lowercased()), parsed != .unassigned else { return nil }
+        return parsed
     }
 
     /// Which day the action targets. Absent means today, which is what "I just had" means.

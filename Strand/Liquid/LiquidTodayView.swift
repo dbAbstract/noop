@@ -50,6 +50,9 @@ struct LiquidTodayView: View {
     /// Opt-in strap-first calories (default OFF — see `MetricCatalog.preferStrapCaloriesKey`). Drives
     /// `caloriesReadout`, which resolves the tile value, its detail route and its caption together.
     @AppStorage(MetricCatalog.preferStrapCaloriesKey) private var preferStrapCalories = false
+    /// Prefer the diet model's whole-day expenditure on the Calories tile. Default ON, and inert unless food
+    /// logging is on AND a goal exists — see `MetricCatalog.preferDietExpenditureKey`.
+    @AppStorage(MetricCatalog.preferDietExpenditureKey) private var preferDietExpenditure = true
     /// Today's hydration total + goal (ml), resolved in `load()`. nil → the card shows "—".
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
@@ -74,6 +77,9 @@ struct LiquidTodayView: View {
     @State private var stepsEst: Double?           // steps_est, day-keyed to the selected day (fallback)
     @State private var importedStepsDay: Int?      // Apple Health steps for the selected day (middle tier)
     @State private var importedActiveKcalDay: Double?  // #616: Apple Health active energy for the day (calorie fallback)
+    /// The diet model's banked whole-day expenditure for the shown day, and whether a measured baseline
+    /// produced it. nil when nothing is banked — no food logging, or no goal.
+    @State private var dietExpenditureDay: (kcal: Double, measured: Bool)?
     @State private var weightKg: Double?           // #204: Apple Health weight ?: profile fallback
     @State private var hrValues: [Double] = []     // hrBuckets since midnight → 5-min means
     /// Line identity for [hrValues], from the bucket timestamps this used to discard (#2082).
@@ -1824,6 +1830,9 @@ struct LiquidTodayView: View {
         // #616: same-day imported active energy — the calorie fallback when the strap banked no on-device
         // HR estimate for the day, so the tile/card/detail agree (imported-first, mirrors steps).
         importedActiveKcalDay = (await appleA).filter { $0.day == selectedDayKey }.compactMap { $0.activeKcal }.max()
+        // Read for the SHOWN day, not today, so stepping back a day moves this figure with the rest of the
+        // screen rather than leaving today's number under yesterday's heading.
+        dietExpenditureDay = foodEnabled ? await repo.bankedDietExpenditure(day: selectedDayKey) : nil
 
         // Weight for the SELECTED day: prefers a real Apple-Health reading (today's daily, else the
         // "weight" series' newest point so a sparse-but-recent value still renders). Falls back to the
@@ -2003,6 +2012,26 @@ struct LiquidTodayView: View {
     private var caloriesReadout: CaloriesReadout {
         let imported = importedActiveKcalDay
         let onDevice = displayDay?.activeKcalEst
+
+        // The diet model's whole-day figure wins when it exists, because it is the only one of the three
+        // that answers "what did I spend today" across a whole day. The on-device figure's resting floor
+        // accrues only over sampled intervals, so a gappy day reads below resting metabolism; Apple's is
+        // active-only. Nothing is banked unless food logging is on and a goal is set, so this branch simply
+        // does not fire for anyone else.
+        if preferDietExpenditure, let diet = dietExpenditureDay {
+            return CaloriesReadout(
+                value: diet.kcal,
+                metric: MetricCatalog.todayCaloriesMetric(hasImportedKcal: imported != nil,
+                                                          hasOnDeviceKcal: onDevice != nil,
+                                                          preferStrap: preferStrapCalories,
+                                                          hasDietExpenditure: true),
+                // Names the method, and says plainly when it stops being a model. "estimated" is doing real
+                // work here: the figure is resting energy plus steps plus training, and presenting it with
+                // the bare word "Calories" is what made the old number read as a measurement.
+                caption: diet.measured
+                    ? String(localized: "measured from your own data")
+                    : String(localized: "estimated: resting + steps + training"))
+        }
         // Captions name the QUANTITY, not just the provenance: "Calories" alone would read as the same
         // figure in both cases, and the on-device one is roughly 1,700 kcal larger because it includes rest.
         let onDeviceCaption = String(localized: "resting + active, on device")

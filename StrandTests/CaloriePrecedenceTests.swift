@@ -72,6 +72,38 @@ final class CaloriePrecedenceTests: XCTestCase {
         XCTAssertEqual(m?.source, "my-whoop")
     }
 
+    // MARK: - The diet figure takes precedence
+
+    /// The whole-day figure wins over both others when it exists, because it is the only one that answers
+    /// "what did I spend today" for a whole day: the on-device figure's resting floor accrues only over
+    /// sampled intervals, and Apple's is active-only.
+    func testTheDietFigureOutranksBothOtherSources() {
+        let m = MetricCatalog.todayCaloriesMetric(hasImportedKcal: true, hasOnDeviceKcal: true,
+                                                 preferStrap: true, hasDietExpenditure: true)
+        XCTAssertEqual(m?.key, DietStore.Keys.expenditure)
+        XCTAssertEqual(m?.source, DietStore.sourceId)
+    }
+
+    /// And it is INERT when nothing is banked — a user who is not dieting must see no change at all.
+    func testWithoutADietFigureThePrecedenceIsExactlyAsItWas() {
+        XCTAssertEqual(MetricCatalog.todayCaloriesMetric(hasImportedKcal: true, hasOnDeviceKcal: true,
+                                                        preferStrap: false, hasDietExpenditure: false)?.source,
+                       "apple-health")
+        XCTAssertEqual(MetricCatalog.todayCaloriesMetric(hasImportedKcal: true, hasOnDeviceKcal: true,
+                                                        preferStrap: true, hasDietExpenditure: false)?.source,
+                       "my-whoop")
+        // The defaulted parameter must leave every existing call site byte-identical.
+        XCTAssertEqual(MetricCatalog.todayCaloriesMetric(hasImportedKcal: true, hasOnDeviceKcal: true,
+                                                        preferStrap: true),
+                       MetricCatalog.todayCaloriesMetric(hasImportedKcal: true, hasOnDeviceKcal: true,
+                                                        preferStrap: true, hasDietExpenditure: false))
+    }
+
+    /// The series it routes to must actually be registered, or the tile taps through to nothing.
+    func testTheDietExpenditureSeriesIsCharted() {
+        XCTAssertNotNil(MetricCatalog.metric(key: DietStore.Keys.expenditure, source: DietStore.sourceId))
+    }
+
     // MARK: - Food log metric registration
 
     /// Every CHARTABLE food-log key needs a catalog descriptor or it charts nowhere.

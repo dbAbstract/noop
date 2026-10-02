@@ -339,6 +339,9 @@ final class AICoachEngine: ObservableObject {
     save something for later, or want to log it against a day themselves.
     • `day` is "today" (the default), "yesterday", or "YYYY-MM-DD". Use it when they say when they ate. \
     Never invent a date from a vague phrase — if they say "a few days ago", ask which day.
+    • `meal` is "breakfast", "lunch", "dinner" or "snack". Set it when they SAY which meal it was — it is \
+    the only way a backdated entry gets grouped, since a past day has no usable time to work it out from. \
+    Do not guess one they did not state.
     • `edit` corrects a saved food's numbers. Never `edit` a food marked recipe.
     • Macros are PER SERVING; `portion` is how many servings. Your kcal must agree with your own macros \
     (4 kcal/g protein and carbs, 9 kcal/g fat) within about 10%, or the entry is discarded — so do the \

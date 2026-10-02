@@ -56,6 +56,8 @@ struct DataSourcesView: View {
     // here (a pure consumer of LiveState, isolated from the WHOOP/central path).
     /// Calorie source precedence (see `appleHealthCard`). Default OFF preserves imported-first behaviour.
     @AppStorage(MetricCatalog.preferStrapCaloriesKey) private var preferStrapCalories = false
+    @AppStorage(MetricCatalog.preferDietExpenditureKey) private var preferDietExpenditure = true
+    @AppStorage(FoodLogStore.enabledKey) private var foodLoggingEnabled = false
 
     @AppStorage(HrBroadcaster.defaultsKey) private var broadcastHrEnabled = false
     @AppStorage(PuffinExperiment.broadcastHrKey) private var strapBroadcastHrEnabled = false
@@ -251,6 +253,27 @@ struct DataSourcesView: View {
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // Only shown with food logging on, because with it off nothing is banked and the toggle would
+            // be a switch that visibly does nothing.
+            if foodLoggingEnabled {
+                Divider().overlay(StrandPalette.hairline)
+                Toggle(isOn: $preferDietExpenditure) {
+                    Text("Use the whole-day estimate")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.textPrimary)
+                }
+                .toggleStyle(.switch)
+                .tint(StrandPalette.accent)
+                .accessibilityHint("Show the diet model's whole-day expenditure on the Calories tile")
+
+                // Explains WHY the heart-rate figure can read low, because that is the question this
+                // setting exists to answer and the honest answer is not "it is broken".
+                Text("Default. Shows what a day like yours costs — resting energy, your steps and your training — rather than the heart-rate figure, which only accrues resting energy for the minutes your strap was actually sending data and ignores walking entirely. That makes it read low on a day with gaps or no hard exercise. Once NOOP has worked out your real expenditure from your own logs and weigh-ins, this figure becomes that.")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
