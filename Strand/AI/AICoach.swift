@@ -317,6 +317,13 @@ final class AICoachEngine: ObservableObject {
     {"action": "edit",   "itemId": "<id>", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
     {"action": "weight", "kg": 72.4, "day": "today"}
 
+    WHAT YOU CAN SEE about their diet, when those blocks are present above: their saved foods, their \
+    recipes and what each is made of, EVERYTHING THEY HAVE EATEN TODAY grouped by meal, where the day \
+    stands against their budget, their full macro targets, and their weight trend. Use it. Refer to meals \
+    they have already logged rather than asking what they have had, do not propose logging something that \
+    is already there, and answer "am I losing weight" from the trend line — including its caveat: if that \
+    range includes zero, say it cannot be told from no change yet rather than calling it a loss.
+
     ESTIMATE THE MACROS YOURSELF. You know roughly what food contains — use that. "Two scrambled eggs on \
     sourdough", "a flat white", "chicken katsu curry from Wasabi" are all things you can price to within \
     the accuracy this app needs, and the user came to you precisely so they do not have to look it up. \
@@ -1159,33 +1166,104 @@ final class AICoachEngine: ObservableObject {
     /// invites a model to insist the user has never eaten anything.
     func foodContextBlock() async -> String {
         guard UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) else { return "" }
-        let library = FoodLibrary.sorted(await repo.foodLibrary())
-        guard !library.isEmpty else { return "" }
-        let recipeIds = await repo.recipeItemIds()
-        let entries = library.map {
-            FoodDigestEntry(id: $0.id.uuidString, name: $0.name, servingLabel: $0.servingLabel,
-                            macros: $0.macros, isRecipe: recipeIds.contains($0.id))
-        }
-        var block = FoodLibraryDigest.block(entries: entries)
 
-        // Today's standing. The budget is READ BACK from what the day last banked rather than
-        // recomputed here — a second derivation would be a second answer to one question, and this
-        // engine holds no ProfileStore to derive it from honestly anyway.
-        let totals = await repo.foodTotals()
+        var blocks: [String] = []
+        let library = FoodLibrary.sorted(await repo.foodLibrary())
+        let recipeIds = await repo.recipeItemIds()
+
+        // NOT gated on the library being non-empty, which it used to be. A user who only ever quick-adds
+        // one-off meals has an empty library and a perfectly full day of logs, and that early return threw
+        // away everything below — their whole diet was invisible to the coach.
+        if !library.isEmpty {
+            blocks.append(FoodLibraryDigest.block(entries: library.map {
+                FoodDigestEntry(id: $0.id.uuidString, name: $0.name, servingLabel: $0.servingLabel,
+                                macros: $0.macros, isRecipe: recipeIds.contains($0.id))
+            }))
+        }
+
+        // The recipes' INGREDIENTS. The library block only marks which foods are recipes; without the parts
+        // the coach cannot reason about one or suggest a change to it.
+        let recipes = await repo.recipes(library: library)
+        if !recipes.isEmpty {
+            let byId = Dictionary(uniqueKeysWithValues: library.map { ($0.id, $0) })
+            let lines = FoodLibraryDigest.recipeLines(recipes.map { recipe in
+                (name: recipe.item.name,
+                 handle: FoodLibraryDigest.handle(for: recipe.item.id.uuidString),
+                 parts: recipe.parts.map { part in
+                     (name: part.name(in: byId) ?? String(localized: "deleted ingredient"),
+                      quantity: part.quantity)
+                 })
+            })
+            if !lines.isEmpty { blocks.append(lines) }
+        }
+
+        // WHAT WAS ACTUALLY EATEN TODAY, which was the glaring omission: the coach knew the totals and the
+        // library but not what the day consisted of, so it could neither refer to a meal already logged nor
+        // avoid proposing it twice.
+        let today = Repository.localDayKey(Date())
+        let entries = await repo.foodEntries(day: today)
+        let groups = MealGrouping.grouped(entries, meal: { $0.displayMeal },
+                                          macros: { $0.effectiveMacros })
+        blocks.append(FoodLibraryDigest.eatenBlock(
+            day: String(localized: "today"),
+            groups: groups.map { group in
+                (meal: group.meal.rawValue.uppercased(),
+                 items: group.items.map {
+                     (name: $0.nameSnapshot, portion: $0.portion, macros: $0.effectiveMacros)
+                 },
+                 total: group.total)
+            }))
+
+        // Where the day stands, and the full macro targets rather than protein alone.
+        let totals = FoodEntries.total(entries)
         let budget = await repo.bankedBudgetKcal()
         let goal = await repo.currentDietGoal()
-        var proteinTarget: Double?
-        if let rate = goal?.proteinGPerKg, let budget, let weight = goal?.startWeightKg {
-            // Weight from the goal rather than the profile, for the same reason: it is the figure already
-            // on hand. A few hundred grams of drift moves the protein target by under a gram.
-            proteinTarget = MacroTargets.targets(budgetKcal: budget, weightKg: weight,
-                                                 proteinGPerKg: rate).proteinG
+        var targets: MacroTargetSet?
+        if let rate = goal?.proteinGPerKg, let budget {
+            // CURRENT weight, not the goal's start weight, which is what this used before: a goal set eight
+            // kilos ago would otherwise keep pricing the protein target at the old mass.
+            targets = MacroTargets.targets(budgetKcal: budget, weightKg: profileWeightKg,
+                                           proteinGPerKg: rate)
         }
-        block += "\n\n" + FoodLibraryDigest.todayLine(consumedKcal: totals.kcal,
-                                                       budgetKcal: budget,
-                                                       proteinG: totals.protein,
-                                                       proteinTargetG: proteinTarget)
-        return block
+        blocks.append(FoodLibraryDigest.todayLine(consumedKcal: totals.kcal,
+                                                  budgetKcal: budget,
+                                                  proteinG: totals.protein,
+                                                  proteinTargetG: targets?.proteinG))
+        if let targets { blocks.append(FoodLibraryDigest.targetsLine(targets)) }
+
+        // The weight trend, with its interval — the other half of whether the diet is working, and absent
+        // entirely before, so the coach could not answer "am I losing" at all.
+        blocks.append(await weightContextLine())
+
+        return blocks.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
+    /// The body mass the macro targets are priced at.
+    ///
+    /// Read from the profile's stored scalar rather than taken from the goal's `startWeightKg`, which is
+    /// what this used before: a goal set eight kilos ago would keep pricing the protein target at the old
+    /// mass. `logWeight` writes this scalar on every weigh-in, so it is the current figure.
+    ///
+    /// Falls back to 0, which `MacroTargets.targets` already treats as unusable and answers with zeros
+    /// rather than a NaN — so an install with no profile weight gets no targets instead of nonsense ones.
+    private var profileWeightKg: Double {
+        UserDefaults.standard.double(forKey: "profile.weightKg")
+    }
+
+    /// The weight line, assembled from the same fit `WeightView` renders.
+    func weightContextLine() async -> String {
+        let rows = await repo.weightHistory(days: 120)
+        let readings = rows.compactMap { row -> WeightReading? in
+            guard let idx = Repository.dayIndex(row.day) else { return nil }
+            return WeightReading(dayIndex: idx, kg: row.kg)
+        }
+        let fit = WeightTrend.fit(readings)
+        return FoodLibraryDigest.weightLine(latestKg: rows.last?.kg,
+                                            trendKg: WeightTrend.smoothed(readings).last?.kg,
+                                            slopeKgPerWeek: fit?.slopeKgPerWeek,
+                                            marginKgPerWeek: fit?.weeklyMarginKg,
+                                            isDistinguishable: fit?.isDistinguishableFromZero ?? false,
+                                            weighInDays: rows.count)
     }
 
     /// One derived stress line for the coach context: the Baevsky Stress Index over TODAY's R-R, read

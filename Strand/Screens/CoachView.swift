@@ -63,7 +63,14 @@ struct CoachView: View {
                        // Liquid finish: the same full-bleed day-of-sky backdrop Today + the other liquid
                        // tabs carry, so Coach sits in one atmosphere. Static + non-interactive; the frosted
                        // message/setup cards below sit on the opaque canvas and stay legible.
-                       topBackground: liquidScaffoldSky()) {
+                       topBackground: liquidScaffoldSky(),
+                       bottomBar: {
+                           // DOCKED, not the column's last row. A multiline field growing inside the scroll
+                           // content extends toward the keyboard while the avoidance offset stays where it
+                           // was computed, so the line being typed slides underneath. As a safe-area inset
+                           // the keyboard lifts the whole bar, which cannot fall out of step.
+                           if coach.isConfigured { composerBar }
+                       }) {
             if coach.isConfigured {
                 connectedHeader
                 transcript
@@ -78,12 +85,6 @@ struct CoachView: View {
                     followUpChips
                 } else {
                     suggestionChips
-                }
-                composer
-                // K12: show a rough token estimate when the draft is non-empty.
-                if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                   let tokens = coach.estimatedTokens(forDraft: draft) {
-                    tokenEstimateBar(tokens)
                 }
                 privacyFootnote
             } else {
@@ -518,6 +519,17 @@ struct CoachView: View {
                     .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                     #endif
                     .frame(minHeight: 220, maxHeight: 460)
+                    // On APPEAR as well as on change. A restored transcript changes neither the message
+                    // count nor `sending`, so without this, opening Coach sat on the oldest message — the
+                    // one part of the conversation nobody wants to read first.
+                    //
+                    // In a `task` rather than `onAppear`: the transcript is a `LazyVStack`, so the last row
+                    // may not exist yet when `onAppear` fires and `scrollTo` would address nothing. One
+                    // yield puts this after the first layout pass.
+                    .task {
+                        await Task.yield()
+                        scrollToEnd(proxy, animated: false)
+                    }
                     .onChangeCompat(of: coach.messages.count) { _ in
                         scrollToEnd(proxy)
                     }
@@ -767,6 +779,25 @@ struct CoachView: View {
         .padding(.top, 2)
     }
 
+    /// The docked composer surface: the input row, plus the token estimate directly under it.
+    ///
+    /// The token bar travels WITH the composer rather than staying in the column, because it describes the
+    /// draft — left behind it would annotate a field that is no longer beside it.
+    private var composerBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            composer
+            // K12: show a rough token estimate when the draft is non-empty.
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let tokens = coach.estimatedTokens(forDraft: draft) {
+                tokenEstimateBar(tokens)
+            }
+        }
+        .padding(.horizontal, NoopMetrics.screenHPadding)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(.bar)
+    }
+
     /// The input bar, a frosted overlay surface holding the field + Send, so the composer reads as a
     /// distinct docked surface above the canvas rather than two floating controls.
     private var composer: some View {
@@ -961,13 +992,22 @@ struct CoachView: View {
         }
     }
 
-    private func scrollToEnd(_ proxy: ScrollViewProxy) {
-        withAnimation(StrandMotion.fade) {
+    /// Jump the transcript to its newest turn.
+    ///
+    /// `animated: false` for the first pass — animating a jump the user did not ask for reads as the screen
+    /// scrolling away from them, and on open there is nothing to animate FROM.
+    private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        let jump = {
             if coach.sending {
                 proxy.scrollTo("typing", anchor: .bottom)
             } else if let last = coach.messages.last {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
+        }
+        if animated {
+            withAnimation(StrandMotion.fade) { jump() }
+        } else {
+            jump()
         }
     }
 }

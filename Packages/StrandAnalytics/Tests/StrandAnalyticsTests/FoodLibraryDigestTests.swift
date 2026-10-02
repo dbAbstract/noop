@@ -167,3 +167,118 @@ final class FoodLibraryDigestTests: XCTestCase {
         XCTAssertTrue(line.contains("not fixed"))
     }
 }
+
+
+// MARK: - The blocks that were missing
+
+/// The coach knew the library and the day's totals but not what the day CONSISTED of, nor the weight
+/// trend, nor a recipe's parts. These pin the blocks that closed those gaps.
+extension FoodLibraryDigestTests {
+
+    private func macros(_ kcal: Double, _ p: Double = 0, _ c: Double = 0, _ f: Double = 0) -> MacroTotals {
+        MacroTotals(kcal: kcal, protein: p, carbs: c, fat: f, fiber: 0)
+    }
+
+    func testEatenBlockNamesEachMealAndItsSubtotal() {
+        let block = FoodLibraryDigest.eatenBlock(day: "today", groups: [
+            (meal: "LUNCH",
+             items: [(name: "Chicken katsu", portion: 1, macros: macros(610, 34, 72, 22))],
+             total: macros(610)),
+            (meal: "DINNER",
+             items: [(name: "Salmon", portion: 1.5, macros: macros(680, 48, 64, 24))],
+             total: macros(680)),
+        ])
+        XCTAssertTrue(block.contains("LUNCH"))
+        XCTAssertTrue(block.contains("610 kcal"))
+        XCTAssertTrue(block.contains("Chicken katsu"))
+        XCTAssertTrue(block.contains("34P"))
+        // A non-unit portion must be stated, or the coach reads the scaled macros against one serving.
+        XCTAssertTrue(block.contains("1.5"))
+    }
+
+    /// An empty day says so explicitly. Omitting the block would let the coach assume it simply was not
+    /// given the data and ask what the user has eaten — the exact question this block exists to answer.
+    func testAnEmptyDaySaysNothingLoggedRatherThanGoingAbsent() {
+        let block = FoodLibraryDigest.eatenBlock(day: "today", groups: [])
+        XCTAssertTrue(block.contains("nothing logged"))
+    }
+
+    func testEatenBlockCapsALongDayAndSaysSo() {
+        let items = (0..<40).map { (name: "Snack \($0)", portion: 1.0, macros: macros(50)) }
+        let block = FoodLibraryDigest.eatenBlock(day: "today", groups: [
+            (meal: "SNACKS", items: items, total: macros(2_000)),
+        ], maxItems: 5)
+        XCTAssertTrue(block.contains("35 more not listed"))
+    }
+
+    // MARK: - Targets
+
+    func testTargetsLineCarriesAllThreeAndNamesWhichIsAFloor() {
+        let t = MacroTargets.targets(budgetKcal: 2_150, weightKg: 73, proteinGPerKg: 1.2)
+        let line = FoodLibraryDigest.targetsLine(t)
+        XCTAssertTrue(line.contains("protein 88 g") || line.contains("protein 87.6 g"))
+        XCTAssertTrue(line.contains("fat at least"))
+        XCTAssertTrue(line.contains("carbs"))
+        XCTAssertTrue(line.contains("FLOOR"))
+    }
+
+    func testAnOverCommittedBudgetIsFlaggedToTheCoach() {
+        let t = MacroTargets.targets(budgetKcal: 600, weightKg: 73, proteinGPerKg: 2.0)
+        XCTAssertTrue(FoodLibraryDigest.targetsLine(t).contains("cannot all be met"))
+    }
+
+    // MARK: - Weight
+
+    /// THE IMPORTANT ONE. A coach handed a bare rate will talk about it as fact, and a diet judged from
+    /// noise is the failure the whole trend apparatus exists to prevent.
+    func testAnIndistinguishableRateIsCalledOutAsSuch() {
+        let line = FoodLibraryDigest.weightLine(latestKg: 73, trendKg: 73.1,
+                                                slopeKgPerWeek: -0.08, marginKgPerWeek: 0.22,
+                                                isDistinguishable: false, weighInDays: 5)
+        XCTAssertTrue(line.contains("INCLUDES ZERO"))
+        XCTAssertTrue(line.contains("do not describe this as losing"))
+    }
+
+    func testADistinguishableRateIsStatedPlainly() {
+        let line = FoodLibraryDigest.weightLine(latestKg: 72.4, trendKg: 72.6,
+                                                slopeKgPerWeek: -0.31, marginKgPerWeek: 0.09,
+                                                isDistinguishable: true, weighInDays: 14)
+        XCTAssertTrue(line.contains("-0.31"))
+        XCTAssertTrue(line.contains("distinguishable"))
+        XCTAssertFalse(line.contains("INCLUDES ZERO"))
+    }
+
+    func testNoWeighInsSaysWhatThatCosts() {
+        let line = FoodLibraryDigest.weightLine(latestKg: nil, trendKg: nil, slopeKgPerWeek: nil,
+                                                marginKgPerWeek: nil, isDistinguishable: false,
+                                                weighInDays: 0)
+        XCTAssertTrue(line.contains("no weigh-ins"))
+        XCTAssertTrue(line.contains("real expenditure"))
+    }
+
+    func testTooFewReadingsReportsNoRateRatherThanAFabricatedOne() {
+        let line = FoodLibraryDigest.weightLine(latestKg: 73, trendKg: nil, slopeKgPerWeek: nil,
+                                                marginKgPerWeek: nil, isDistinguishable: false,
+                                                weighInDays: 2)
+        XCTAssertTrue(line.contains("Too few readings"))
+    }
+
+    // MARK: - Recipes
+
+    func testRecipeLinesListTheParts() {
+        let lines = FoodLibraryDigest.recipeLines([
+            (name: "Protein shake", handle: "a1b2c3d4",
+             parts: [(name: "Whey", quantity: 1), (name: "Oat milk", quantity: 3)]),
+        ])
+        XCTAssertTrue(lines.contains("Protein shake"))
+        XCTAssertTrue(lines.contains("Whey"))
+        XCTAssertTrue(lines.contains("3"))
+        // The coach must be told not to edit a recipe's macros — they are recomputed from the parts, so an
+        // edit would appear to work and silently revert.
+        XCTAssertTrue(lines.contains("never edit"))
+    }
+
+    func testNoRecipesProducesNoBlock() {
+        XCTAssertEqual(FoodLibraryDigest.recipeLines([]), "")
+    }
+}

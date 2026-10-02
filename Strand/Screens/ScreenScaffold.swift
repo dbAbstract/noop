@@ -2,7 +2,7 @@ import SwiftUI
 import StrandDesign
 
 /// Standard scrollable screen container: title + dark surface + content column.
-struct ScreenScaffold<Content: View, Trailing: View>: View {
+struct ScreenScaffold<Content: View, Trailing: View, Bottom: View>: View {
     /// Optional — when nil (and no subtitle) the header is omitted entirely, so a screen can supply its
     /// own custom header in `content` (iOS Today's compact top bar).
     let title: LocalizedStringKey?
@@ -23,6 +23,16 @@ struct ScreenScaffold<Content: View, Trailing: View>: View {
     /// Optional element pinned to the header's trailing edge (e.g. the strap-battery badge on Today).
     /// Defaults to `EmptyView` via the convenience init below, so other screens are unaffected.
     @ViewBuilder var trailing: () -> Trailing
+    /// Optional bar DOCKED below the scroll content, applied as a bottom `safeAreaInset`.
+    ///
+    /// Exists for a chat composer, which must never be covered by the keyboard. Inside the scroll column a
+    /// growing multiline field extends toward the keyboard and the automatic avoidance offset — computed
+    /// when the keyboard appeared — does not follow it, so the line being typed ends up underneath. As a
+    /// safe-area inset the bar is lifted by the keyboard itself, which is the only version of this that
+    /// cannot drift out of sync.
+    ///
+    /// Defaults to `EmptyView` through the convenience init, so no existing screen is affected.
+    @ViewBuilder var bottomBar: () -> Bottom
     @ViewBuilder var content: () -> Content
 
     // iPad runs the shared screens full-screen, where an uncapped column gives 120+ character lines
@@ -73,6 +83,10 @@ struct ScreenScaffold<Content: View, Trailing: View>: View {
         // the scroll content — edge-to-edge under the status bar. The scene is CONFINED to the header+hero
         // band (see SceneScreenBackground.height) so it fades out ABOVE the dashboard cards, which then sit
         // on the opaque canvas and stay fully legible (2026-06-23: cards were "losing the data").
+        // Docked below the scroll content. On iOS the keyboard lifts a bottom safe-area inset for free,
+        // which is exactly the property a composer needs and the reason this is not just the column's last
+        // row. `EmptyView` for every screen that passes nothing, so the inset is layout-neutral there.
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar() }
         .background(alignment: .top) {
             ZStack(alignment: .top) {
                 StrandPalette.surfaceBase
@@ -132,14 +146,39 @@ struct ScreenScaffold<Content: View, Trailing: View>: View {
     }
 }
 
-extension ScreenScaffold where Trailing == EmptyView {
+extension ScreenScaffold where Trailing == EmptyView, Bottom == EmptyView {
     /// Convenience init for the common case with no header trailing element — keeps every existing
     /// call site (which never passed `trailing`) source-compatible.
     init(title: LocalizedStringKey?, subtitle: LocalizedStringKey? = nil,
          onRefresh: (() async -> Void)? = nil, lazy: Bool = false, topBackground: AnyView? = nil,
          @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, subtitle: subtitle, onRefresh: onRefresh, lazy: lazy,
-                  topBackground: topBackground, trailing: { EmptyView() }, content: content)
+                  topBackground: topBackground, trailing: { EmptyView() },
+                  bottomBar: { EmptyView() }, content: content)
+    }
+}
+
+extension ScreenScaffold where Trailing == EmptyView {
+    /// A screen with a docked bottom bar and no header trailing element — the chat shape.
+    init(title: LocalizedStringKey?, subtitle: LocalizedStringKey? = nil,
+         onRefresh: (() async -> Void)? = nil, lazy: Bool = false, topBackground: AnyView? = nil,
+         @ViewBuilder bottomBar: @escaping () -> Bottom,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.init(title: title, subtitle: subtitle, onRefresh: onRefresh, lazy: lazy,
+                  topBackground: topBackground, trailing: { EmptyView() },
+                  bottomBar: bottomBar, content: content)
+    }
+}
+
+extension ScreenScaffold where Bottom == EmptyView {
+    /// A screen with a header trailing element and no docked bar — Today's shape.
+    init(title: LocalizedStringKey?, subtitle: LocalizedStringKey? = nil,
+         onRefresh: (() async -> Void)? = nil, lazy: Bool = false, topBackground: AnyView? = nil,
+         @ViewBuilder trailing: @escaping () -> Trailing,
+         @ViewBuilder content: @escaping () -> Content) {
+        self.init(title: title, subtitle: subtitle, onRefresh: onRefresh, lazy: lazy,
+                  topBackground: topBackground, trailing: trailing,
+                  bottomBar: { EmptyView() }, content: content)
     }
 }
 
