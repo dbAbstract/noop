@@ -56,14 +56,18 @@ struct FoodProposal: Identifiable, Equatable {
     /// How that day reads on the card. Carried rather than re-derived so the label and the write cannot
     /// disagree about which day they mean.
     let dayLabel: String
+    /// The meal the user named, passed through to the write so a backfilled entry — which has no usable
+    /// timestamp — still groups under the meal they said it was.
+    let meal: MealType?
 
     init(id: UUID = UUID(), kind: Kind, state: State = .pending,
-         dayKey: String, dayLabel: String) {
+         dayKey: String, dayLabel: String, meal: MealType? = nil) {
         self.id = id
         self.kind = kind
         self.state = state
         self.dayKey = dayKey
         self.dayLabel = dayLabel
+        self.meal = meal
     }
 
     /// Whether this writes to a day other than today, which the card must say out loud.
@@ -182,7 +186,8 @@ extension FoodProposal {
         }
 
         func proposal(_ kind: Kind) -> FoodProposal {
-            FoodProposal(kind: kind, dayKey: day.key, dayLabel: day.label)
+            FoodProposal(kind: kind, dayKey: day.key, dayLabel: day.label,
+                         meal: request.meal.flatMap(MealType.fromMeal))
         }
 
         switch request.action {
@@ -239,7 +244,8 @@ extension Repository {
         case .log(let item, let portion):
             // saveToLibrary: true because the food is ALREADY in the library — this is what stamps
             // `lastUsedAt` so the picker's recents stay meaningful, matching a pick in the Add food sheet.
-            await logFood(item: item, portion: portion, day: day, at: date, saveToLibrary: true)
+            await logFood(item: item, portion: portion, day: day, at: date,
+                          mealType: proposal.meal, saveToLibrary: true)
             return true
 
         case .create(let name, let serving, let macros, let portion):
@@ -251,7 +257,7 @@ extension Repository {
                                 name: name, servingLabel: serving, macros: macros)
             if saveToLibrary { await saveFoodItem(item) }
             await logFood(item: item, portion: portion, day: day, at: date,
-                          saveToLibrary: saveToLibrary)
+                          mealType: proposal.meal, saveToLibrary: saveToLibrary)
             return true
 
         case .edit(let item, let name, let macros):

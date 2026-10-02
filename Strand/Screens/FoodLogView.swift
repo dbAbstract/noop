@@ -249,18 +249,60 @@ struct FoodLogView: View {
                         dayStepper
                     }
 
-                    if !entries.isEmpty {
+                    if entries.isEmpty {
                         Divider().overlay(StrandPalette.hairline)
-                        ForEach(entries) { entry in
-                            entryRow(entry)
-                            if entry.id != entries.last?.id {
-                                Divider().overlay(StrandPalette.hairline)
+                        Text(isToday
+                             ? "Nothing logged yet today."
+                             : "Nothing logged for this day.")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                    } else {
+                        // Grouped by meal, with a subtotal each. "Dinner was 680" is a far more useful fact
+                        // than six rows that happen to sum to it — and only non-empty groups render, so a
+                        // skipped breakfast leaves no heading implying something was missed.
+                        ForEach(mealGroups, id: \.meal) { group in
+                            Divider().overlay(StrandPalette.hairline)
+                            mealHeader(group)
+                            ForEach(group.items) { entry in
+                                entryRow(entry)
                             }
                         }
                     }
                 }
             }
             .opacity(cardOpacity)
+        }
+    }
+
+    /// The day's entries in meal groups. Derived rather than stored, so it cannot drift from `entries`.
+    private var mealGroups: [MealGrouping.Group<FoodEntry>] {
+        MealGrouping.grouped(entries, meal: { $0.displayMeal }, macros: { $0.effectiveMacros })
+    }
+
+    @ViewBuilder
+    private func mealHeader(_ group: MealGrouping.Group<FoodEntry>) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(mealTitle(group.meal))
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+            Spacer(minLength: NoopMetrics.space2)
+            Text("\(intString(group.total.kcal)) kcal")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textSecondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(mealTitle(group.meal)), \(intString(group.total.kcal)) kilocalories")
+    }
+
+    private func mealTitle(_ meal: Meal) -> String {
+        switch meal {
+        case .breakfast: return String(localized: "BREAKFAST")
+        case .lunch: return String(localized: "LUNCH")
+        case .dinner: return String(localized: "DINNER")
+        case .snack: return String(localized: "SNACKS")
+        // Not "OTHER" or "UNKNOWN", which sound like something went wrong. These are entries added after
+        // the fact, which is a normal thing to do and the day stepper exists to support.
+        case .unassigned: return String(localized: "ADDED LATER")
         }
     }
 
@@ -329,7 +371,13 @@ struct FoodLogView: View {
     private func portionSummary(_ entry: FoodEntry) -> String {
         let p = portionString(entry.portion)
         let m = entry.effectiveMacros
-        return String(localized: "\(p) × serving · \(intString(m.protein))P \(intString(m.carbs))C \(intString(m.fat))F")
+        let macros = String(localized: "\(p) × serving · \(intString(m.protein))P \(intString(m.carbs))C \(intString(m.fat))F")
+        // The time, but ONLY when it is a real one. A backfilled entry's timestamp is the midday sentinel,
+        // and printing "12:00" on it would state a time nobody recorded — the same guess-dressed-as-a-fact
+        // the sentinel itself exists to avoid.
+        guard !FoodEntries.isBackfillSentinel(entry.loggedAt) else { return macros }
+        let time = entry.loggedAt.formatted(.dateTime.hour().minute().locale(AppLanguage.activeLocale))
+        return "\(time) · \(macros)"
     }
 
     // MARK: - Recipes

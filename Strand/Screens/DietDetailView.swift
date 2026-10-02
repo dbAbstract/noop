@@ -140,7 +140,7 @@ struct DietDetailView: View {
                         line("Training", int(e.expenditure.workoutKcal),
                              note: "measured from heart rate")
                         Divider().overlay(StrandPalette.hairline)
-                        line("Spent", int(e.expenditure.totalKcal), emphasis: true)
+                        line("Estimated Spend", int(e.expenditure.totalKcal), emphasis: true)
                         line("Deficit", "−\(int(e.deficitKcal ?? 0))")
                         line("Budget", int(budget), emphasis: true)
                         line("Eaten", int(consumedToday))
