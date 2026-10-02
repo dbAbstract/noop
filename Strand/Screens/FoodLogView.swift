@@ -28,7 +28,6 @@ struct FoodLogView: View {
     /// Recipes, composed against `library` in the same reload — so a recipe can never be shown resolving
     /// against a different library than the one on screen beside it.
     @State private var recipes: [Recipe] = []
-    @State private var weightToday: Double?
     @State private var reloadTick = 0
 
     @State private var showAddSheet = false
@@ -37,9 +36,6 @@ struct FoodLogView: View {
     @State private var buildingRecipe: RecipeEditTarget?
     @State private var editingEntry: FoodEntry?
     @State private var editingItem: FoodItem?
-    @State private var weightHistory: [(day: String, kg: Double)] = []
-    @State private var editingWeightDay: WeightEditTarget?
-    @State private var weightDraft = ""
 
     /// Which day is being logged to. Days BACK from today, so 0 is today and 1 is yesterday — the
     /// direction the UI moves in, and it makes "never in the future" a type-level fact rather than a
@@ -75,7 +71,6 @@ struct FoodLogView: View {
                 entriesSection
                 recipesSection
                 quickAddSection
-                weightSection
                 historySection
             }
         }
@@ -99,13 +94,6 @@ struct FoodLogView: View {
             RecipeBuilderSheet(existing: target.recipe, library: library,
                                onSaved: { reloadTick += 1 }, onDeleted: { reloadTick += 1 })
                 .environmentObject(repo)
-        }
-        .sheet(item: $editingWeightDay) { target in
-            EditWeightSheet(day: target.day,
-                            kg: weightHistory.first(where: { $0.day == target.day })?.kg ?? 0,
-                            onDone: { reloadTick += 1 })
-                .environmentObject(repo)
-                .environmentObject(profile)
         }
         .sheet(item: $editingEntry) { entry in
             EditPortionSheet(entry: entry) { newPortion in
@@ -466,78 +454,14 @@ struct FoodLogView: View {
         }
     }
 
-    // MARK: - Weight
-
-    private var weightSection: some View {
-        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Weight", overline: LocalizedStringKey(dayLabel))
-            NoopCard {
-                VStack(alignment: .leading, spacing: NoopMetrics.space3) {
-                    // States the WHY plainly: a weigh-in is not decoration here, it is the second input the
-                    // expenditure estimate needs, and it also keeps the resting-energy term honest.
-                    Text("A daily weigh-in keeps your resting-energy estimate accurate, and is what lets NOOP work out your real expenditure from intake over a few weeks.")
-                        .font(StrandFont.footnote)
-                        .foregroundStyle(StrandPalette.textTertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let w = weightToday {
-                        Text("Logged today: \(String(format: "%.1f", locale: AppLanguage.activeLocale, w)) kg")
-                            .font(StrandFont.subhead)
-                            .foregroundStyle(StrandPalette.statusPositive)
-                    }
-
-                    if !weightHistory.isEmpty {
-                        Divider().overlay(StrandPalette.hairline)
-                        Text("Recent weigh-ins")
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textTertiary)
-                        ForEach(weightHistory.prefix(5), id: \.day) { row in
-                            Button { editingWeightDay = WeightEditTarget(day: row.day) } label: {
-                                HStack {
-                                    Text(row.day)
-                                        .font(StrandFont.footnote)
-                                        .foregroundStyle(StrandPalette.textTertiary)
-                                    Spacer()
-                                    Text(String(format: "%.1f kg", locale: AppLanguage.activeLocale, row.kg))
-                                        .font(StrandFont.subhead)
-                                        .foregroundStyle(StrandPalette.textPrimary)
-                                    Image(systemName: "pencil")
-                                        .font(StrandFont.caption)
-                                        .foregroundStyle(StrandPalette.textTertiary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Edit weigh-in for \(row.day)")
-                        }
-                        Divider().overlay(StrandPalette.hairline)
-                    }
-
-                    HStack(spacing: NoopMetrics.space3) {
-                        TextField("Weight in kg", text: $weightDraft)
-                            .textFieldStyle(.roundedBorder)
-                        #if os(iOS)
-                            .keyboardType(.decimalPad)
-                        #endif
-                        Button("Log") {
-                            Task {
-                                guard let kg = Double(weightDraft.trimmingCharacters(in: .whitespaces)) else { return }
-                                // Only a weigh-in for TODAY updates the profile: that scalar is what the
-                                // expenditure model prices the body at right now, and backfilling last
-                                // Tuesday says nothing about today's mass.
-                                await repo.logWeight(kg: kg, day: selectedDay,
-                                                     profile: isToday ? profile : nil)
-                                weightDraft = ""
-                                reloadTick += 1
-                            }
-                        }
-                        .buttonStyle(NoopButtonStyle(.secondary))
-                        .disabled(Double(weightDraft.trimmingCharacters(in: .whitespaces)) == nil)
-                    }
-                }
-            }
-            .opacity(cardOpacity)
-        }
-    }
+    // MARK: - Weight lives elsewhere now
+    //
+    // Weigh-ins used to sit at the bottom of this screen, behind the day stepper. That was the wrong place
+    // twice over: they are not food, and they are the input `AdaptiveExpenditureEngine` gates on just as
+    // hard as intake — so the half of the calibration people skip most was also the hardest to reach.
+    //
+    // They now have `WeightView`, a Today card, and their own quick-action row. Nothing is logged from here
+    // any more; this note exists so the next reader looks there rather than assuming it was dropped.
 
     // MARK: - History
 
@@ -623,8 +547,6 @@ struct FoodLogView: View {
         // 14 days, matching how far the day stepper will go — a chart that showed a week while the
         // stepper reached two would leave the second week navigable but invisible.
         history = await repo.foodHistory(days: 14)
-        weightToday = await repo.weightToday(day: selectedDay)
-        weightHistory = await repo.weightHistory(days: 30).reversed()
     }
 
     // MARK: - Formatting

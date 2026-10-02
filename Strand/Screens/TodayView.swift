@@ -1944,6 +1944,8 @@ struct TodayView: View {
             classicHeroSection
         case .diet:
             DietBudgetCard()
+        case .weight:
+            WeightTodayCard()
         case .liveSession:
             if liveSessionsBeta { liveSessionStartSection }
         case .synthesis:

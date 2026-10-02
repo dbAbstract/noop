@@ -361,6 +361,7 @@ struct LiquidTodayView: View {
                         switch section {
                         case .hero: heroCard
                         case .diet: DietBudgetCard()
+                        case .weight: WeightTodayCard()
                         case .liveSession: if liveSessionsBeta { liveSessionStartRow }
                         case .synthesis: synthesisSection
                         case .keyMetrics: keyMetricsSection

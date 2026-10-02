@@ -278,6 +278,7 @@ for the other on a chart, which is precisely the comparison the feature exists t
 | `Strand/Screens/DietBudgetCard.swift` | Today's diet card |
 | `Strand/Screens/DietDetailView.swift` | diet detail screen |
 | `TodaySection.diet` (`Strand/Data/TodayLayoutPrefs.swift`) | matching `TodaySection` entry — **raw key `"diet"` appended LAST**, default order position directly after `hero` |
+| `TodaySection.weight`, `Strand/Screens/WeightTodayCard.swift`, `WeightView.swift` | the weigh-in surfaces — **raw key `"weight"` appended LAST**, default order directly after `diet`. Weigh-ins were previously only reachable from the bottom of the food log; they are now a Today card, their own screen, and a quick-action row, and the food log no longer logs them at all. Worth copying the reasoning: the engine gates on weigh-in days as hard as on intake days, so the half of the calibration people skip most was also the hardest to reach. |
 | `TabRoute.food`, `TabRoute.diet` | `Destination` entries in `ui/AppRoot.kt` |
 | `MetricCatalog` additions | `TrendsExploreScreen` metric specs |
 
@@ -358,6 +359,21 @@ pedometer's figure.
     turning food logging off cancels the reminder — otherwise it keeps firing nightly for a feature whose
     screen and off switch are both gone.
   - Tapping it must route to the food log (`NavRouter.food` / `openFood()` on Apple).
+- **Conversational logging, expanded.** The action protocol now carries an `actions` ARRAY (capped at 6),
+  a per-action `day` ("today" / "yesterday" / ISO, range-checked against the food log's own 14-day limit),
+  and three more verbs: `save` (library only, logs nothing), `weight`, and the existing `edit`. Things the
+  twin must keep:
+  - **One bad action does not discard the good ones.** A described meal of three items with one nonsense
+    figure must still offer the other two, or conversational logging is less reliable than manual.
+  - **A vague day is REFUSED, not resolved.** "A few days ago" parsed into a date is a model guessing.
+  - **The day is resolved when the proposal is BUILT and the write takes it from the proposal**, never from
+    whatever screen the user is on — a card saying "Yesterday" must write to yesterday after midnight too.
+  - **The pounds guard is an APP-LAYER check**, not a range. 160 kg is a real weight, so only a comparison
+    against the user's own last weigh-in (>25 kg jump) can tell a measurement from a unit error. A test
+    pins that the pure parser accepts 160, so nobody narrows the range and locks out heavier users.
+  - The system prompt now tells the model to ESTIMATE macros from its own knowledge rather than sending the
+    user to another app, and to ask only when the ambiguity is about WHICH FOOD. The guardrails that make
+    that safe are the Atwater check, the `aiEstimate` stamp, and the confirmation card.
 - **AI macro estimation** (`AICoachEngine.estimateMacros`) — the parsing half is pure and lives in
   `MacroEstimateParse` (section 1); this is the egress half. It is **prompt-only across all four
   providers**, not native structured output: a native path means a second code path per provider, a

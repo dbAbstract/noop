@@ -392,6 +392,8 @@ struct RootTabView: View {
             .presentationDragIndicator(.hidden)
         case .food:
             quickScreen(FoodLogView())
+        case .weight:
+            quickScreen(WeightView())
         case .live:
             quickScreen(LiveView())
         case .workout:
@@ -703,7 +705,7 @@ private struct MoreRow: View {
 /// The destinations the centre FAB can present. `.menu` is the action sheet itself; the rest
 /// route to existing screens. `Identifiable` so it drives `.sheet(item:)`.
 private enum QuickAction: Int, Identifiable {
-    case menu, live, workout, journal, breathe, food
+    case menu, live, workout, journal, breathe, food, weight
     var id: Int { rawValue }
 }
 
@@ -715,8 +717,10 @@ private enum QuickActionSheetMetrics {
     /// One row: 38pt tile + 10pt vertical padding either side, plus the 8pt VStack spacing above it.
     static let rowHeight: CGFloat = 66
 
+    /// Food logging adds TWO rows — Log food and Log weight — because the weigh-in is the other half of
+    /// the same calibration and is gated on the same switch.
     static func height(foodEnabled: Bool) -> CGFloat {
-        baseHeight + (foodEnabled ? rowHeight : 0)
+        baseHeight + (foodEnabled ? rowHeight * 2 : 0)
     }
 }
 
@@ -756,6 +760,10 @@ private struct QuickActionSheet: View {
                 // always-present row for a disabled feature is a dead end.
                 if foodLoggingEnabled {
                     row("Log food", icon: "fork.knife", tint: StrandPalette.metricAmber) { onPick(.food) }
+                    // The weigh-in gets its own row rather than living inside the food log, where it was
+                    // obscure enough that the user never found it. It is the other half of the same
+                    // calibration and is skipped far more often, so it needs the shorter path.
+                    row("Log weight", icon: "scalemass", tint: StrandPalette.chargeColor) { onPick(.weight) }
                 }
                 row("Log journal", icon: "square.and.pencil", tint: StrandPalette.accent) { onPick(.journal) }
                 row("Breathe", icon: "wind", tint: StrandPalette.restColor) { onPick(.breathe) }
