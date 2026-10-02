@@ -211,6 +211,10 @@ enum MetricCatalog {
         // visible.
         d("calorie_target", String(localized: "Calorie Target"), "Nutrition", "kcal", DietStore.sourceId, "target", 0, nil),
         d("diet_expenditure", String(localized: "Expenditure (modelled)"), "Nutrition", "kcal", DietStore.sourceId, "flame.circle", 0, nil),
+        // The ACTIVITY half of that expenditure, charted in its own right: it is what separates a day the
+        // user moved from one they did not, and it is also the series a measured baseline is derived
+        // against — so being able to look at it is how a surprising baseline gets explained.
+        d("diet_activity_kcal", String(localized: "Activity energy"), "Nutrition", "kcal", DietStore.sourceId, "figure.walk.motion", 0, nil),
 
         // ── Mind (daily mood check-in, 1–5; non-clinical self-tracking)
         d("mood", String(localized: "Mood"), "Mind", "/5", "noop-mood", "face.smiling", 0, true),

@@ -36,7 +36,10 @@ struct DietTrendReading: Equatable {
     /// Carried here rather than recomputed by the caller because it is one half of a subtraction that has
     /// to use the SAME window as the estimate: a mean over a different span silently shifts the derived
     /// baseline by however much the two windows' activity differed, and nothing would show that.
-    let meanActivityKcal: Double?
+    /// Defaulted so the two dozen existing construction sites — and the test fixtures that build a
+    /// reading by hand — stay untouched. nil is also the honest value: no banked activity means no
+    /// baseline can be derived, which `measuredBaselineKcal` below already handles.
+    var meanActivityKcal: Double? = nil
 
     /// The measured BASELINE — average TDEE with the window's mean activity removed, so per-day steps and
     /// workouts can ride on top without the average being charged twice.
@@ -98,8 +101,12 @@ extension Repository {
         var byDay: [String: (kcal: Double?, kg: Double?)] = [:]
         for row in intake where row.kcal > 0 { byDay[row.day, default: (nil, nil)].kcal = row.kcal }
         for row in weights { byDay[row.day, default: (nil, nil)].kg = row.kg }
-        let adaptiveDays = byDay.map { AdaptiveExpenditureDay(day: $0.key, caloriesIn: $0.value.kcal,
-                                                              weightKg: $0.value.kg) }
+        // Which days were admitted guesses. One ranged read of the banked flag, not a per-day entry query.
+        let roughDays = await roughIntakeDays(days: window, now: now)
+        let adaptiveDays = byDay.map {
+            AdaptiveExpenditureDay(day: $0.key, caloriesIn: $0.value.kcal, weightKg: $0.value.kg,
+                                   intakeIsRough: roughDays.contains($0.key))
+        }
         let adaptive = AdaptiveExpenditureEngine.estimate(days: adaptiveDays)
 
         // The window the ESTIMATE actually used, not the one requested: `estimate` keeps only the most

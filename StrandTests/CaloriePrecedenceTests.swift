@@ -74,12 +74,33 @@ final class CaloriePrecedenceTests: XCTestCase {
 
     // MARK: - Food log metric registration
 
-    /// The food log banks five keys; every one needs a catalog descriptor or it charts nowhere.
+    /// Every CHARTABLE food-log key needs a catalog descriptor or it charts nowhere.
+    ///
+    /// Narrowed from `Keys.all` to `Keys.charted` when `intake_rough` arrived: that key is a 0/1 flag
+    /// about how a figure was obtained, not an amount, and registering it would put a square wave in the
+    /// metric explorer for someone to read as calories. The two guards below are what stop that narrowing
+    /// becoming a hole.
     func testFoodLogMetricsAreRegistered() {
-        for key in FoodLogStore.Keys.all {
+        for key in FoodLogStore.Keys.charted {
             XCTAssertNotNil(MetricCatalog.metric(key: key, source: FoodLogStore.sourceId),
                             "\(key) is written by the food log but not registered in the catalog")
         }
+    }
+
+    /// A chartable key must also be in the CLEAR list, or deleting a day's last entry leaves its figure
+    /// behind on the chart — the exact bug `Keys.all` exists to prevent.
+    func testEveryChartedFoodKeyIsAlsoCleared() {
+        for key in FoodLogStore.Keys.charted {
+            XCTAssertTrue(FoodLogStore.Keys.all.contains(key),
+                          "\(key) is charted but would survive a re-bank")
+        }
+    }
+
+    /// And the un-charted remainder is pinned by NAME, so adding a new written key forces a deliberate
+    /// decision about whether it is a quantity rather than letting it default to invisible.
+    func testTheUnchartedFoodKeysAreExactlyTheKnownFlags() {
+        let uncharted = Set(FoodLogStore.Keys.all).subtracting(FoodLogStore.Keys.charted)
+        XCTAssertEqual(uncharted, [FoodLogStore.Keys.roughDay])
     }
 
     /// Hand-logged weigh-ins must be their own source, never colliding with Apple Health's weight series.

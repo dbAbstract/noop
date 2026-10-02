@@ -41,9 +41,33 @@ enum FoodLogStore {
         static let fatG = "fat_g"
         static let fiberG = "fiber_g"
 
-        /// Every key a day total writes, so a re-bank can clear all five together and none is left behind
-        /// holding a stale figure after the last entry of a day is deleted.
-        static let all = [caloriesIn, proteinG, carbsG, fatG, fiberG]
+        /// 1 when any of the day's entries was logged as an admitted GUESS, 0 otherwise.
+        ///
+        /// A per-day flag banked beside the totals rather than derived from the entry rows on demand,
+        /// because the adaptive engine needs it for every day in a six-week window and reading entries
+        /// for each would be 42 queries where this is one ranged read — the same reasoning that put the
+        /// totals here.
+        ///
+        /// Stored as a number because `metricSeries` carries Doubles. 0 and absent mean the same thing,
+        /// which is fine: both say "nothing here was flagged as a guess".
+        static let roughDay = "intake_rough"
+
+        /// Every key a day total writes, so a re-bank can clear all of them together and none is left
+        /// behind holding a stale figure after the last entry of a day is deleted.
+        ///
+        /// Includes `roughDay`, which is NOT a chartable quantity — see `charted`.
+        static let all = [caloriesIn, proteinG, carbsG, fatG, fiberG, roughDay]
+
+        /// The subset that is a MEASURED QUANTITY and therefore belongs in the metric catalog.
+        ///
+        /// Split from `all` because the two lists answer different questions and a single list answering
+        /// both gets one of them wrong. `all` is "what must be cleared on a re-bank"; this is "what can be
+        /// plotted". `roughDay` is a 0/1 flag about how a figure was obtained — charting it would put a
+        /// square wave in the metric explorer and invite it to be read as an amount.
+        ///
+        /// A guard test asserts this stays a subset of `all`, so a new chartable key cannot be registered
+        /// in the catalog while being left out of the clear list.
+        static let charted = [caloriesIn, proteinG, carbsG, fatG, fiberG]
     }
 }
 
@@ -122,6 +146,14 @@ struct FoodEntry: Identifiable, Equatable, Codable {
 enum FoodMacroSource {
     /// Stored value for a figure a language model proposed and the user accepted.
     static let aiEstimate = "ai-estimate"
+    /// The user's own admitted guess — a restaurant meal, a day out, something with no label to read.
+    ///
+    /// Exists because the alternative behaviour is logging NOTHING, and an omitted day is worse evidence
+    /// than a bad guess in two separate ways: it is a hole in the coverage the adaptive engine gates on,
+    /// and it is a silent downward bias, because the days people skip are the big ones. Marking a guess
+    /// as a guess is what lets the engine widen its interval honestly instead of treating the number as
+    /// though it had been read off a packet.
+    static let roughGuess = "rough-guess"
 }
 
 enum MealType: String, Codable, CaseIterable, Equatable {
@@ -386,6 +418,10 @@ extension Repository {
                 MetricPoint(day: dayKey, key: FoodLogStore.Keys.carbsG, value: totals.carbs),
                 MetricPoint(day: dayKey, key: FoodLogStore.Keys.fatG, value: totals.fat),
                 MetricPoint(day: dayKey, key: FoodLogStore.Keys.fiberG, value: totals.fiber),
+                // Re-derived from the day's entries on every write, so deleting the one rough entry
+                // clears the flag rather than leaving the day marked as a guess forever.
+                MetricPoint(day: dayKey, key: FoodLogStore.Keys.roughDay,
+                            value: entries.contains { $0.macroSource == FoodMacroSource.roughGuess } ? 1 : 0),
             ]
             _ = try? await store.upsertMetricSeries(points, deviceId: FoodLogStore.sourceId)
         }
@@ -415,6 +451,21 @@ extension Repository {
             let key = Repository.localDayKey(now.addingTimeInterval(-Double(n - 1 - i) * 86_400))
             return (key, byDay[key] ?? 0)
         }
+    }
+
+    /// Local days in the window whose intake was logged as an admitted guess.
+    ///
+    /// A Set rather than a padded array: absence means "not a guess", so there is nothing to pad with and
+    /// a membership test is what the caller actually asks.
+    func roughIntakeDays(days: Int, now: Date = Date()) async -> Set<String> {
+        let n = max(1, days)
+        let fromKey = Repository.localDayKey(now.addingTimeInterval(-Double(n - 1) * 86_400))
+        let toKey = Repository.localDayKey(now)
+        guard let store = await storeHandle(),
+              let points = try? await store.metricSeries(deviceId: FoodLogStore.sourceId,
+                                                        key: FoodLogStore.Keys.roughDay,
+                                                        from: fromKey, to: toKey) else { return [] }
+        return Set(points.filter { $0.value > 0 }.map(\.day))
     }
 
     // MARK: Library

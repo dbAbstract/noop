@@ -65,10 +65,24 @@ public enum StepNeat {
     /// WHY ERR LOW, explicitly. Over-crediting NEAT inflates the eating budget, and at a small deficit
     /// that is enough to erase it outright — a diet that stalls while every number on screen says it is
     /// working, which is the hardest failure to diagnose from the inside. Under-crediting is visible
-    /// instead: you lose slightly faster than predicted. `AdaptiveExpenditureEngine` measures real
-    /// expenditure from the scale once it has the data and overrides this estimate entirely, so these
-    /// constants only govern the first few weeks — but that is exactly when someone is deciding whether
-    /// the app can be trusted.
+    /// instead: you lose slightly faster than predicted.
+    ///
+    /// AND THESE CONSTANTS CAN BE RETIRED, but only for the budget and only with the user's consent. Once
+    /// `AdaptiveExpenditureEngine` has enough logged intake and weigh-ins, the diet budget can be costed
+    /// from a measured BASELINE instead — see `CalorieTarget.measuredBaseline` and the review card in
+    /// `DietDetailView`. Note what that does and does not displace:
+    ///
+    ///   • It replaces the BASELINE term only. This function still prices today's steps on top, which is
+    ///     what keeps the budget moving with the day.
+    ///   • It never touches Charge, the Calories card, or workout energy. Those are heart-rate
+    ///     measurements and `AdaptiveExpenditureEngine`'s own contract forbids feeding them from a food
+    ///     diary. The diet budget is a different question because it was ALREADY an inference.
+    ///   • It is opt-in and revertible, so for anyone who has not adopted it these constants still govern
+    ///     the budget outright.
+    ///
+    /// An earlier version of this comment claimed the engine "overrides this estimate entirely" as a
+    /// statement of fact. It did not — nothing read the engine's output into the budget at all until the
+    /// loop was closed, and the comment described an intention as though it were behaviour.
     public static let netKcalPerStepPerKg = 0.0003
 
     /// Steps that count toward NEAT: the daily total, less steps taken inside workouts, less the
