@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1023",
-          "buildVersion": "1023",
+          "version": "11.8.0.1024",
+          "buildVersion": "1024",
           "date": "2026-10-02",
-          "localizedDescription": "Merge stage 5: close the loop",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1023.ipa",
-          "size": 16483931,
+          "localizedDescription": "Merge: Coach as the main way to log, and weigh-ins out of the basement",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1024.ipa",
+          "size": 16515184,
           "minOSVersion": "17.0"
         }
       ]
