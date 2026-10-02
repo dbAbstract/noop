@@ -55,6 +55,7 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `StepNeat.swift` | `StepNeat.kt` | Steps above a **4,000** baseline → kcal at **`0.0003 × weightKg`** per step. **Use these numbers, not the ones in the first draft** (3,000 / 0.0004) — see the note below. |
 | `TimeWindows.swift` | `TimeWindows.kt` | Interval merging so overlapping workouts never subtract a shared second twice. |
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
+| `WakeBriefWindow.swift` | `WakeBriefWindow.kt` | When a wake-triggered morning brief is due. Pure minute-of-day arithmetic. The case to get right: the target has usually ALREADY PASSED, because a strap reports its night on offload rather than on waking — so "late" is normal and must fire, while "hours late" must not. The cutoff is checked against the TARGET before the waiting check, or a target already past the cutoff reports `waiting` for something that can never become due. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
 | `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
 | `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. A part is either a `Reference.library(id)` (looked up, can go missing) or a `Reference.inline(macros)` (carried, cannot) — an inline part must NEVER consult the lookup, or every ad-hoc recipe is refused. |
@@ -311,6 +312,20 @@ pedometer's figure.
   the UI) → provider configured → data consent → resolved key. The button must be **user-initiated**:
   never on appear, never on a settings change. Estimated fields land **pre-filled but editable**, so the
   user's confirmation is what turns an estimate into a stated figure.
+- **Wake-triggered morning brief** (`CoachBriefScheduler` + `Repository.detectedWakeMinuteOfDay`) —
+  opt-in, default OFF, so the fixed-time path is unchanged for every existing install. Three things the
+  twin must keep:
+  - The fixed time stays the FALLBACK, not a thing replaced. A night the strap did not record has no wake
+    to time anything off, and someone who asked for a morning brief should still get one.
+  - The wake read spans the last **36 hours**, not "today": a night running 23:30 → 07:00 has its onset on
+    one day and its wake on the next, so a today-bounded read misses it on the morning it matters. The
+    returned DAY is then checked against today, so a wake inside the window but belonging to yesterday
+    cannot trigger anything.
+  - It falls back to the **computed** sleep source when the imported read is empty (#1150's reasoning).
+    A Bluetooth-only 4.0 banks every night as computed, so without this the feature silently never fires
+    for them.
+  The decisive trigger is the **post-sync** re-check, not the scene-phase one: becoming active happens
+  before the strap offloads, so the wake is usually still unknown at that point.
 - **HealthKit entitlement removal** (`project.yml`) — Apple-only, nothing owed.
 - **Dev build markers** (`NOOP_DEV_BUILD`, `AppIcon-Dev`) — Apple-only, nothing owed.
 

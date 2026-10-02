@@ -50,6 +50,11 @@ struct FoodLogView: View {
     /// reach permanently. Backfilling is the difference between a gap and a dead end.
     @State private var dayOffset = 0
 
+    /// How far back logging may reach, in days. Two weeks: the coverage window this protects is three
+    /// weeks, and beyond that someone is reconstructing rather than remembering. Shared by the stepper
+    /// and the history chart so the two cannot disagree about what is reachable.
+    private static let maxDayOffset = 13
+
     private var selectedDay: String {
         Repository.localDayKey(Date().addingTimeInterval(-Double(dayOffset) * 86_400))
     }
@@ -154,7 +159,7 @@ struct FoodLogView: View {
     /// The day stepper, kept in the entries card so the common path stays uncluttered.
     private var dayStepper: some View {
         HStack(spacing: NoopMetrics.space3) {
-            Button { dayOffset = min(13, dayOffset + 1) } label: {
+            Button { dayOffset = min(Self.maxDayOffset, dayOffset + 1) } label: {
                 Image(systemName: "chevron.left")
                     .font(StrandFont.footnote)
                     .foregroundStyle(StrandPalette.accent)
@@ -162,7 +167,7 @@ struct FoodLogView: View {
             .buttonStyle(.plain)
             // Two weeks back is the practical limit: the coverage window this protects is three weeks,
             // and beyond that someone is reconstructing rather than remembering.
-            .disabled(dayOffset >= 13)
+            .disabled(dayOffset >= Self.maxDayOffset)
             .accessibilityLabel("Previous day")
 
             Text(dayLabel)
@@ -531,28 +536,70 @@ struct FoodLogView: View {
         // Only shown once at least one day in the window has a figure — a row of empty bars says nothing.
         if history.contains(where: { $0.kcal > 0 }) {
             VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-                SectionHeader("Last 7 days", overline: "Intake")
+                SectionHeader("Last 14 days", overline: "Intake")
                 NoopCard {
-                    HStack(alignment: .bottom, spacing: NoopMetrics.space2) {
-                        let peak = max(1, history.map(\.kcal).max() ?? 1)
-                        ForEach(history, id: \.day) { row in
-                            VStack(spacing: 4) {
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(row.kcal > 0 ? StrandPalette.accent : StrandPalette.hairline)
-                                    .frame(height: max(3, 72 * (row.kcal / peak)))
-                                Text(dayInitial(row.day))
-                                    .font(StrandFont.caption)
-                                    .foregroundStyle(StrandPalette.textTertiary)
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        // TAPPABLE, which is the point of this section now rather than it being a
+                        // decorative sparkline: the day stepper was the only way back to yesterday and it
+                        // lives as two small chevrons in the card above, so nobody found it. A bar you can
+                        // tap is how you notice the days are reachable at all.
+                        HStack(alignment: .bottom, spacing: NoopMetrics.space2) {
+                            let peak = max(1, history.map(\.kcal).max() ?? 1)
+                            ForEach(Array(history.enumerated()), id: \.element.day) { idx, row in
+                                // history is oldest→newest and dayOffset counts backwards from today,
+                                // so the offset is the distance from the END of the array.
+                                let offset = history.count - 1 - idx
+                                Button {
+                                    dayOffset = offset
+                                } label: {
+                                    VStack(spacing: 4) {
+                                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                            .fill(barColor(row.kcal, isSelected: offset == dayOffset))
+                                            .frame(height: max(3, 64 * (row.kcal / peak)))
+                                        Text(dayInitial(row.day))
+                                            .font(StrandFont.caption)
+                                            .foregroundStyle(offset == dayOffset
+                                                             ? StrandPalette.textPrimary
+                                                             : StrandPalette.textTertiary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                // Names the figure AND whether anything was logged, because an empty bar
+                                // and a small one are the distinction this whole section exists to show.
+                                .accessibilityLabel(row.kcal > 0
+                                    ? "\(row.day): \(intString(row.kcal)) kcal — tap to open"
+                                    : "\(row.day): nothing logged — tap to open")
                             }
-                            .frame(maxWidth: .infinity)
-                            .accessibilityLabel("\(row.day): \(intString(row.kcal)) kcal")
+                        }
+                        .frame(height: 88, alignment: .bottom)
+
+                        // A day with NO entries is the one worth finding — it is the gap that stops the
+                        // expenditure engine reaching a verdict. Stated in words rather than left to be
+                        // inferred from a bar that is short for two different reasons.
+                        let blanks = history.filter { $0.kcal <= 0 }.count
+                        if blanks > 0 {
+                            Text(blanks == 1
+                                 ? "1 of these days has nothing logged. Tap it to fill it in."
+                                 : "\(blanks) of these days have nothing logged. Tap one to fill it in.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .frame(height: 96, alignment: .bottom)
                 }
                 .opacity(cardOpacity)
             }
         }
+    }
+
+    /// A bar's colour carries two facts: whether the day has intake, and whether it is the day on screen.
+    /// The selected day is accented so tapping a bar visibly does something — without it the only feedback
+    /// is the card above quietly changing its contents.
+    private func barColor(_ kcal: Double, isSelected: Bool) -> Color {
+        if isSelected { return StrandPalette.accent }
+        return kcal > 0 ? StrandPalette.accent.opacity(0.45) : StrandPalette.hairline
     }
 
     // MARK: - Data
@@ -564,7 +611,9 @@ struct FoodLogView: View {
         // After the library, and passed it explicitly: composing a recipe needs the same snapshot of the
         // library the rest of this screen is rendering.
         recipes = await repo.recipes(library: library)
-        history = await repo.foodHistory(days: 7)
+        // 14 days, matching how far the day stepper will go — a chart that showed a week while the
+        // stepper reached two would leave the second week navigable but invisible.
+        history = await repo.foodHistory(days: 14)
         weightToday = await repo.weightToday(day: selectedDay)
         weightHistory = await repo.weightHistory(days: 30).reversed()
     }

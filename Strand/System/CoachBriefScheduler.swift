@@ -1,4 +1,5 @@
 import Foundation
+import StrandAnalytics
 import UserNotifications
 #if os(iOS)
 import BackgroundTasks
@@ -39,11 +40,57 @@ enum CoachBriefScheduler {
         // can read it. The app's own UserDefaults.standard isn't visible to the widget.
         static let widgetBriefKey = "coachBrief.widgetText"
         static let widgetBriefDateKey = "coachBrief.widgetDate"
+        /// Opt-in: time the brief off the DETECTED WAKE rather than a fixed clock time.
+        static let wakeTriggered = "coachBrief.wakeTriggered"
+        static let wakeDelay = "coachBrief.wakeDelayMinutes"
+        static let wakeLatest = "coachBrief.wakeLatestMinutes"
     }
 
     /// 07:00 — a brief waiting when you check your phone (matches `ScheduledDebugExport`'s default).
     static let defaultTimeMinutes = 7 * 60
     private static let minutesPerDay = 24 * 60
+
+    /// How a caller reports last night's detected wake: minute-of-day plus the local day it belongs to,
+    /// or nil when no wake is known.
+    ///
+    /// A CLOSURE rather than a stored dependency, matching how `generateBrief` already arrives here. This
+    /// type owns scheduling and knows nothing about a database; handing it a Repository to read sleep
+    /// sessions from would make the one piece of the Coach that must work with the app suspended depend
+    /// on the app's object graph.
+    typealias WakeProvider = () async -> (minutes: Int, day: String)?
+
+    // MARK: - Wake-triggered mode
+
+    /// Time the brief off last night's detected wake instead of a fixed hour.
+    ///
+    /// Default OFF, so no existing install changes behaviour. The fixed-time path stays the fallback
+    /// rather than being replaced: a night the strap did not record, or was not worn, has no wake to time
+    /// anything off, and someone who opted into a morning brief should still get one.
+    static var isWakeTriggered: Bool { UserDefaults.standard.bool(forKey: K.wakeTriggered) }
+
+    static var wakeDelayMinutes: Int {
+        WakeBriefWindow.clampedDelay(
+            UserDefaults.standard.object(forKey: K.wakeDelay) as? Int
+                ?? WakeBriefWindow.defaultDelayMinutes)
+    }
+
+    static var wakeLatestMinutes: Int {
+        WakeBriefWindow.clampedLatest(
+            UserDefaults.standard.object(forKey: K.wakeLatest) as? Int
+                ?? WakeBriefWindow.defaultLatestMinutes)
+    }
+
+    static func setWakeTriggered(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: K.wakeTriggered)
+    }
+
+    static func setWakeDelayMinutes(_ m: Int) {
+        UserDefaults.standard.set(WakeBriefWindow.clampedDelay(m), forKey: K.wakeDelay)
+    }
+
+    static func setWakeLatestMinutes(_ m: Int) {
+        UserDefaults.standard.set(WakeBriefWindow.clampedLatest(m), forKey: K.wakeLatest)
+    }
 
     /// Category id the posted notification carries, so `NotificationPresenter` can recognise a brief tap
     /// (as opposed to any other local notification) and route it to Coach.
@@ -219,10 +266,11 @@ enum CoachBriefScheduler {
     /// Call whenever Coach (or its settings) appears so the schedule self-heals (re-arms the macOS timer
     /// after a relaunch, re-submits the iOS request) and a slot missed while the app wasn't open still
     /// generates once. No-op when the feature is off.
-    static func activateIfEnabled(generateBrief: @escaping () async -> String?) {
+    static func activateIfEnabled(generateBrief: @escaping () async -> String?,
+                                  detectedWake: WakeProvider? = nil) {
         guard isEnabled else { return }
-        scheduleNext(generateBrief: generateBrief)
-        Task { await catchUpIfDue(generateBrief: generateBrief) }
+        scheduleNext(generateBrief: generateBrief, detectedWake: detectedWake)
+        Task { await catchUpIfDue(generateBrief: generateBrief, detectedWake: detectedWake) }
     }
 
     /// The explicit "Generate now" button: always generates and stores, ignoring the once-per-day dedup,
@@ -270,14 +318,42 @@ enum CoachBriefScheduler {
     /// generation was attempted and failed (so the iOS BGTask handler can report the real outcome and
     /// retry on the next wake instead of marking the day done on a failure).
     @discardableResult
-    static func catchUpIfDue(generateBrief: () async -> String?) async -> Bool {
+    static func catchUpIfDue(generateBrief: () async -> String?,
+                             detectedWake: WakeProvider? = nil) async -> Bool {
         guard isEnabled else { return true }
         let now = Date()
         let cal = Calendar.current
         let comps = cal.dateComponents([.hour, .minute], from: now)
         let nowMinutes = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
-        guard nowMinutes >= timeMinutes else { return true }                                  // not yet time today
-        guard UserDefaults.standard.string(forKey: K.lastRun) != dayKey(now) else { return true } // already ran today
+
+        if isWakeTriggered, let detectedWake {
+            // Timed off the wake NOOP detected. The verdict is computed by `WakeBriefWindow`, which is
+            // pure and tested — notably for the case this mode exists to get right and is easiest to get
+            // wrong: the target has already passed, because a strap reports its night when it offloads
+            // rather than when the wearer gets up.
+            let wake = await detectedWake()
+            switch WakeBriefWindow.verdict(wakeMinutes: wake?.minutes,
+                                           wakeDay: wake?.day,
+                                           nowMinutes: nowMinutes,
+                                           today: dayKey(now),
+                                           lastRunDay: UserDefaults.standard.string(forKey: K.lastRun),
+                                           delayMinutes: wakeDelayMinutes,
+                                           latestMinutes: wakeLatestMinutes) {
+            case .due:
+                break                       // fall through to generation below
+            case .waiting, .alreadyRan, .missedTheMorning:
+                return true                 // nothing owed; not a failure
+            case .noWakeDetected:
+                // No wake to time anything off — an unworn strap, or a night not yet offloaded. Fall
+                // back to the fixed time rather than skipping the day: someone who asked for a morning
+                // brief should still get one on a night the strap missed.
+                guard nowMinutes >= timeMinutes else { return true }
+                guard UserDefaults.standard.string(forKey: K.lastRun) != dayKey(now) else { return true }
+            }
+        } else {
+            guard nowMinutes >= timeMinutes else { return true }                              // not yet time today
+            guard UserDefaults.standard.string(forKey: K.lastRun) != dayKey(now) else { return true } // already ran today
+        }
 
         // One attempt at a time; see `generationInFlight` for why the day guard alone is not enough.
         guard await claimGeneration() else { return true }
@@ -359,17 +435,22 @@ enum CoachBriefScheduler {
 
     /// (Re)arm the next occurrence. macOS uses a foreground `DispatchSourceTimer`; iOS submits a
     /// background-refresh request. Both target the next wall-clock occurrence of `timeMinutes`.
-    private static func scheduleNext(generateBrief: @escaping () async -> String?) {
+    private static func scheduleNext(generateBrief: @escaping () async -> String?,
+                                     detectedWake: WakeProvider? = nil) {
         #if os(macOS)
         macTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: .main)
+        // In wake-triggered mode the fixed time is a FLOOR, not the target: the real trigger is a sync
+        // landing last night's session, which this timer cannot predict. Waking at the fixed hour anyway
+        // means the fallback path still runs on a night with no detected wake, and an earlier arrival is
+        // caught by the foreground check instead.
         let delay = secondsToNextOccurrence(timeMinutes)
         timer.schedule(deadline: .now() + delay)
         timer.setEventHandler {
             Task { @MainActor in
                 guard isEnabled else { return }
-                _ = await catchUpIfDue(generateBrief: generateBrief)
-                scheduleNext(generateBrief: generateBrief)
+                _ = await catchUpIfDue(generateBrief: generateBrief, detectedWake: detectedWake)
+                scheduleNext(generateBrief: generateBrief, detectedWake: detectedWake)
             }
         }
         timer.resume()
@@ -399,7 +480,9 @@ enum CoachBriefScheduler {
 
     /// Register the BGTask handler. MUST be called from the app's launch (before launch finishes) — call
     /// this from `StrandiOSApp.init()` with the app-owned Coach and strap log.
-    static func register(generateBrief: @escaping () async -> String?, log: @escaping (String) -> Void) {
+    static func register(generateBrief: @escaping () async -> String?,
+                         detectedWake: WakeProvider? = nil,
+                         log: @escaping (String) -> Void) {
         logBackgroundFailure = log
         BGTaskScheduler.shared.register(forTaskWithIdentifier: bgTaskIdentifier, using: nil) { task in
             let completion = TaskCompletionGuard(task: task)
@@ -409,7 +492,8 @@ enum CoachBriefScheduler {
                     completion.finish(success: true)
                     return
                 }
-                let succeeded = await catchUpIfDue(generateBrief: generateBrief)
+                let succeeded = await catchUpIfDue(generateBrief: generateBrief,
+                                                   detectedWake: detectedWake)
                 // Single-shot; request the next occurrence regardless of this run's outcome so a failed
                 // generation still retries at the next wake rather than going silent for good.
                 submitBackgroundRequest()

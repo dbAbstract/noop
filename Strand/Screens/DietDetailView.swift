@@ -21,6 +21,9 @@ import WhoopStore
 struct DietDetailView: View {
     @EnvironmentObject var repo: Repository
     @EnvironmentObject var profile: ProfileStore
+    /// Needed only to hand on to `AddFoodSheet`, whose Estimate button lives behind the coach's own
+    /// gates. This screen never calls the model itself.
+    @EnvironmentObject var coach: AICoachEngine
 
     @AppStorage(CardAppearancePrefs.opacityKey) private var cardOpacityPercent = CardAppearancePrefs.defaultPercent
     private var cardOpacity: Double { max(0, min(1, Double(cardOpacityPercent) / 100)) }
@@ -32,6 +35,9 @@ struct DietDetailView: View {
     @State private var targets: MacroTargetSet?
     @State private var history: [DietDay] = []
     @State private var showGoalSheet = false
+    @State private var showAddSheet = false
+    @State private var library: [FoodItem] = []
+    @State private var recipes: [Recipe] = []
     @State private var reloadTick = 0
     @State private var trend: DietTrendReading?
     @State private var proposed: Double?
@@ -74,6 +80,19 @@ struct DietDetailView: View {
                 .environmentObject(repo)
                 .environmentObject(profile)
         }
+        // Logging from here writes to TODAY. This screen is a read-out of where the diet stands, with no
+        // day selector of its own — so there is no other day it could honestly mean, and inheriting one
+        // invisibly is how an entry lands on the wrong date.
+        .sheet(isPresented: $showAddSheet) {
+            AddFoodSheet(library: library, recipes: recipes) { item, portion, save in
+                Task {
+                    if save { await repo.saveFoodItem(item) }
+                    await repo.logFood(item: item, portion: portion, saveToLibrary: save)
+                    reloadTick += 1
+                }
+            }
+            .environmentObject(coach)
+        }
     }
 
     // MARK: - Today, with its working shown
@@ -92,6 +111,13 @@ struct DietDetailView: View {
                                 .font(StrandFont.footnote)
                                 .foregroundStyle(StrandPalette.textTertiary)
                         }
+                        // Logging lives beside the figure it changes. This screen answers "how am I
+                        // doing", and the answer is almost always followed by wanting to add something
+                        // to it — until now that meant backing out to Today and finding the FAB.
+                        NoopButton("Log food", systemImage: "plus.circle.fill", kind: .primary) {
+                            showAddSheet = true
+                        }
+
                         Divider().overlay(StrandPalette.hairline)
 
                         // The working. Each line is a different estimator, so naming them separately is
@@ -298,6 +324,10 @@ struct DietDetailView: View {
         proposed = repo.proposedDeficit(from: t)
         macrosToday = await repo.foodTotals()
         consumedToday = macrosToday.kcal
+        // For the Add food sheet. Recipes compose against THIS library read, so the two cannot describe
+        // different libraries.
+        library = await repo.foodLibrary()
+        recipes = await repo.recipes(library: library)
         energy = await repo.refreshDietDay(profile: profile)
         if let budget = energy?.budgetKcal(), let rate = goal?.proteinGPerKg {
             targets = MacroTargets.targets(budgetKcal: budget, weightKg: profile.weightKg,

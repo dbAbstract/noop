@@ -163,7 +163,9 @@ struct CoachView: View {
             if coach.messages.isEmpty, let stored = CoachBriefScheduler.consumeStoredBrief() {
                 coach.surfaceScheduledBrief(stored)
             }
-            CoachBriefScheduler.activateIfEnabled { await coach.generateBrief() }
+            CoachBriefScheduler.activateIfEnabled(
+                generateBrief: { await coach.generateBrief() },
+                detectedWake: { await repo.detectedWakeMinuteOfDay() })
             await coach.startBriefIfNeeded()
         }
         // #1862: a question handed over by the Today launcher sheet. Cleared BEFORE sending so a view

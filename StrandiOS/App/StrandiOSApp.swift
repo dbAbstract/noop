@@ -94,6 +94,8 @@ struct StrandiOSApp: App {
         _model = StateObject(wrappedValue: model)
         CoachBriefScheduler.register(generateBrief: { [weak coach = model.coach] in
             await coach?.generateBrief()
+        }, detectedWake: { [weak repo = model.repo] in
+            await repo?.detectedWakeMinuteOfDay()
         }, log: { [weak model] line in
             model?.live.append(log: AppModel.stamped(line))
         })
@@ -353,7 +355,12 @@ struct StrandiOSApp: App {
         // safe no-op until the user opts in.
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
-                CoachBriefScheduler.activateIfEnabled { await model.coach.generateBrief() }
+                // The foreground check, and the one that actually carries wake-triggered mode: a strap
+                // reports its night when it offloads, and the offload rides a foreground sync. Opening
+                // NOOP after getting up is therefore the moment the wake becomes knowable.
+                CoachBriefScheduler.activateIfEnabled(
+                    generateBrief: { await model.coach.generateBrief() },
+                    detectedWake: { await model.repo.detectedWakeMinuteOfDay() })
                 model.drainPendingIntents(router: router)
                 // iOS starts a Lift Log banner only for an app on screen, so a banner lost while NOOP was in
                 // the background comes back now, whether or not the strap is sending anything.
@@ -396,6 +403,17 @@ struct StrandiOSApp: App {
                     // widget and Today never disagree about which day they describe. Without this the
                     // watch only ever holds placeholder data on a real device.
                     await watch.pushLatest(from: model)
+                    // Re-check the morning brief now that a sync has landed.
+                    //
+                    // This is the check that makes wake-triggered mode work at all. The scene-phase
+                    // handler above runs the moment the app becomes active, which is BEFORE the strap has
+                    // offloaded — so last night's session usually does not exist yet and the wake reads as
+                    // unknown. By here it does. `catchUpIfDue` rather than `activateIfEnabled` so this
+                    // does not re-arm the background request on every refresh, and it returns immediately
+                    // in every case except the one where a brief is genuinely owed.
+                    await CoachBriefScheduler.catchUpIfDue(
+                        generateBrief: { await model.coach.generateBrief() },
+                        detectedWake: { await model.repo.detectedWakeMinuteOfDay() })
                 }
             } else if phase == .background {
                 // Re-submit on every transition because iOS may discard an old best-effort request.

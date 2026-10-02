@@ -275,3 +275,42 @@ extension Repository {
         return (Int(start.timeIntervalSince1970), Int(end.timeIntervalSince1970))
     }
 }
+
+// MARK: - Last night's detected wake
+
+extension Repository {
+
+    /// When NOOP thinks the wearer woke, as minute-of-day plus the local day it fell on.
+    ///
+    /// Feeds the wake-triggered morning brief (`CoachBriefScheduler`). Returns nil when there is no
+    /// session recent enough to be "last night" — an unworn strap, or a night not yet offloaded — and the
+    /// scheduler then falls back to its fixed time rather than inventing a wake.
+    ///
+    /// The window is the last 36 hours rather than "today", deliberately. A night that ran 23:30 → 07:00
+    /// has its ONSET on one day and its wake on the next, so a today-bounded read would miss it on the
+    /// morning it matters. The caller still checks the returned DAY against today, so a wake found inside
+    /// the window but belonging to yesterday cannot trigger anything.
+    ///
+    /// Takes the newest session by wake time, which is what "last night" means on a day containing a nap:
+    /// `sleepSessions` is ordered by onset, and a long nap could start after the night's onset but end
+    /// before its wake only in pathological data — ordering by `endTs` makes the choice explicit rather
+    /// than relying on that.
+    func detectedWakeMinuteOfDay(now: Date = Date()) async -> (minutes: Int, day: String)? {
+        let to = Int(now.timeIntervalSince1970)
+        let from = to - 36 * 3_600
+        var sessions = await sleepSessions(from: from, to: to)
+        if sessions.isEmpty {
+            // A Bluetooth-only strap banks nights under the COMPUTED source, so the imported-only read
+            // above returns nothing for a 4.0 user whose every night is computed — the same fallback the
+            // sleep funnel makes (#1150). Without it this feature would silently never fire for them.
+            sessions = await computedSleepSessions(from: from, to: to)
+        }
+        guard let latest = sessions.max(by: { $0.endTs < $1.endTs }) else { return nil }
+        // A session whose wake is in the FUTURE is a clock or timezone artefact, not a wake. Treated as
+        // no answer rather than clamped: timing a brief off it would fire at a moment that never happened.
+        guard latest.endTs <= to else { return nil }
+        let wake = Date(timeIntervalSince1970: TimeInterval(latest.endTs))
+        let comps = Calendar.current.dateComponents([.hour, .minute], from: wake)
+        return ((comps.hour ?? 0) * 60 + (comps.minute ?? 0), Repository.localDayKey(wake))
+    }
+}

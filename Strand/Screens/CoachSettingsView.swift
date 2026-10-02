@@ -21,6 +21,9 @@ struct CoachSettingsView: View {
     /// before the split. This screen can now be the first to render them.
     @State private var briefEnabled: Bool = CoachBriefScheduler.isEnabled
     @State private var briefMinutes: Int = CoachBriefScheduler.timeMinutes
+    @State private var wakeTriggered: Bool = CoachBriefScheduler.isWakeTriggered
+    @State private var wakeDelay: Int = CoachBriefScheduler.wakeDelayMinutes
+    @State private var wakeLatest: Int = CoachBriefScheduler.wakeLatestMinutes
     @State private var briefGenerating = false
     @State private var briefStatus: String?
 
@@ -308,8 +311,57 @@ struct CoachSettingsView: View {
 
                 if briefEnabled {
                     Divider().overlay(StrandPalette.hairline)
+
+                    Toggle(isOn: $wakeTriggered) {
+                        Text("Time it off your wake")
+                            .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                    }
+                    .toggleStyle(.switch).tint(StrandPalette.accent)
+                    .accessibilityHint("Send the brief a set time after NOOP detects you woke up")
+                    .onChangeCompat(of: wakeTriggered) { on in
+                        CoachBriefScheduler.setWakeTriggered(on)
+                    }
+
+                    if wakeTriggered {
+                        HStack {
+                            Text("After waking")
+                                .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                            Spacer()
+                            // A stepper rather than a slider: these are round numbers chosen once, and
+                            // the exact minute matters less than the figure being legible.
+                            Stepper("\(wakeDelay) min", value: $wakeDelay, in: 0...240, step: 5)
+                                .labelsHidden()
+                                .fixedSize()
+                                .accessibilityLabel("Minutes after waking")
+                            Text("\(wakeDelay) min")
+                                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textSecondary)
+                                .frame(minWidth: 56, alignment: .trailing)
+                        }
+                        .onChangeCompat(of: wakeDelay) { m in CoachBriefScheduler.setWakeDelayMinutes(m) }
+
+                        HStack {
+                            Text("Give up after")
+                                .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                            Spacer()
+                            DatePicker("", selection: wakeLatestBinding, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                                .accessibilityLabel("Latest time the brief may arrive")
+                        }
+
+                        // The honest limitation, stated rather than discovered. NOOP learns about wake
+                        // when the strap offloads, not when you get up, so the brief lands on the first
+                        // sync after that moment — and a sync that only happens in the afternoon is past
+                        // the point where a morning brief is worth sending.
+                        Text("NOOP finds out you woke when your strap next syncs, so the brief arrives on the first sync after \(wakeDelay) minutes past your wake — usually when you open the app. Nothing arrives after the give-up time; push it later if you would rather have it late than not at all. On a night the strap didn't record, the fixed time below is used instead.")
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Divider().overlay(StrandPalette.hairline)
+                    }
+
                     HStack {
-                        Text("Time").font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                        Text(wakeTriggered ? "Fallback time" : "Time")
+                            .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
                         Spacer()
                         DatePicker("", selection: briefTimeBinding, displayedComponents: .hourAndMinute)
                             .labelsHidden()
@@ -343,6 +395,25 @@ struct CoachSettingsView: View {
                 let m = (c.hour ?? 7) * 60 + (c.minute ?? 0)
                 briefMinutes = m
                 CoachBriefScheduler.setTimeMinutes(m, generateBrief: { await coach.generateBrief() })
+            }
+        )
+    }
+
+    /// `DatePicker` speaks `Date`; the cutoff is stored as minutes since local midnight — the house
+    /// convention shared with `windDown.wakeMinutes` and `coachBrief.timeMinutes`.
+    private var wakeLatestBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c = DateComponents()
+                c.hour = wakeLatest / 60
+                c.minute = wakeLatest % 60
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { date in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+                let m = (c.hour ?? 11) * 60 + (c.minute ?? 0)
+                wakeLatest = m
+                CoachBriefScheduler.setWakeLatestMinutes(m)
             }
         )
     }
