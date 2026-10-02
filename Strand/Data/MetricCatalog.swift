@@ -267,6 +267,24 @@ enum MetricCatalog {
     /// undercount of an unrelated quantity.
     static let preferStrapCaloriesKey = "noop.preferStrapCalories"
 
+    /// Prefer the DIET model's whole-day expenditure on the Calories tile.
+    ///
+    /// Exists because the on-device figure answers a different question than "what did I burn today". Its
+    /// resting floor is integrated only over intervals the strap produced samples for
+    /// (`WorkoutDetector.estimateDayEnergy`), so a day with gappy coverage reads BELOW the user's own resting
+    /// metabolism — and its 50% HRR gate discards walking entirely, correctly for that estimator and wrongly
+    /// for a day's 7,000 steps. The result is a number that looks broken and is in fact precise about
+    /// something else.
+    ///
+    /// `diet_expenditure` is a whole-day figure by construction, and — this is the part that makes it the
+    /// right answer rather than merely a nicer one — it is computed through `CalorieTarget.dayExpenditure`,
+    /// which already honours a measured baseline. So the day the user adopts their own measured expenditure,
+    /// this tile becomes measurement-backed with no switchover to build.
+    ///
+    /// Default ON, but only has any effect when food logging is on and a diet goal exists — nothing is
+    /// banked otherwise, so a user who is not dieting sees no change at all.
+    static let preferDietExpenditureKey = "noop.preferDietExpenditure"
+
     /// #616: the calorie twin of `todayStepsMetric` — route the tapped detail to the source that MATCHES
     /// the value the tile shows, so the number, its sparkline and the chart it opens all agree. The imported
     /// Apple-Health detail (`active_kcal` / apple-health) when the day has an imported value, else NOOP's
@@ -282,7 +300,13 @@ enum MetricCatalog {
     /// while `activeKcalEst` is resting + active (Harris–Benedict + Keytel, a partial day TDEE). Callers
     /// must caption which one is on screen rather than letting one "Calories" label stand for both.
     static func todayCaloriesMetric(hasImportedKcal: Bool, hasOnDeviceKcal: Bool = false,
-                                    preferStrap: Bool = false) -> MetricDescriptor? {
+                                    preferStrap: Bool = false,
+                                    hasDietExpenditure: Bool = false) -> MetricDescriptor? {
+        // First, because it is the only branch that answers "what did I spend today" for a whole day. The
+        // other two are a partial-coverage HR sum and Apple's active-only figure.
+        if hasDietExpenditure {
+            return metric(key: DietStore.Keys.expenditure, source: DietStore.sourceId)
+        }
         if preferStrap && hasOnDeviceKcal { return metric(key: "energy_kcal", source: "my-whoop") }
         if hasImportedKcal { return metric(key: "active_kcal", source: "apple-health") }
         if hasOnDeviceKcal { return metric(key: "energy_kcal", source: "my-whoop") }

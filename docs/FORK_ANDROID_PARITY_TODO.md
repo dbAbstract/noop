@@ -78,10 +78,17 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
 | `AdaptiveExpenditureEngine.swift` | **twin EXISTS and now diverges** | See section 0. Asymmetric interval (upward only, for unlogged and rough days), `intakeIsRough` in, `roughIntakeDays` + `isLikelyUnderstated` out. `unloggedDayExcess` (0.35) is the one assumed figure and must match exactly or the two platforms price budgets differently. |
 | `CalorieTarget.swift` (additions) | `CalorieTarget.kt` | `measuredBaseline(measuredTdeeKcal:meanActivityKcal:)` and `sanitisedBaselineOverride`. The subtraction is the double-count guard — a measured average TDEE already contains its window's average activity. The BMR floor REFUSES rather than clamps. |
+| `MealGrouping.swift` | `MealGrouping.kt` | Which meal an entry belongs to, and grouping with subtotals. **`breakfastEndsMinute` is 11:00, not the conventional 10:00** — see the note below. Explicit meal always beats the clock; an unknown time infers NOTHING and lands in `unassigned`. Empty groups are dropped. The `Meal` raw values are the `foodEntry.mealType` wire format, so a rename orphans every logged entry. |
 | `WakeBriefWindow.swift` | `WakeBriefWindow.kt` | When a wake-triggered morning brief is due. Pure minute-of-day arithmetic. The case to get right: the target has usually ALREADY PASSED, because a strap reports its night on offload rather than on waking — so "late" is normal and must fire, while "hours late" must not. The cutoff is checked against the TARGET before the waiting check, or a target already past the cutoff reports `waiting` for something that can never become due. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
 | `MacroEstimateParse.swift` | `MacroEstimateParse.kt` | Pulls macros out of an LLM reply. Tolerant about wrapping (fences, prose, nested objects, braces inside strings), strict about content. **A truncated reply must FAIL, never be salvaged**, and a reply whose kcal contradicts its own macros is refused rather than repaired. Ceilings collapse to zero rather than capping. |
 | `RecipeMath.swift` | `RecipeMath.kt` | Composes a recipe from its parts through the SAME portion-scaling helper a logged entry uses. **A missing ingredient refuses the total** (nil, not a partial sum) — an absent number and a smaller number are different claims. Empty recipe composes to zero and counts complete. Zero quantities are invalid, and ordinals renumber dense. A part is either a `Reference.library(id)` (looked up, can go missing) or a `Reference.inline(macros)` (carried, cannot) — an inline part must NEVER consult the lookup, or every ad-hoc recipe is refused. |
+
+**On the 11:00 breakfast boundary, which looks wrong and is not.** The fork owner wakes at 09:30–10:30 and
+takes their first meal at 11:30 as LUNCH, having skipped breakfast. A conventional 10:00 boundary labels
+that a late breakfast, and the day then shows a breakfast they did not eat and no lunch they did. An early
+riser's 10:30 breakfast still reads correctly either way, so the generosity costs nothing. Do not "correct"
+this to 10:00 in the Kotlin twin.
 
 **On the step constants, which were revised after real use.** The first pass used a 3,000-step baseline
 and 0.0004 kcal/step/kg; both over-credited NEAT, together by roughly 2x, and on a 10,000-step day that
@@ -220,6 +227,20 @@ dietGoal   … , measuredBaselineKcal
 - **Opt-in and revertible**, written by editing the OPEN goal in place — superseding it would reset
   `startedOn` and rewrite the history adherence is measured against.
 - `targetOverrideKcal` remains **unread by anything** on both platforms. Left deliberately.
+
+### `foodEntry.mealType` becomes a WRITTEN column
+
+No migration either side — the column has existed since v48 and Room's entity already has it. What changed
+is that something finally writes it, and the rule matters:
+
+- A caller-stated meal is honoured; otherwise it is inferred from the clock **for a same-day log only** and
+  left NULL for a backfill. A backfilled entry is stamped at exactly 12:00:00 as an admission that its time
+  is unknown, so inferring "lunch" from it would be a guess stored as a fact.
+- NULL means UNKNOWN, not "no meal". It is the display layer that maps NULL → `unassigned`; that case is
+  deliberately NOT storable, or there would be two spellings of one state.
+- Entries written before this change fall back to time inference, with an exact-12:00:00 check sending them
+  to `unassigned`. That check is legacy-only and documented as such — safe because `logTimestamp` was its
+  only writer.
 
 ### Two new `metricSeries` keys — no migration
 
@@ -397,6 +418,17 @@ pedometer's figure.
     for them.
   The decisive trigger is the **post-sync** re-check, not the scene-phase one: becoming active happens
   before the strap offloads, so the wake is usually still unknown at that point.
+- **The Calories tile prefers the diet figure** (`MetricCatalog.todayCaloriesMetric` +
+  `preferDietExpenditureKey`, default ON). A display-precedence change, not a new computation —
+  `diet_expenditure` already existed. Android's Today would need the same rule.
+  The reasoning, because it is the kind of change that looks like it is hiding a measurement: NOOP's
+  on-device figure integrates its resting floor ONLY over intervals the strap produced samples for, so a
+  gappy day reads BELOW the user's own resting metabolism (observed: 1,557 kcal against a 1,743 kcal RMR),
+  and its 50% HRR gate discards walking entirely. It is precise about something other than "what did I burn
+  today". **`energy_kcal` is untouched** — still computed, banked and charted as the strap diagnostic; only
+  which series the tile prefers changed. And because `diet_expenditure` is computed through
+  `CalorieTarget.dayExpenditure`, it becomes measurement-backed on its own the day a measured baseline is
+  adopted, with no switchover to build.
 - **HealthKit entitlement removal** (`project.yml`) — Apple-only, nothing owed.
 - **Dev build markers** (`NOOP_DEV_BUILD`, `AppIcon-Dev`) — Apple-only, nothing owed.
 
