@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1025",
-          "buildVersion": "1025",
+          "version": "11.8.0.1026",
+          "buildVersion": "1026",
           "date": "2026-10-02",
-          "localizedDescription": "Merge stage 7: see what you ate, and one honest burn figure",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1025.ipa",
-          "size": 16517358,
+          "localizedDescription": "Merge remote-tracking branch 'origin/fork' into fork",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1026.ipa",
+          "size": 16530463,
           "minOSVersion": "17.0"
         }
       ]
