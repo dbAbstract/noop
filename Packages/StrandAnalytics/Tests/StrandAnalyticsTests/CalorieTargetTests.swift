@@ -190,3 +190,124 @@ final class CalorieTargetTests: XCTestCase {
         XCTAssertLessThan(CalorieTarget.minAdjustedDeficitKcal, 200)
     }
 }
+
+// MARK: - The measured baseline, and the double-count it must not cause
+
+/// Replacing the modelled baseline with a measured one is the point of closing the loop, and the way to
+/// get it wrong is arithmetic rather than plumbing: a measured average TDEE already contains its window's
+/// average activity, so adding today's activity on top charges the average twice.
+///
+/// These are the tests that would catch that, and the first one is the whole stage in one assertion.
+extension CalorieTargetTests {
+
+    private var bmr: Double {
+        CalorieTarget.mifflinBMR(sex: sex, weightKg: weight, heightCm: height, age: age)
+    }
+
+    private func expenditure(neatSteps: Int, workoutKcal: Double,
+                             override: Double? = nil) -> DayExpenditure {
+        CalorieTarget.dayExpenditure(sex: sex, weightKg: weight, heightCm: height, age: age,
+                                     activity: .sedentary, neatSteps: neatSteps,
+                                     workoutKcal: workoutKcal, baselineOverrideKcal: override)
+    }
+
+    /// THE DOUBLE-COUNT GUARD. Measured TDEE of 2,400 over a window whose mean activity was 250 kcal/day
+    /// gives a baseline of 2,150. Applied to a day whose activity is ALSO 250, the total must come back to
+    /// exactly 2,400 — the measured figure, reproduced. If activity were being counted twice this reads
+    /// 2,650.
+    func testAMeasuredBaselineReproducesTheMeasuredFigureOnAnAverageDay() throws {
+        let measuredTdee = 2_400.0
+        // 2,000 steps above baseline at 73 kg = 2,000 × 73 × 0.0003 = 43.8; plus a 206.2 kcal workout
+        // makes the day's activity exactly 250.
+        let neatSteps = 2_000
+        let stepKcal = StepNeat.kcal(stepsAboveBaseline: neatSteps, weightKg: weight)
+        let workoutKcal = 250 - stepKcal
+        let meanActivity = 250.0
+
+        let baseline = try XCTUnwrap(CalorieTarget.measuredBaseline(measuredTdeeKcal: measuredTdee,
+                                                                   meanActivityKcal: meanActivity))
+        XCTAssertEqual(baseline, 2_150, accuracy: 0.01)
+
+        let day = expenditure(neatSteps: neatSteps, workoutKcal: workoutKcal, override: baseline)
+        XCTAssertEqual(day.totalKcal, measuredTdee, accuracy: 0.01,
+                       "an average day must reproduce the measured figure, not exceed it")
+        XCTAssertEqual(day.activityKcal, meanActivity, accuracy: 0.01)
+    }
+
+    /// The other half: a day with MORE activity than the window average must exceed the measured figure by
+    /// exactly the extra, not by the extra plus a re-charged average.
+    func testABusierDayExceedsTheMeasuredFigureByExactlyTheExtra() throws {
+        let baseline = try XCTUnwrap(CalorieTarget.measuredBaseline(measuredTdeeKcal: 2_400,
+                                                                   meanActivityKcal: 250))
+        let average = expenditure(neatSteps: 2_000, workoutKcal: 250 - StepNeat.kcal(stepsAboveBaseline: 2_000, weightKg: weight), override: baseline)
+        let busier = expenditure(neatSteps: 6_000, workoutKcal: 250 - StepNeat.kcal(stepsAboveBaseline: 2_000, weightKg: weight), override: baseline)
+
+        let extraSteps = StepNeat.kcal(stepsAboveBaseline: 6_000, weightKg: weight)
+                       - StepNeat.kcal(stepsAboveBaseline: 2_000, weightKg: weight)
+        XCTAssertEqual(busier.totalKcal - average.totalKcal, extraSteps, accuracy: 0.01)
+    }
+
+    /// The budget must still MOVE with the day once an override is live. This is the regression that would
+    /// undo the fix that made the budget track the day's steps, and it would look like the feature working.
+    func testTheBudgetStillRisesWithStepsUnderAnOverride() throws {
+        let baseline = try XCTUnwrap(CalorieTarget.measuredBaseline(measuredTdeeKcal: 2_400,
+                                                                   meanActivityKcal: 250))
+        let quiet = expenditure(neatSteps: 0, workoutKcal: 0, override: baseline)
+        let active = expenditure(neatSteps: 5_000, workoutKcal: 0, override: baseline)
+        XCTAssertGreaterThan(active.budgetKcal(deficitKcal: 169), quiet.budgetKcal(deficitKcal: 169))
+    }
+
+    // MARK: - The override replaces only the baseline
+
+    func testAnOverrideReplacesTheBaselineAndLeavesBMRReported() {
+        let day = expenditure(neatSteps: 0, workoutKcal: 0, override: 2_150)
+        XCTAssertEqual(day.baselineKcal, 2_150, accuracy: 0.01)
+        // BMR is still the measured-model figure: it is reported for the screen's working, and an override
+        // is a statement about the baseline, not about resting metabolism.
+        XCTAssertEqual(day.bmrKcal, bmr, accuracy: 0.01)
+    }
+
+    func testNoOverrideLeavesTheModelExactlyAsItWas() {
+        let withNil = expenditure(neatSteps: 3_000, workoutKcal: 100, override: nil)
+        let legacy = CalorieTarget.dayExpenditure(sex: sex, weightKg: weight, heightCm: height, age: age,
+                                                  activity: .sedentary, neatSteps: 3_000,
+                                                  workoutKcal: 100)
+        XCTAssertEqual(withNil, legacy, "the new parameter must be inert when absent")
+    }
+
+    // MARK: - The sanity floor
+
+    /// A measured baseline below resting metabolism is a food log missing meals, not a slow metabolism.
+    /// Acting on it would hand out a starvation budget built from the user's own bad data.
+    func testAnOverrideBelowBMRIsRefusedNotClamped() {
+        let day = expenditure(neatSteps: 0, workoutKcal: 0, override: bmr - 300)
+        XCTAssertEqual(day.baselineKcal, CalorieTarget.baselineKcal(bmrKcal: bmr, activity: .sedentary),
+                       accuracy: 0.01, "a sub-BMR override must fall back to the model, not clamp to BMR")
+        XCTAssertNil(CalorieTarget.sanitisedBaselineOverride(bmr - 1, bmrKcal: bmr))
+        XCTAssertNotNil(CalorieTarget.sanitisedBaselineOverride(bmr, bmrKcal: bmr))
+    }
+
+    func testNonFiniteOverridesAreRefused() {
+        XCTAssertNil(CalorieTarget.sanitisedBaselineOverride(.nan, bmrKcal: bmr))
+        XCTAssertNil(CalorieTarget.sanitisedBaselineOverride(.infinity, bmrKcal: bmr))
+        XCTAssertNil(CalorieTarget.sanitisedBaselineOverride(nil, bmrKcal: bmr))
+    }
+
+    // MARK: - Deriving it
+
+    func testDerivationRefusesNonsenseInput() {
+        XCTAssertNil(CalorieTarget.measuredBaseline(measuredTdeeKcal: .nan, meanActivityKcal: 250))
+        XCTAssertNil(CalorieTarget.measuredBaseline(measuredTdeeKcal: 2_400, meanActivityKcal: .nan))
+        XCTAssertNil(CalorieTarget.measuredBaseline(measuredTdeeKcal: 2_400, meanActivityKcal: -10))
+        // Activity exceeding the whole measured spend cannot be right, and a negative baseline is not a
+        // number to carry forward.
+        XCTAssertNil(CalorieTarget.measuredBaseline(measuredTdeeKcal: 200, meanActivityKcal: 500))
+    }
+
+    /// A window with no activity at all leaves the measured figure untouched — the subtraction is of a real
+    /// quantity, not a fudge factor.
+    func testZeroActivityWindowLeavesTheFigureAlone() {
+        XCTAssertEqual(CalorieTarget.measuredBaseline(measuredTdeeKcal: 2_400, meanActivityKcal: 0) ?? .nan,
+                       2_400, accuracy: 0.01)
+    }
+}

@@ -30,6 +30,24 @@ struct DietTrendReading: Equatable {
     /// Distinct days with a logged intake in the window — the input the adaptive estimate gates hardest on.
     let intakeDays: Int
     let windowDays: Int
+    /// Mean per-day ACTIVITY energy (step NEAT + workouts) across the same window the adaptive estimate
+    /// used. nil when no day in the window banked one.
+    ///
+    /// Carried here rather than recomputed by the caller because it is one half of a subtraction that has
+    /// to use the SAME window as the estimate: a mean over a different span silently shifts the derived
+    /// baseline by however much the two windows' activity differed, and nothing would show that.
+    let meanActivityKcal: Double?
+
+    /// The measured BASELINE — average TDEE with the window's mean activity removed, so per-day steps and
+    /// workouts can ride on top without the average being charged twice.
+    ///
+    /// nil whenever the estimate or the activity mean is missing. Deliberately derived here, once, beside
+    /// the two figures it comes from.
+    var measuredBaselineKcal: Double? {
+        guard let adaptive, let meanActivityKcal else { return nil }
+        return CalorieTarget.measuredBaseline(measuredTdeeKcal: adaptive.estimatedDailyKcal,
+                                              meanActivityKcal: meanActivityKcal)
+    }
 
     /// Whether the measured trend can be told apart from no change at all.
     var hasVerdict: Bool { fit?.isDistinguishableFromZero == true }
@@ -84,13 +102,20 @@ extension Repository {
                                                               weightKg: $0.value.kg) }
         let adaptive = AdaptiveExpenditureEngine.estimate(days: adaptiveDays)
 
+        // The window the ESTIMATE actually used, not the one requested: `estimate` keeps only the most
+        // recent `maxWindowDays` and reports what it kept. Averaging activity over a longer span than the
+        // estimate spans would misprice the baseline by the difference.
+        let activityWindow = adaptive?.windowDays ?? window
+        let meanActivity = await meanDietActivityKcal(days: activityWindow, now: now)
+
         return DietTrendReading(fit: fit,
                                 targetDeficitKcal: deficit,
                                 expectedKgPerWeek: expected,
                                 daysToDetect: toDetect,
                                 adaptive: adaptive,
                                 intakeDays: intake.filter { $0.kcal > 0 }.count,
-                                windowDays: window)
+                                windowDays: window,
+                                meanActivityKcal: meanActivity)
     }
 
     /// A proposed new daily deficit, or nil when none is earned.
