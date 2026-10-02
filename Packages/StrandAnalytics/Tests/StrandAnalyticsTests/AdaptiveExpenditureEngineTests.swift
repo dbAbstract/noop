@@ -125,3 +125,123 @@ final class AdaptiveExpenditureEngineTests: XCTestCase {
         XCTAssertNil(AdaptiveExpenditureEngine.leastSquaresSlope([(3, 80.0), (3, 80.5), (3, 79.5)]))
     }
 }
+
+// MARK: - The interval is lopsided on purpose
+
+/// The days someone fails to log are not a random sample of their eating — they are the restaurant, the
+/// day out, the holiday. So an estimate taken over logged days is biased LOW, and the interval has to say
+/// so by widening UPWARD rather than evenly.
+///
+/// The previous version noted that asymmetry in a comment and then added the term to both bounds, which
+/// presents a bias as if it were noise and hands out a budget that is systematically tight.
+extension AdaptiveExpenditureEngineTests {
+
+    /// A history with gaps: intake on 24 of 28 days (86% coverage), which is the user's own holiday shape.
+    private func gappyHistory(days: Int = 28, unloggedCount: Int = 4,
+                              intake: Double = 2_100) -> [AdaptiveExpenditureDay] {
+        (0..<days).map { i in
+            // The gaps are at the END so they fall inside the retained window rather than being trimmed.
+            AdaptiveExpenditureDay(day: dayKey(i),
+                                   caloriesIn: i >= days - unloggedCount ? nil : intake,
+                                   weightKg: i % 2 == 0 ? 73 : nil)
+        }
+    }
+
+    /// THE BUG FIX. Incomplete coverage must widen the interval upward, not evenly.
+    func testIncompleteCoverageWidensTheIntervalUpwardOnly() throws {
+        let est = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: gappyHistory()))
+        let up = est.upperKcal - est.estimatedDailyKcal
+        let down = est.estimatedDailyKcal - est.lowerKcal
+        XCTAssertGreaterThan(up, down,
+                             "unlogged days bias the estimate LOW, so the room must be above it")
+        XCTAssertTrue(est.isLikelyUnderstated)
+    }
+
+    /// And the magnitude is the point, not just the direction: at 86% coverage the old symmetric term
+    /// contributed ~29 kcal where the real bias is nearer 100.
+    func testTheUpwardRoomIsLargeEnoughToMatter() throws {
+        let est = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: gappyHistory()))
+        let asymmetry = (est.upperKcal - est.estimatedDailyKcal) - (est.estimatedDailyKcal - est.lowerKcal)
+        // 4/28 unlogged × 0.35 × 2,100 ≈ 105 kcal.
+        XCTAssertEqual(asymmetry, 105, accuracy: 10)
+    }
+
+    /// INERT ON A COMPLETE LOG. Someone who logs every day must get exactly the even-handed interval they
+    /// got before — the asymmetry is a statement about missing days, so with none it must not appear.
+    func testACompleteLogKeepsASymmetricInterval() throws {
+        let est = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: history(days: 30)))
+        let up = est.upperKcal - est.estimatedDailyKcal
+        let down = est.estimatedDailyKcal - est.lowerKcal
+        XCTAssertEqual(up, down, accuracy: 1e-9)
+        XCTAssertFalse(est.isLikelyUnderstated)
+    }
+
+    /// The estimate itself must not move. This change is about the interval around it, and shifting the
+    /// point estimate would silently rewrite every figure the screen already shows.
+    func testThePointEstimateIsUnchangedByTheIntervalWork() throws {
+        let est = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: history(days: 30)))
+        XCTAssertEqual(est.estimatedDailyKcal, 2_400, accuracy: 1)
+    }
+
+    // MARK: - Rough days
+
+    private func roughHistory(days: Int = 28, roughCount: Int = 4,
+                             intake: Double = 2_100) -> [AdaptiveExpenditureDay] {
+        (0..<days).map { i in
+            AdaptiveExpenditureDay(day: dayKey(i),
+                                   caloriesIn: intake,
+                                   weightKg: i % 2 == 0 ? 73 : nil,
+                                   intakeIsRough: i >= days - roughCount)
+        }
+    }
+
+    /// THE WHOLE POINT OF ROUGH DAYS. Guessing must be strictly better than omitting: the same four days
+    /// cost less uncertainty when guessed, AND keep coverage intact.
+    func testGuessingBeatsOmittingOnTheSameDays() throws {
+        let omitted = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: gappyHistory()))
+        let guessed = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: roughHistory()))
+
+        let omittedUp = omitted.upperKcal - omitted.estimatedDailyKcal
+        let guessedUp = guessed.upperKcal - guessed.estimatedDailyKcal
+        XCTAssertLessThan(guessedUp, omittedUp, "a guess is poor evidence, but it is evidence")
+
+        XCTAssertEqual(guessed.intakeDays, 28, "a rough day still counts toward coverage")
+        XCTAssertEqual(omitted.intakeDays, 24)
+    }
+
+    /// Rough days are still an admitted guess, so they must widen the interval relative to a clean log —
+    /// otherwise marking a day rough would be free and the marker would mean nothing.
+    func testRoughDaysStillWidenTheIntervalUpward() throws {
+        let clean = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: history(days: 28)))
+        let rough = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: roughHistory()))
+        XCTAssertFalse(clean.isLikelyUnderstated)
+        XCTAssertTrue(rough.isLikelyUnderstated)
+    }
+
+    func testRoughDayCountIsReported() throws {
+        let est = try XCTUnwrap(AdaptiveExpenditureEngine.estimate(days: roughHistory(roughCount: 3)))
+        XCTAssertEqual(est.roughIntakeDays, 3)
+    }
+
+    /// A rough day can rescue the COVERAGE GATE, which is the hard failure omission causes: 7 unlogged
+    /// days in a 21-day window is 67%, below the 70% floor, so there is no verdict at all.
+    func testRoughDaysRescueAVerdictOmissionWouldHaveLost() throws {
+        let omitted = AdaptiveExpenditureEngine.estimate(
+            days: gappyHistory(days: 21, unloggedCount: 7))
+        XCTAssertNil(omitted, "67% coverage is below the gate — this is the case worth rescuing")
+
+        let guessed = AdaptiveExpenditureEngine.estimate(
+            days: roughHistory(days: 21, roughCount: 7))
+        XCTAssertNotNil(guessed, "the same days, guessed, clear the gate")
+    }
+
+    /// The constants are pinned because `unloggedDayExcess` is the one genuinely ASSUMED figure here, and
+    /// a silent change to it moves every interval the app shows.
+    func testTheAssumedConstantsAreWhatTheDocSays() {
+        XCTAssertEqual(AdaptiveExpenditureEngine.unloggedDayExcess, 0.35)
+        XCTAssertEqual(AdaptiveExpenditureEngine.roughGuessDiscount, 0.4)
+        XCTAssertEqual(AdaptiveExpenditureEngine.baseReportingError, 0.05)
+        XCTAssertLessThan(AdaptiveExpenditureEngine.roughGuessDiscount, 1.0,
+                          "a guess must cost less than a gap, or guessing is pointless")
+    }
+}

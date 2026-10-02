@@ -90,6 +90,14 @@ public struct DayExpenditure: Equatable, Sendable {
 
     public var totalKcal: Double { baselineKcal + stepNeatKcal + workoutKcal }
 
+    /// The part of the day's spend that came from MOVING, as opposed to existing.
+    ///
+    /// Named and derived here rather than re-added at each call site, because it is one half of a
+    /// subtraction that has to be exact: a measured average TDEE already contains the calibration
+    /// window's average activity, so deriving a baseline from it means subtracting precisely this. Two
+    /// spellings of "activity" — one here and one in the deriving code — is how a double-count gets in.
+    public var activityKcal: Double { stepNeatKcal + workoutKcal }
+
     /// What may be eaten today to hit the deficit. Never negative: a deficit larger than the day's
     /// expenditure is a broken plan, not a negative budget, and the clamp keeps a nonsense input from
     /// rendering as a nonsense instruction.

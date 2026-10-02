@@ -29,8 +29,19 @@ enum DietStore {
         /// What this model reckons they actually spent. Deliberately NOT `energy_kcal`, which is NOOP's
         /// own heart-rate figure — two different answers to one question must not share a key.
         static let expenditure = "diet_expenditure"
+        /// The ACTIVITY half of that expenditure: step NEAT plus workout energy, excluding the baseline.
+        ///
+        /// Banked so a measured baseline can be derived without re-deriving every past day's steps. The
+        /// adaptive engine reports an average TDEE over three to six weeks, which already contains that
+        /// window's average activity — so turning it into a BASELINE means subtracting the window's mean
+        /// activity, and this is the series that makes that a cheap read rather than a replay.
+        ///
+        /// Banked rather than computed on demand for a second reason: a past day's step count can no
+        /// longer be reconstructed once the strap's window has rolled off, so the figure has to be kept
+        /// when it is known.
+        static let activity = "diet_activity_kcal"
 
-        static let all = [target, expenditure]
+        static let all = [target, expenditure, activity]
     }
 }
 
@@ -239,6 +250,9 @@ extension Repository {
             _ = try? await store.upsertMetricSeries([
                 MetricPoint(day: dayKey, key: DietStore.Keys.target, value: budget),
                 MetricPoint(day: dayKey, key: DietStore.Keys.expenditure, value: energy.expenditure.totalKcal),
+                // Written from the SAME assembly as the total above, so the two can never describe
+                // different days' activity.
+                MetricPoint(day: dayKey, key: DietStore.Keys.activity, value: energy.expenditure.activityKcal),
             ], deviceId: DietStore.sourceId)
         }
         return energy
