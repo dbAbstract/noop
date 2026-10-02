@@ -46,6 +46,10 @@ struct DietDetailView: View {
     /// Dismissing the baseline card is per-session, not persisted. A persisted dismissal would need a
     /// re-offer schedule of its own, and the card already only appears when the measurement earns it.
     @State private var baselineCardDismissed = false
+    /// Which half of the screen is showing. Persisted per-install rather than per-session: someone who
+    /// mostly logs and someone who mostly checks progress each return to the half they use.
+    @AppStorage("noop.dietScreenTab") private var tabRaw = DietTab.day.rawValue
+    private var tab: DietTab { DietTab(rawValue: tabRaw) ?? .day }
 
     /// One day's intake against the target that governed it, plus both burn figures.
     struct DietDay: Identifiable, Equatable {
@@ -68,15 +72,32 @@ struct DietDetailView: View {
                        subtitle: "What you ate against what you spent.",
                        onRefresh: { await reload() }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
-                todaySection
-                macrosSection
-                proposalSection
-                measuredBaselineSection
-                trendSection
-                goalSection
-                adherenceSection
-                burnComparisonSection
-                historySection
+                // Two halves rather than one long scroll, because they answer different questions and the
+                // day selector only governs one of them. With both stacked, a selector at the top of a
+                // screen whose lower two-thirds ignores it is its own kind of wrong.
+                Picker("View", selection: $tabRaw) {
+                    Text("Day").tag(DietTab.day.rawValue)
+                    Text("Progress").tag(DietTab.progress.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Diet view")
+
+                switch tab {
+                case .day:
+                    // The food log's own sections, composed rather than copied — one implementation of
+                    // logging, reachable from here and from the reminder's tap-through.
+                    FoodLogView(ownsScaffold: false)
+                case .progress:
+                    todaySection
+                    macrosSection
+                    proposalSection
+                    measuredBaselineSection
+                    trendSection
+                    goalSection
+                    adherenceSection
+                    burnComparisonSection
+                    historySection
+                }
             }
         }
         .task(id: "\(repo.foodSeq)-\(repo.refreshSeq)-\(reloadTick)") { await reload() }
@@ -731,4 +752,16 @@ struct DietDetailView: View {
         let out = DateFormatter(); out.locale = AppLanguage.activeLocale; out.dateFormat = "EEEEE"
         return out.string(from: date)
     }
+}
+
+/// Which half of the Diet screen is showing.
+///
+/// A raw-value enum rather than a Bool because the two halves are not each other's negation — a third view
+/// is plausible (a week, say) and `tabRaw == false` would then mean nothing readable.
+enum DietTab: String, CaseIterable {
+    /// The selector, what was eaten, the budget and macros for ONE day.
+    case day
+    /// The long run: trend, adherence, the goal, and the measured-baseline review. Day-independent, which
+    /// is exactly why it does not share a screen with the day selector.
+    case progress
 }

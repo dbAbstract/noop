@@ -80,6 +80,9 @@ struct LiquidTodayView: View {
     /// The diet model's banked whole-day expenditure for the shown day, and whether a measured baseline
     /// produced it. nil when nothing is banked — no food logging, or no goal.
     @State private var dietExpenditureDay: (kcal: Double, measured: Bool)?
+    /// What has been spent SO FAR on the shown day. For a past day this is the whole-day figure, since the
+    /// day has fully elapsed — so the tile needs no special-casing for which day it is showing.
+    @State private var dietBurnedSoFar: ProgressiveBurn.Result?
     @State private var weightKg: Double?           // #204: Apple Health weight ?: profile fallback
     @State private var hrValues: [Double] = []     // hrBuckets since midnight → 5-min means
     /// Line identity for [hrValues], from the bucket timestamps this used to discard (#2082).
@@ -1833,6 +1836,9 @@ struct LiquidTodayView: View {
         // Read for the SHOWN day, not today, so stepping back a day moves this figure with the rest of the
         // screen rather than leaving today's number under yesterday's heading.
         dietExpenditureDay = foodEnabled ? await repo.bankedDietExpenditure(day: selectedDayKey) : nil
+        dietBurnedSoFar = foodEnabled
+            ? await repo.burnedSoFar(day: selectedDayKey, profile: profile)
+            : nil
 
         // Weight for the SELECTED day: prefers a real Apple-Health reading (today's daily, else the
         // "weight" series' newest point so a sparse-but-recent value still renders). Falls back to the
@@ -2019,18 +2025,19 @@ struct LiquidTodayView: View {
         // active-only. Nothing is banked unless food logging is on and a goal is set, so this branch simply
         // does not fire for anyone else.
         if preferDietExpenditure, let diet = dietExpenditureDay {
+            // SO FAR, not the whole day. The whole-day figure is a projection of what a day like this costs,
+            // and showing it at 00:30 claims a day's burn that has not happened. The running total prices
+            // overnight hours at resting metabolism rather than at the daily average — see `ProgressiveBurn`
+            // — and converges on the whole-day figure exactly by midnight, so this tile and the diet budget
+            // never describe one day with two numbers.
+            let soFar = dietBurnedSoFar
             return CaloriesReadout(
-                value: diet.kcal,
+                value: soFar?.totalSoFarKcal ?? diet.kcal,
                 metric: MetricCatalog.todayCaloriesMetric(hasImportedKcal: imported != nil,
                                                           hasOnDeviceKcal: onDevice != nil,
                                                           preferStrap: preferStrapCalories,
                                                           hasDietExpenditure: true),
-                // Names the method, and says plainly when it stops being a model. "estimated" is doing real
-                // work here: the figure is resting energy plus steps plus training, and presenting it with
-                // the bare word "Calories" is what made the old number read as a measurement.
-                caption: diet.measured
-                    ? String(localized: "measured from your own data")
-                    : String(localized: "estimated: resting + steps + training"))
+                caption: caloriesCaption(soFar: soFar, wholeDay: diet))
         }
         // Captions name the QUANTITY, not just the provenance: "Calories" alone would read as the same
         // figure in both cases, and the on-device one is roughly 1,700 kcal larger because it includes rest.
@@ -2057,6 +2064,30 @@ struct LiquidTodayView: View {
                                                       hasOnDeviceKcal: onDevice != nil,
                                                       preferStrap: preferStrapCalories),
             caption: onDevice == nil ? nil : onDeviceCaption)
+    }
+
+    /// Names the method AND the moment, because this tile is where both have been misread.
+    ///
+    /// A whole-day figure captioned "Calories" is what made the old number look like a measurement; a
+    /// running total captioned as a day total is the same error moved. So the caption carries which day-part
+    /// it describes, where the figure came from, and — on the linear path — that it is cruder.
+    private func caloriesCaption(soFar: ProgressiveBurn.Result?,
+                                 wholeDay: (kcal: Double, measured: Bool)) -> String {
+        let source = wholeDay.measured
+            ? String(localized: "from your own data")
+            : String(localized: "estimated")
+        guard let soFar else { return source }
+        switch soFar.basis {
+        case .complete:
+            return String(localized: "\(source) · whole day")
+        case .sleepAware:
+            // States the projection alongside, so "so far" cannot be mistaken for the day's total.
+            return String(localized: "\(source) · so far, \(Int(wholeDay.kcal.rounded())) by midnight")
+        case .linear:
+            // Said out loud: without a recorded night there is nothing to price sleep against, so the
+            // morning figure runs high. Better to admit that than to let it pass as the careful version.
+            return String(localized: "\(source) · so far, rough without sleep data")
+        }
     }
 
     private var caloriesCount: Double? { caloriesReadout.value }

@@ -182,6 +182,50 @@ extension Repository {
             .reduce(0.0) { $0 + max(0, $1.energyKcal ?? 0) }
     }
 
+    // MARK: - Sleep belonging to a day
+
+    /// Hours of sleep that fall inside a local day, and how many of those have already elapsed.
+    ///
+    /// CLIPPED TO THE DAY'S BOUNDS, not "last night's session". A night running 23:30 → 07:00 belongs 30
+    /// minutes to one day and 7 hours to the next, and charging either day for the whole session would
+    /// misprice both. Merged first, for the same reason `workoutStepsForDay` merges: two overlapping
+    /// sessions would otherwise count their shared minutes twice.
+    ///
+    /// Returns (0, 0) when nothing is recorded, which selects `ProgressiveBurn`'s linear fallback rather
+    /// than inventing a night.
+    ///
+    /// `elapsed` differs from `total` only while the user is still asleep — there is no sleep in the FUTURE
+    /// part of today, so after they are up the two are equal. Both are returned because the progressive
+    /// figure needs the night's length to solve its waking rate AND the part already slept to price what has
+    /// happened; deriving one from the other at the call site is how those two drift apart.
+    func sleepHoursForDay(_ dayKey: String, now: Date = Date()) async -> (total: Double, elapsed: Double) {
+        guard let bounds = Self.dayBounds(dayKey) else { return (0, 0) }
+        // A generous read window: a session that STARTED the previous evening still contributes to this day,
+        // so querying only within the day's bounds would miss its overlap.
+        var sessions = await sleepSessions(from: bounds.start - 24 * 3_600, to: bounds.end)
+        if sessions.isEmpty {
+            // A Bluetooth-only strap banks nights under the COMPUTED source, so the imported-only read above
+            // returns nothing for a 4.0 user whose every night is computed (#1150's reasoning). Without this
+            // the progressive figure would silently take the linear path for them, forever.
+            sessions = await computedSleepSessions(from: bounds.start - 24 * 3_600, to: bounds.end)
+        }
+        let clipped = sessions
+            .filter { $0.startTs < bounds.end && $0.endTs > bounds.start }
+            .map { (start: max($0.startTs, bounds.start), end: min($0.endTs, bounds.end)) }
+        guard !clipped.isEmpty else { return (0, 0) }
+
+        let nowTs = Int(now.timeIntervalSince1970)
+        var total = 0.0
+        var elapsed = 0.0
+        for window in TimeWindows.merged(clipped) {
+            total += Double(max(0, window.end - window.start)) / 3_600
+            // The part that has actually happened. For a past day `nowTs` is beyond the window and this
+            // equals `total`, which is what makes a past day read its full figure.
+            elapsed += Double(max(0, min(window.end, nowTs) - window.start)) / 3_600
+        }
+        return (min(total, 24), min(elapsed, total))
+    }
+
     // MARK: - Which step count the budget may use
 
     /// The day's total step count, from the freshest instrument that can answer.
@@ -338,6 +382,43 @@ extension Repository {
         let measured = (try? await store.currentDietGoal(deviceId: DietStore.sourceId))?
             .measuredBaselineKcal != nil
         return (value, measured)
+    }
+
+    /// What has been spent SO FAR on a day, for display.
+    ///
+    /// Live-computed rather than banked, deliberately: it changes every minute, and a stored running total
+    /// would be stale the moment it was written. The banked `diet_expenditure` stays the whole-day figure —
+    /// it is what history charts and what the measured-baseline derivation subtracts against, and both of
+    /// those need a day total rather than a snapshot.
+    ///
+    /// For a day that is not today the result is the whole-day figure, because the day has fully elapsed.
+    /// So this is safe to call for any day and needs no "is it today" check at the call site.
+    ///
+    /// nil when there is no expenditure to describe.
+    func burnedSoFar(day: String? = nil, profile: ProfileStore,
+                     now: Date = Date()) async -> ProgressiveBurn.Result? {
+        let dayKey = day ?? Repository.localDayKey(now)
+        let energy = await dietDayEnergy(day: dayKey, profile: profile)
+        guard energy.expenditure.totalKcal > 0 else { return nil }
+
+        let isToday = dayKey == Repository.localDayKey(now)
+        let elapsed = isToday
+            ? ProgressiveBurn.elapsedHours(minuteOfDay: FoodEntries.minuteOfDay(now))
+            : ProgressiveBurn.hoursPerDay
+        let sleep = await sleepHoursForDay(dayKey, now: now)
+
+        // The multiplier is re-derived from the baseline rather than read from the goal's activity level,
+        // so an adopted MEASURED baseline flows through correctly: its effective multiplier is whatever the
+        // measurement implies, not the ×1.2 the model would have used.
+        let multiplier = energy.expenditure.bmrKcal > 0
+            ? energy.expenditure.baselineKcal / energy.expenditure.bmrKcal
+            : 1.2
+        return ProgressiveBurn.burnedSoFar(bmrKcal: energy.expenditure.bmrKcal,
+                                           activityMultiplier: multiplier,
+                                           nightSleepHours: sleep.total,
+                                           sleepHoursToday: sleep.elapsed,
+                                           elapsedHours: elapsed,
+                                           activityKcal: energy.expenditure.activityKcal)
     }
 
     /// Local-day bounds as unix seconds, `[start, end)`.

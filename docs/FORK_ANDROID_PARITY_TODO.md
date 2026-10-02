@@ -78,6 +78,7 @@ because the oracle-test approach works cleanly on them and everything else depen
 | `WeightTrend.swift` | `WeightTrend.kt` | EWMA trend weight (time-aware, 10-day half-life), least-squares slope + standard error, detectability window. `confidenceK` is 1.96; a fit needs >=3 DISTINCT days. |
 | `AdaptiveExpenditureEngine.swift` | **twin EXISTS and now diverges** | See section 0. Asymmetric interval (upward only, for unlogged and rough days), `intakeIsRough` in, `roughIntakeDays` + `isLikelyUnderstated` out. `unloggedDayExcess` (0.35) is the one assumed figure and must match exactly or the two platforms price budgets differently. |
 | `CalorieTarget.swift` (additions) | `CalorieTarget.kt` | `measuredBaseline(measuredTdeeKcal:meanActivityKcal:)` and `sanitisedBaselineOverride`. The subtraction is the double-count guard — a measured average TDEE already contains its window's average activity. The BMR floor REFUSES rather than clamps. |
+| `ProgressiveBurn.swift` | `ProgressiveBurn.kt` | What has been spent SO FAR today. **The contract is an identity, not a formula**: at elapsed 24h the result must equal `dayExpenditure.totalKcal` EXACTLY, which is why the waking rate is solved rather than chosen. Only the BASELINE is prorated — step NEAT and workout kcal are measured-to-date and are added whole, or an early workout gets discounted. No recorded sleep falls back to linear AND reports which path ran. The running total is capped at the day's baseline, so a nap cannot push it past the figure it converges on. |
 | `MealGrouping.swift` | `MealGrouping.kt` | Which meal an entry belongs to, and grouping with subtotals. **`breakfastEndsMinute` is 11:00, not the conventional 10:00** — see the note below. Explicit meal always beats the clock; an unknown time infers NOTHING and lands in `unassigned`. Empty groups are dropped. The `Meal` raw values are the `foodEntry.mealType` wire format, so a rename orphans every logged entry. |
 | `WakeBriefWindow.swift` | `WakeBriefWindow.kt` | When a wake-triggered morning brief is due. Pure minute-of-day arithmetic. The case to get right: the target has usually ALREADY PASSED, because a strap reports its night on offload rather than on waking — so "late" is normal and must fire, while "hours late" must not. The cutoff is checked against the TARGET before the waiting check, or a target already past the cutoff reports `waiting` for something that can never become due. |
 | `MacroTargets.swift` | `MacroTargets.kt` | Budget → protein (user-set g/kg, slider 0.8–2.0, default **1.2**), fat FLOOR at 0.7 g/kg, carbs as the remainder. The invariant to pin: the three targets spend exactly the budget. `isOverCommitted` must be surfaced, not hidden — 0 g of carbs on its own reads as a rounding artefact rather than a plan that does not fit. |
@@ -429,6 +430,19 @@ pedometer's figure.
   which series the tile prefers changed. And because `diet_expenditure` is computed through
   `CalorieTarget.dayExpenditure`, it becomes measurement-backed on its own the day a measured baseline is
   adopted, with no switchover to build.
+- **The Calories tile shows a RUNNING total** (`Repository.burnedSoFar` + `sleepHoursForDay`). Display only:
+  nothing is banked, the budget stays whole-day (one that shrank through the day would read as nearly blown
+  by a normal breakfast), and `diet_expenditure` stays a day total because history charts it and the
+  measured-baseline derivation subtracts against it. The sleep read must clip sessions to the DAY's bounds
+  and merge them first — a 23:30–07:00 night belongs partly to each day, and overlapping sessions would
+  double-count — and must fall back to the computed sleep source, or a Bluetooth-only 4.0 is stuck on the
+  linear path forever. The multiplier is re-derived from the baseline rather than read off the goal's
+  activity level, so an adopted measured baseline flows through with whatever multiplier it implies.
+- **One food screen** (`DietDetailView` with a Day/Progress segmented control; `FoodLogView` composed as
+  the Day half via `ownsScaffold: false` rather than copied). `TabRoute.food` lands there so the reminder's
+  tap-through still works. The FAB's "Log food" now opens the ADD SHEET directly — logging used to be
+  FAB → Log food → Add food → sheet, and the middle step existed only because the sheet had no other home.
+  Android's FAB mirrors that entry-point change; the segmented layout is Apple-only UI.
 - **HealthKit entitlement removal** (`project.yml`) — Apple-only, nothing owed.
 - **Dev build markers** (`NOOP_DEV_BUILD`, `AppIcon-Dev`) — Apple-only, nothing owed.
 
