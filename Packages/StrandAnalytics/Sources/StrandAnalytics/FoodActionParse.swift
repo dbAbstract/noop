@@ -23,6 +23,19 @@ import Foundation
 //
 // Pure. No store, no network, no UUID generation. Kotlin-twinnable.
 
+/// Which day an action lands on.
+///
+/// A symbolic value rather than a resolved date, because resolving one needs a calendar and a timezone and
+/// this module has neither. "Yesterday" also has to mean yesterday WHEN THE USER TAPS, not when the model
+/// spoke — a conversation that crosses midnight would otherwise log to the wrong day.
+public enum FoodActionDay: Equatable, Sendable {
+    case today
+    /// 1 = yesterday. Bounded by `FoodActionParse.maxDaysAgo`.
+    case daysAgo(Int)
+    /// An explicit "yyyy-MM-dd" the caller resolves and range-checks.
+    case explicit(String)
+}
+
 /// What the model is proposing to do.
 public enum FoodAction: Equatable, Sendable {
     /// Log a food already in the library. The id is the model's claim and the CALLER must resolve it —
@@ -35,6 +48,27 @@ public enum FoodAction: Equatable, Sendable {
     /// actually 150 kcal" and "here is a new yogurt" are different intents with different consequences,
     /// and a model that conflated them would quietly fork the library into near-duplicates.
     case edit(itemId: String, name: String?, macros: MacroTotals)
+    /// Add a food to the library and log NOTHING.
+    ///
+    /// Separate from `create` because "save this so I can log it against yesterday myself" is a real and
+    /// distinct intent — the user's own words. Folding it into `create` with a portion of zero would mean
+    /// a card that says it will log something and then does not.
+    case save(name: String, servingLabel: String, macros: MacroTotals)
+    /// Record a weigh-in. The one action here that is not about food, included because the user's ask was
+    /// to tell the coach things and have it sort them out, and a weight is the other number this feature
+    /// runs on.
+    case weight(kg: Double)
+}
+
+/// One proposed action plus the day it lands on.
+public struct FoodActionRequest: Equatable, Sendable {
+    public let action: FoodAction
+    public let day: FoodActionDay
+
+    public init(action: FoodAction, day: FoodActionDay = .today) {
+        self.action = action
+        self.day = day
+    }
 }
 
 public enum FoodActionParse {
@@ -68,28 +102,154 @@ public enum FoodActionParse {
         case inconsistent
         /// A portion outside anything a meal could be.
         case badPortion
+        /// A day that is not today, yesterday, or a well-formed ISO date.
+        case badDay
+        /// A weight outside anything a person is, which usually means pounds or a typo.
+        case badWeight
     }
 
     /// Portion ceiling. Twelve servings of one food is already implausible; past that it is a model
     /// mis-parsing "120 g" as a portion count, which would log a day's calories twelve times over.
     public static let maxPortion = 12.0
 
+    /// How many actions one reply may carry. Six covers a described meal — a main, two sides, a drink and
+    /// a pudding — while stopping a looping model handing over a wall of cards to dismiss.
+    public static let maxActions = 6
+
+    /// Plausible human weights, in kg. Outside this a figure is a typo or a model confusing weight with
+    /// calories — either of which would corrupt the series the whole weight trend is fitted through.
+    ///
+    /// DELIBERATELY WIDE, and it does not catch the pounds confusion. 160 kg is a real human weight even
+    /// though for most users that figure would be pounds misread as kilos, and a range narrow enough to
+    /// catch it would lock out heavier users outright. Telling those apart needs the user's own recent
+    /// weight, which this module does not have and should not — the guard belongs at the app layer, beside
+    /// the profile.
+    public static let minWeightKg = 25.0
+    public static let maxWeightKg = 400.0
+
     // MARK: - Parsing
 
-    /// Pull an action out of a reply, or say why there is none.
-    public static func action(fromReply reply: String) -> Result<FoodAction, Failure> {
+    /// Pull EVERY action out of a reply, in the order the model stated them.
+    ///
+    /// Accepts two shapes under the sentinel: an `actions` array, which is the one the prompt asks for, and
+    /// a bare single object, which is what the first version of this protocol used. Both are kept because
+    /// a model will emit either and refusing the older shape would make the feature fail on a technicality
+    /// the user cannot see.
+    ///
+    /// One bad action does NOT discard the good ones. "Eggs, toast and a coffee" with a nonsense figure on
+    /// the coffee should still offer the eggs and the toast — throwing all three away over one would make
+    /// a multi-item meal less reliable than logging each separately, which defeats the point. The failure
+    /// is only returned when NOTHING survived, so the caller can say why.
+    public static func actions(fromReply reply: String) -> Result<[FoodActionRequest], Failure> {
         guard reply.contains(sentinel) else { return .failure(.noAction) }
         guard let objectText = objectContainingSentinel(in: reply),
               let data = objectText.data(using: .utf8),
               let outer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let body = outer[sentinel] as? [String: Any] else { return .failure(.malformed) }
+              let body = outer[sentinel] else { return .failure(.malformed) }
 
+        let bodies: [[String: Any]]
+        if let dict = body as? [String: Any] {
+            // The array form, or the original single-object form.
+            if let list = dict["actions"] as? [[String: Any]] {
+                bodies = list
+            } else {
+                bodies = [dict]
+            }
+        } else if let list = body as? [[String: Any]] {
+            // The sentinel pointing straight at an array. Not asked for, but unambiguous.
+            bodies = list
+        } else {
+            return .failure(.malformed)
+        }
+
+        guard !bodies.isEmpty else { return .failure(.unknownAction) }
+        // Bounded: a model looping would otherwise hand the user a wall of cards to dismiss.
+        var parsed: [FoodActionRequest] = []
+        var firstFailure: Failure?
+        for b in bodies.prefix(maxActions) {
+            switch request(from: b) {
+            case .success(let r): parsed.append(r)
+            case .failure(let f): if firstFailure == nil { firstFailure = f }
+            }
+        }
+        if parsed.isEmpty { return .failure(firstFailure ?? .unknownAction) }
+        return .success(parsed)
+    }
+
+    /// The original single-action entry point, kept as the convenience it now is.
+    ///
+    /// Returns the FIRST action. Callers that can render several should use `actions(fromReply:)`.
+    public static func action(fromReply reply: String) -> Result<FoodAction, Failure> {
+        switch actions(fromReply: reply) {
+        case .success(let list):
+            guard let first = list.first else { return .failure(.unknownAction) }
+            return .success(first.action)
+        case .failure(let f):
+            return .failure(f)
+        }
+    }
+
+    /// Parse one action object.
+    static func request(from body: [String: Any]) -> Result<FoodActionRequest, Failure> {
+        switch day(from: body) {
+        case .failure(let f): return .failure(f)
+        case .success(let day):
+            return single(from: body).map { FoodActionRequest(action: $0, day: day) }
+        }
+    }
+
+    /// Which day the action targets. Absent means today, which is what "I just had" means.
+    static func day(from body: [String: Any]) -> Result<FoodActionDay, Failure> {
+        guard let raw = nonEmpty(body["day"]) ?? nonEmpty(body["date"]) else { return .success(.today) }
+        let lower = raw.lowercased()
+        if lower == "today" { return .success(.today) }
+        if lower == "yesterday" { return .success(.daysAgo(1)) }
+        // "3 days ago" / "2d" are not accepted: a model paraphrasing a date is a model guessing at one, and
+        // an ISO date is unambiguous. The prompt asks for ISO beyond yesterday.
+        if isPlausibleISODay(lower) { return .success(.explicit(lower)) }
+        return .failure(.badDay)
+    }
+
+    /// Shape-only check: four digits, two, two, dash-separated, with months and days in range.
+    ///
+    /// Shape rather than calendar validity, because this module has no calendar — the app resolves the
+    /// string and range-checks it against how far back logging may reach. Rejecting the obviously wrong
+    /// here still stops "last Tuesday" being stored as a day key.
+    static func isPlausibleISODay(_ s: String) -> Bool {
+        let parts = s.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]),
+              y >= 2_000, y <= 2_100, m >= 1, m <= 12, d >= 1, d <= 31 else { return false }
+        return true
+    }
+
+    /// Parse the verb and its fields, without the day.
+    static func single(from body: [String: Any]) -> Result<FoodAction, Failure> {
         let verb = (body["action"] as? String)?
             .trimmingCharacters(in: .whitespaces).lowercased() ?? ""
         let portion = body["portion"] == nil ? 1 : MacroEstimateParse.number(body, "portion")
         guard portion.isFinite, portion > 0, portion <= maxPortion else { return .failure(.badPortion) }
 
         switch verb {
+        case "weight":
+            let kg = MacroEstimateParse.number(body, "kg", "weightKg", "weight")
+            // A plausible human weight. Outside this it is a pounds figure, a typo, or a model confusing
+            // weight with calories — all of which would corrupt the one series the trend is fitted through.
+            guard kg.isFinite, kg >= minWeightKg, kg <= maxWeightKg else { return .failure(.badWeight) }
+            return .success(.weight(kg: kg))
+
+        case "save":
+            guard let name = nonEmpty(body["name"]) else { return .failure(.missingName) }
+            switch macros(body) {
+            case .failure(let f): return .failure(f)
+            case .success(let m):
+                return .success(.save(name: name,
+                                      servingLabel: nonEmpty(body["servingLabel"])
+                                          ?? nonEmpty(body["serving_label"]) ?? "",
+                                      macros: m))
+            }
+
         case "log":
             guard let id = nonEmpty(body["itemId"]) ?? nonEmpty(body["item_id"]) else {
                 return .failure(.missingItemId)

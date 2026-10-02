@@ -16,6 +16,7 @@ extension TodaySection {
         case .journal: return "book.closed"
         case .addedCards: return "rectangle.stack.badge.plus"
         case .diet: return "fork.knife"
+        case .weight: return "scalemass"
         }
     }
 
@@ -35,6 +36,7 @@ extension TodaySection {
         // Amber, matching the Calories tile: intake and burn are the same quantity read in opposite
         // directions, and tinting them apart would suggest otherwise.
         case .diet: return StrandPalette.metricAmber
+        case .weight: return StrandPalette.chargeColor
         }
     }
 }

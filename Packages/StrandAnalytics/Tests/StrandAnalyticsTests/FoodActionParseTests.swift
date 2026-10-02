@@ -266,3 +266,208 @@ final class FoodActionParseTests: XCTestCase {
         XCTAssertFalse(found?.contains("unrelated") ?? true)
     }
 }
+
+// MARK: - Several actions, days, and the non-logging verbs
+
+/// "I had eggs, toast and a coffee" should be one turn, not three. And "I forgot to log yesterday" should
+/// land on yesterday rather than today.
+extension FoodActionParseTests {
+
+    private func parseAll(_ s: String) -> Result<[FoodActionRequest], FoodActionParse.Failure> {
+        FoodActionParse.actions(fromReply: s)
+    }
+
+    private func all(_ s: String) -> [FoodActionRequest]? {
+        if case .success(let r) = parseAll(s) { return r }
+        return nil
+    }
+
+    private func allFailed(_ s: String) -> FoodActionParse.Failure? {
+        if case .failure(let f) = parseAll(s) { return f }
+        return nil
+    }
+
+    /// Three items, one reply.
+    func testSeveralActionsInOneReply() throws {
+        let reply = """
+        {"noop_food_action": {"actions": [
+          {"action": "log", "itemId": "A1", "portion": 2},
+          {"action": "create", "name": "Sourdough", "kcal": 160, "protein": 6, "carbs": 30, "fat": 1},
+          {"action": "log", "itemId": "B2"}
+        ]}}
+        """
+        let items = try XCTUnwrap(all(reply))
+        XCTAssertEqual(items.count, 3)
+        guard case .log(let id, let portion) = items[0].action else { return XCTFail("expected a log") }
+        XCTAssertEqual(id, "A1")
+        XCTAssertEqual(portion, 2)
+        guard case .create(let name, _, _, _) = items[1].action else { return XCTFail("expected a create") }
+        XCTAssertEqual(name, "Sourdough")
+    }
+
+    /// ONE BAD ITEM MUST NOT DISCARD THE GOOD ONES. Throwing all three away over one nonsense figure would
+    /// make a described meal less reliable than logging each item separately, which defeats the point.
+    func testABadActionDoesNotDiscardTheOthers() throws {
+        let reply = """
+        {"noop_food_action": {"actions": [
+          {"action": "log", "itemId": "A1"},
+          {"action": "create", "name": "Mystery", "kcal": 0},
+          {"action": "log", "itemId": "B2"}
+        ]}}
+        """
+        let items = try XCTUnwrap(all(reply))
+        XCTAssertEqual(items.count, 2, "the two valid logs must survive the invalid create")
+    }
+
+    /// But when nothing survives, the reason is reported rather than an empty success.
+    func testAllActionsFailingReportsWhy() {
+        let reply = #"{"noop_food_action": {"actions": [{"action": "create", "name": "X", "kcal": 0}]}}"#
+        XCTAssertEqual(allFailed(reply), .noCalories)
+    }
+
+    /// The original single-object shape still works — a model will emit either, and refusing the older one
+    /// would fail on a technicality the user cannot see.
+    func testTheSingleObjectShapeStillParses() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "log", "itemId": "A1"}}"#))
+        XCTAssertEqual(items.count, 1)
+    }
+
+    func testTheSentinelMayPointStraightAtAnArray() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": [{"action": "log", "itemId": "A1"}]}"#))
+        XCTAssertEqual(items.count, 1)
+    }
+
+    /// A looping model must not hand over a wall of cards.
+    func testTooManyActionsAreCapped() throws {
+        let one = #"{"action": "log", "itemId": "A1"}"#
+        let many = Array(repeating: one, count: 20).joined(separator: ",")
+        let items = try XCTUnwrap(all("{\"noop_food_action\": {\"actions\": [\(many)]}}"))
+        XCTAssertEqual(items.count, FoodActionParse.maxActions)
+    }
+
+    func testAnEmptyActionsArrayIsRefused() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"actions": []}}"#), .unknownAction)
+    }
+
+    // MARK: - Days
+
+    func testDayDefaultsToToday() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "log", "itemId": "A1"}}"#))
+        XCTAssertEqual(items[0].day, .today)
+    }
+
+    func testYesterdayIsUnderstood() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "yesterday"}}"#))
+        XCTAssertEqual(items[0].day, .daysAgo(1))
+    }
+
+    func testAnISODayIsCarriedThrough() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "2026-09-28"}}"#))
+        XCTAssertEqual(items[0].day, .explicit("2026-09-28"))
+    }
+
+    func testDayIsCaseInsensitive() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "Yesterday"}}"#))
+        XCTAssertEqual(items[0].day, .daysAgo(1))
+    }
+
+    /// A model paraphrasing a date is a model guessing at one. Refused rather than resolved here, because
+    /// this module has no calendar and "last Tuesday" stored as a day key is a silently wrong day.
+    func testAVagueDayIsRefused() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "last tuesday"}}"#),
+                       .badDay)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "3 days ago"}}"#),
+                       .badDay)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "log", "itemId": "A1", "day": "28/09/2026"}}"#),
+                       .badDay)
+    }
+
+    func testMalformedISODaysAreRefused() {
+        XCTAssertFalse(FoodActionParse.isPlausibleISODay("2026-13-01"))
+        XCTAssertFalse(FoodActionParse.isPlausibleISODay("2026-09-32"))
+        XCTAssertFalse(FoodActionParse.isPlausibleISODay("26-09-01"))
+        XCTAssertFalse(FoodActionParse.isPlausibleISODay("2026-9-1"))
+        XCTAssertTrue(FoodActionParse.isPlausibleISODay("2026-09-01"))
+    }
+
+    /// Each item carries its OWN day, so "I had porridge this morning and forgot yesterday's dinner" works.
+    func testActionsCanTargetDifferentDays() throws {
+        let reply = """
+        {"noop_food_action": {"actions": [
+          {"action": "log", "itemId": "A1"},
+          {"action": "log", "itemId": "B2", "day": "yesterday"}
+        ]}}
+        """
+        let items = try XCTUnwrap(all(reply))
+        XCTAssertEqual(items[0].day, .today)
+        XCTAssertEqual(items[1].day, .daysAgo(1))
+    }
+
+    // MARK: - Save without logging
+
+    /// The user's own ask: save it so they can log a portion against yesterday themselves. Distinct from
+    /// `create`, which logs — a card that said it would log and then did not would be worse than no card.
+    func testSaveAddsToTheLibraryWithoutLogging() throws {
+        let reply = #"{"noop_food_action": {"action": "save", "name": "Oikos 180 g tub", "servingLabel": "1 tub", "kcal": 150, "protein": 15, "carbs": 20, "fat": 0}}"#
+        let items = try XCTUnwrap(all(reply))
+        guard case .save(let name, let serving, let macros) = items[0].action else {
+            return XCTFail("expected a save action")
+        }
+        XCTAssertEqual(name, "Oikos 180 g tub")
+        XCTAssertEqual(serving, "1 tub")
+        XCTAssertEqual(macros.kcal, 150)
+    }
+
+    /// A save is held to the same arithmetic as everything else — it is going into the library, where it
+    /// will be logged repeatedly, so a self-contradicting figure there is worse than in one entry.
+    func testSaveIsHeldToTheArithmeticCheck() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "save", "name": "X", "kcal": 900, "protein": 15, "carbs": 20, "fat": 0}}"#),
+                       .inconsistent)
+    }
+
+    // MARK: - Weight
+
+    func testWeightIsUnderstood() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "weight", "kg": 72.4}}"#))
+        guard case .weight(let kg) = items[0].action else { return XCTFail("expected a weight action") }
+        XCTAssertEqual(kg, 72.4, accuracy: 0.001)
+    }
+
+    func testWeightAcceptsAlternativeKeys() throws {
+        XCTAssertNotNil(all(#"{"noop_food_action": {"action": "weight", "weightKg": 72.4}}"#))
+        XCTAssertNotNil(all(#"{"noop_food_action": {"action": "weight", "weight": 72.4}}"#))
+    }
+
+    /// A typo or a model confusing weight with calories would corrupt the one series the whole trend is
+    /// fitted through, so a figure outside any human range is refused outright.
+    func testAnImplausibleWeightIsRefused() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "weight", "kg": 2100}}"#), .badWeight)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "weight", "kg": 0}}"#), .badWeight)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "weight", "kg": 10}}"#), .badWeight)
+    }
+
+    /// 160 kg is ACCEPTED, and that is correct even though for most users it would be a pounds figure
+    /// misread as kilos. People do weigh 160 kg, and a pure range check has no way to tell the two apart.
+    ///
+    /// Catching the pounds case needs the user's OWN recent weight, which this module deliberately does not
+    /// have — so the guard lives at the app layer, where the profile does. Pinned here so nobody "fixes"
+    /// this by narrowing the range and quietly locking out heavier users.
+    func testALargeButRealWeightIsAccepted() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "weight", "kg": 160}}"#))
+        guard case .weight(let kg) = items[0].action else { return XCTFail("expected a weight action") }
+        XCTAssertEqual(kg, 160)
+    }
+
+    /// A weigh-in can be backdated like anything else.
+    func testWeightCanTargetYesterday() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "weight", "kg": 72.4, "day": "yesterday"}}"#))
+        XCTAssertEqual(items[0].day, .daysAgo(1))
+    }
+
+    /// The false-positive guard still holds across the new shapes: prose with an `actions` array in it but
+    /// no sentinel must stay invisible.
+    func testTheSentinelIsStillRequiredForTheArrayShape() {
+        XCTAssertEqual(allFailed(#"Here's a plan: {"actions": [{"action": "log", "itemId": "A1"}]}"#),
+                       .noAction)
+    }
+}

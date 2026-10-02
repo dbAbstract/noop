@@ -22,6 +22,10 @@ struct FoodProposalCard: View {
 
     @EnvironmentObject private var repo: Repository
     @EnvironmentObject private var coach: AICoachEngine
+    /// Handed to `applyFoodProposal` so a weigh-in updates the profile's weight scalar too — every calorie
+    /// estimate reads it, so a weigh-in that moved the trend but not the profile would leave the budget
+    /// pricing an old mass.
+    @EnvironmentObject private var profile: ProfileStore
 
     @State private var working = false
     @State private var failed = false
@@ -32,6 +36,8 @@ struct FoodProposalCard: View {
                 header
                 if case .unresolved(let handle) = proposal.kind {
                     unresolvedBody(handle)
+                } else if case .implausibleWeight(let kg, let last) = proposal.kind {
+                    implausibleWeightBody(kg: kg, last: last)
                 } else {
                     detail
                     if proposal.state == .pending { actions } else { settled }
@@ -44,8 +50,8 @@ struct FoodProposalCard: View {
 
     private var tint: Color {
         switch proposal.kind {
-        case .unresolved: return StrandPalette.strain066
-        case .edit: return StrandPalette.chargeColor
+        case .unresolved, .implausibleWeight: return StrandPalette.strain066
+        case .edit, .save: return StrandPalette.chargeColor
         default: return StrandPalette.accent
         }
     }
@@ -58,6 +64,13 @@ struct FoodProposalCard: View {
             Text(overline)
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textTertiary)
+            // A day OTHER than today is stated in the header, not buried: the single most consequential
+            // thing about a logging card is which day it moves, and it is invisible otherwise.
+            if proposal.targetsAnotherDay(today: Repository.localDayKey(Date())) {
+                Text(proposal.dayLabel)
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.accent)
+            }
             Spacer(minLength: 8)
             // Says WHO proposed this. A card that looked like the app's own arithmetic would hide the
             // one fact the user needs to decide how hard to check it.
@@ -67,12 +80,27 @@ struct FoodProposalCard: View {
         }
     }
 
+    /// A weigh-in far enough from the user's own recent weight to be a unit mix-up rather than a reading.
+    ///
+    /// No confirm button. 160 kg is a real weight for somebody, so the pure parser cannot refuse it — only
+    /// a comparison against THIS user's history can, and storing it would corrupt the one series the entire
+    /// weight trend is fitted through.
+    @ViewBuilder
+    private func implausibleWeightBody(kg: Double, last: Double) -> some View {
+        Text("That would be a \(Int(abs(kg - last).rounded())) kg change from your last weigh-in of \(String(format: "%.1f", last)) kg. Nothing has been saved — if you meant pounds, say the figure in kilos, or log it yourself if it really is right.")
+            .font(StrandFont.footnote)
+            .foregroundStyle(StrandPalette.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var icon: String {
         switch proposal.kind {
         case .log: return "plus.circle"
         case .create: return "sparkles"
+        case .save: return "tray.and.arrow.down"
         case .edit: return "pencil"
-        case .unresolved: return "questionmark.circle"
+        case .weight: return "scalemass"
+        case .unresolved, .implausibleWeight: return "questionmark.circle"
         }
     }
 
@@ -80,8 +108,11 @@ struct FoodProposalCard: View {
         switch proposal.kind {
         case .log: return String(localized: "LOG")
         case .create: return String(localized: "NEW FOOD")
+        case .save: return String(localized: "SAVE ONLY")
         case .edit: return String(localized: "CORRECT A FOOD")
+        case .weight: return String(localized: "WEIGH-IN")
         case .unresolved: return String(localized: "COULDN'T MATCH")
+        case .implausibleWeight: return String(localized: "CHECK THE UNITS")
         }
     }
 
@@ -128,7 +159,22 @@ struct FoodProposalCard: View {
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-            case .unresolved:
+            case .save(_, let serving, let macros):
+                Text("per \(serving.isEmpty ? String(localized: "1 serving") : serving) · \(macroLine(macros))")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                // Says plainly that nothing lands on a day, because "save" next to a macro figure reads
+                // like logging to anyone not thinking about it.
+                Text("Goes into your foods. Nothing is logged — you can add a portion from any day.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .weight:
+                Text("Recorded as your weigh-in for \(proposal.dayLabel.lowercased()).")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .unresolved, .implausibleWeight:
                 EmptyView()
             }
 
@@ -161,6 +207,12 @@ struct FoodProposalCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: NoopMetrics.space3) {
                 switch proposal.kind {
+                case .save:
+                    NoopButton("Save it", kind: .primary) { apply(save: true) }
+                        .disabled(working)
+                case .weight:
+                    NoopButton("Record it", kind: .primary) { apply(save: false) }
+                        .disabled(working)
                 case .create:
                     // Log-only FIRST and primary. Most meals are eaten once, so saving every proposed
                     // food would fill the picker with things nobody logs again — the same default the
@@ -177,7 +229,8 @@ struct FoodProposalCard: View {
                         .disabled(working)
                 }
                 NoopButton("No", kind: .secondary) {
-                    coach.updateProposalState(messageId: messageId, to: .dismissed)
+                    coach.updateProposalState(messageId: messageId, proposalId: proposal.id,
+                                              to: .dismissed)
                 }
                 .disabled(working)
                 if working { ProgressView().controlSize(.small) }
@@ -208,8 +261,14 @@ struct FoodProposalCard: View {
 
     private var settledText: String {
         guard proposal.state == .applied else { return String(localized: "Not logged.") }
-        if case .edit = proposal.kind { return String(localized: "Saved food updated.") }
-        return String(localized: "Logged.")
+        switch proposal.kind {
+        case .edit: return String(localized: "Saved food updated.")
+        case .save: return String(localized: "Saved to your foods.")
+        case .weight: return String(localized: "Weigh-in recorded.")
+        // Names the DAY once applied, because a card that scrolled back to says only "Logged." leaves the
+        // one question worth asking later — logged to when? — unanswerable.
+        default: return String(localized: "Logged to \(proposal.dayLabel.lowercased()).")
+        }
     }
 
     private func apply(save: Bool) {
@@ -218,10 +277,10 @@ struct FoodProposalCard: View {
         Task {
             // Marked aiEstimate wherever macros came from the model, so a guess stays identifiable in the
             // log long after this conversation has scrolled away.
-            let ok = await repo.applyFoodProposal(proposal, saveToLibrary: save)
+            let ok = await repo.applyFoodProposal(proposal, saveToLibrary: save, profile: profile)
             working = false
             if ok {
-                coach.updateProposalState(messageId: messageId, to: .applied)
+                coach.updateProposalState(messageId: messageId, proposalId: proposal.id, to: .applied)
             } else {
                 // Left PENDING on failure. A card that said "Logged." over a write that did not happen
                 // would be the worst outcome available here.

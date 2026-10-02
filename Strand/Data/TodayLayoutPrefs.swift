@@ -42,6 +42,11 @@ enum TodaySection: String, CaseIterable, Identifiable {
     /// for it there specifically. Appended LAST in the enum so `decodeOrder`'s back-fill lands it
     /// predictably for saved orders that predate it; the default order below is what positions it.
     case diet
+    /// The weigh-in (#diet-weight). Sits beside `diet` in `defaultOrder` because it is the OTHER half of
+    /// the same question — `AdaptiveExpenditureEngine` gates on weigh-ins as hard as on intake, and a diet
+    /// with perfect food logs and four weigh-ins gets no verdict at all. Appended LAST in the enum so
+    /// `decodeOrder`'s back-fill lands it predictably for saved orders that predate it.
+    case weight
 
     var id: String { rawValue }
 
@@ -60,13 +65,15 @@ enum TodaySection: String, CaseIterable, Identifiable {
         case .journal:        return String(localized: "Journal")
         case .addedCards:     return String(localized: "Added Cards")
         case .diet:           return String(localized: "Diet")
+        case .weight:         return String(localized: "Weight")
+        case .weight:         return String(localized: "Weight")
         }
     }
 
     /// The original, hard-coded section order — the default when the layout isn't customised. The journal
     /// widget (#656) is last by default, where it was first added, above the data-sources card.
     static let defaultOrder: [TodaySection] = [
-        .hero, .diet, .liveSession, .synthesis, .keyMetrics, .workouts, .heartRate, .recoveryVitals,
+        .hero, .diet, .weight, .liveSession, .synthesis, .keyMetrics, .workouts, .heartRate, .recoveryVitals,
         .yourCards, .menstrualCycle, .journal, .addedCards,
     ]
 }

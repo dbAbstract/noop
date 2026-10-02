@@ -29,9 +29,18 @@ struct FoodProposal: Identifiable, Equatable {
         /// Correct an existing food's macros. `item` carries the current values so the card can show
         /// what is changing — a macro edit with no before-figure is impossible to sanity-check.
         case edit(item: FoodItem, name: String?, macros: MacroTotals)
+        /// Add a food to the library and log NOTHING — "save it so I can log it against yesterday myself".
+        case save(name: String, servingLabel: String, macros: MacroTotals)
+        /// Record a weigh-in.
+        case weight(kg: Double)
         /// The model referred to a food that could not be resolved. Rendered as a plain note, with no
         /// confirm button, because there is nothing safe to confirm.
         case unresolved(handle: String)
+        /// A weigh-in so far from the user's own recent weight that it is almost certainly pounds misread
+        /// as kilos. Rendered as a question rather than a confirm, because storing it would corrupt the one
+        /// series the entire weight trend is fitted through — and the pure parser cannot catch it, since
+        /// 160 kg is a real weight for somebody.
+        case implausibleWeight(kg: Double, lastKnownKg: Double)
     }
 
     /// Where the card is in its life. Guards against the obvious double-tap: a card that has already
@@ -41,12 +50,24 @@ struct FoodProposal: Identifiable, Equatable {
     let id: UUID
     let kind: Kind
     var state: State
+    /// The local day key this lands on. Resolved at proposal time from the model's symbolic day, so a card
+    /// left on screen across midnight still writes to the day it said it would.
+    let dayKey: String
+    /// How that day reads on the card. Carried rather than re-derived so the label and the write cannot
+    /// disagree about which day they mean.
+    let dayLabel: String
 
-    init(id: UUID = UUID(), kind: Kind, state: State = .pending) {
+    init(id: UUID = UUID(), kind: Kind, state: State = .pending,
+         dayKey: String, dayLabel: String) {
         self.id = id
         self.kind = kind
         self.state = state
+        self.dayKey = dayKey
+        self.dayLabel = dayLabel
     }
+
+    /// Whether this writes to a day other than today, which the card must say out loud.
+    func targetsAnotherDay(today: String) -> Bool { dayKey != today }
 
     /// Whether the card offers to save the proposed food to the library. Only a `create` can.
     var canSaveToLibrary: Bool {
@@ -61,9 +82,10 @@ struct FoodProposal: Identifiable, Equatable {
             return NutritionMath.scaled(item.macros, portion: portion)
         case .create(_, _, let macros, let portion):
             return NutritionMath.scaled(macros, portion: portion)
-        // An edit changes a definition, not the day. Showing a "this adds N kcal" headline on one would
-        // be a second, wrong answer to what the card does.
-        case .edit, .unresolved:
+        // None of these add to a day. An edit changes a definition, a save only fills the library, a
+        // weigh-in is not food — showing "this adds N kcal" on any of them would answer a question the
+        // card is not asking.
+        case .edit, .save, .weight, .unresolved, .implausibleWeight:
             return nil
         }
     }
@@ -72,7 +94,10 @@ struct FoodProposal: Identifiable, Equatable {
         switch kind {
         case .log(let item, _): return item.name
         case .create(let name, _, _, _): return name
+        case .save(let name, _, _): return name
         case .edit(let item, let name, _): return name ?? item.name
+        case .weight(let kg), .implausibleWeight(let kg, _):
+            return String(format: "%.1f kg", locale: AppLanguage.activeLocale, kg)
         case .unresolved: return String(localized: "Unrecognised food")
         }
     }
@@ -86,10 +111,65 @@ extension FoodProposal {
     /// ingredients, so accepting a macro edit on one would write a figure that the next read recomputes
     /// away — a change that appears to work and then silently reverts. The edit degrades to `unresolved`
     /// so the coach says so rather than the app pretending.
-    static func resolve(_ action: FoodAction,
+    /// How far back a proposal may reach, matching the food log's own stepper limit. Beyond two weeks
+    /// someone is reconstructing rather than remembering, and the two surfaces must agree about that.
+    static let maxDaysAgo = 13
+
+    /// Resolve the model's symbolic day into a local day key plus a label, or nil if it is out of range.
+    ///
+    /// Range-checked HERE rather than in the parser, because "how far back may this go" is a product rule
+    /// about the food log, not a fact about JSON. A future date is refused outright: nothing has been eaten
+    /// tomorrow, so it is a model error rather than a backdated entry.
+    static func resolveDay(_ day: FoodActionDay, now: Date = Date()) -> (key: String, label: String)? {
+        switch day {
+        case .today:
+            return (Repository.localDayKey(now), String(localized: "Today"))
+        case .daysAgo(let n):
+            guard n >= 0, n <= maxDaysAgo else { return nil }
+            let date = now.addingTimeInterval(-Double(n) * 86_400)
+            return (Repository.localDayKey(date), label(for: n, date: date))
+        case .explicit(let iso):
+            // Compared as day KEYS rather than as dates, so this inherits whatever local-day definition the
+            // rest of the app uses instead of introducing a second one.
+            for n in 0...maxDaysAgo {
+                let date = now.addingTimeInterval(-Double(n) * 86_400)
+                if Repository.localDayKey(date) == iso { return (iso, label(for: n, date: date)) }
+            }
+            return nil
+        }
+    }
+
+    private static func label(for daysAgo: Int, date: Date) -> String {
+        switch daysAgo {
+        case 0: return String(localized: "Today")
+        case 1: return String(localized: "Yesterday")
+        default:
+            return date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)
+                .locale(AppLanguage.activeLocale))
+        }
+    }
+
+    /// How far a proposed weigh-in may sit from the user's last known weight before it is treated as a unit
+    /// mix-up rather than a measurement. 25 kg — nobody's morning weight moves that much, and 73 kg read as
+    /// 73 lb (33 kg) or 160 lb stated as 160 kg both land well outside it.
+    static let maxWeightJumpKg = 25.0
+
+    /// Resolve one parsed request into something renderable.
+    ///
+    /// `lastKnownWeightKg` is what catches the pounds confusion the pure parser cannot: 160 kg is a real
+    /// weight for somebody, so only a comparison against THIS user's own history can tell a measurement
+    /// from a unit error. nil (no history yet) means the check cannot run and the figure is accepted — a
+    /// first weigh-in has nothing to be inconsistent with.
+    static func resolve(_ request: FoodActionRequest,
                         library: [FoodItem],
                         recipeIds: Set<UUID>,
-                        defaultServingLabel: String) -> FoodProposal {
+                        defaultServingLabel: String,
+                        lastKnownWeightKg: Double?,
+                        now: Date = Date()) -> FoodProposal? {
+        // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
+        // against last Tuesday" answered by writing to today is the wrong day recorded as fact.
+        guard let day = resolveDay(request.day, now: now) else { return nil }
+
         let entries = library.map {
             FoodDigestEntry(id: $0.id.uuidString, name: $0.name, servingLabel: $0.servingLabel,
                             macros: $0.macros)
@@ -101,24 +181,37 @@ extension FoodProposal {
             return library.first { $0.id == uuid }
         }
 
-        switch action {
+        func proposal(_ kind: Kind) -> FoodProposal {
+            FoodProposal(kind: kind, dayKey: day.key, dayLabel: day.label)
+        }
+
+        switch request.action {
         case .log(let handle, let portion):
-            guard let found = item(for: handle) else {
-                return FoodProposal(kind: .unresolved(handle: handle))
-            }
-            return FoodProposal(kind: .log(item: found, portion: portion))
+            guard let found = item(for: handle) else { return proposal(.unresolved(handle: handle)) }
+            return proposal(.log(item: found, portion: portion))
 
         case .create(let name, let serving, let macros, let portion):
-            return FoodProposal(kind: .create(name: name,
-                                              servingLabel: serving.isEmpty ? defaultServingLabel : serving,
-                                              macros: macros,
-                                              portion: portion))
+            return proposal(.create(name: name,
+                                    servingLabel: serving.isEmpty ? defaultServingLabel : serving,
+                                    macros: macros,
+                                    portion: portion))
+
+        case .save(let name, let serving, let macros):
+            return proposal(.save(name: name,
+                                  servingLabel: serving.isEmpty ? defaultServingLabel : serving,
+                                  macros: macros))
 
         case .edit(let handle, let name, let macros):
             guard let found = item(for: handle), !recipeIds.contains(found.id) else {
-                return FoodProposal(kind: .unresolved(handle: handle))
+                return proposal(.unresolved(handle: handle))
             }
-            return FoodProposal(kind: .edit(item: found, name: name, macros: macros))
+            return proposal(.edit(item: found, name: name, macros: macros))
+
+        case .weight(let kg):
+            if let last = lastKnownWeightKg, last > 0, abs(kg - last) > maxWeightJumpKg {
+                return proposal(.implausibleWeight(kg: kg, lastKnownKg: last))
+            }
+            return proposal(.weight(kg: kg))
         }
     }
 }
@@ -136,8 +229,12 @@ extension Repository {
     @discardableResult
     func applyFoodProposal(_ proposal: FoodProposal,
                            saveToLibrary: Bool = false,
-                           day: String? = nil,
-                           at date: Date = Date()) async -> Bool {
+                           at date: Date = Date(),
+                           profile: ProfileStore? = nil) async -> Bool {
+        // The day comes from the PROPOSAL, not from the caller. A card that said "Yesterday" and then wrote
+        // to whatever day the screen happened to be showing would be the two-readouts-disagreeing failure
+        // with real consequences — the entry lands somewhere the user did not agree to.
+        let day = proposal.dayKey
         switch proposal.kind {
         case .log(let item, let portion):
             // saveToLibrary: true because the food is ALREADY in the library — this is what stamps
@@ -170,8 +267,21 @@ extension Repository {
             await saveFoodItem(updated)
             return true
 
-        case .unresolved:
-            // Nothing safe to do. Deliberately not "create it anyway".
+        case .save(let name, let serving, let macros):
+            // Library only. Nothing is logged, which is the whole distinction from `create` — the user
+            // asked to save a food so they could log a portion of it against a past day themselves.
+            await saveFoodItem(FoodItem(macroSource: FoodMacroSource.aiEstimate,
+                                        name: name, servingLabel: serving, macros: macros))
+            return true
+
+        case .weight(let kg):
+            // `logWeight` also writes the profile's weight scalar, which every calorie estimate reads — so
+            // the profile has to be handed in rather than left stale. Without it a weigh-in would move the
+            // trend while the budget went on pricing an old mass.
+            return await logWeight(kg: kg, day: day, profile: profile)
+
+        case .unresolved, .implausibleWeight:
+            // Nothing safe to do. Deliberately not "create it anyway" or "store it anyway".
             return false
         }
     }
