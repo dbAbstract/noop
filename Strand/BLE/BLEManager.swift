@@ -2092,6 +2092,11 @@ public final class BLEManager: NSObject, ObservableObject {
     /// says which path tried. Logged only on the transition into blocking, so a rotation timer cannot
     /// flood the log.
     private func whoopConnectAllowed(_ reason: String) -> Bool {
+        // Mirror mode: this install reads the release build's backups and must not hold the radio. Checked
+        // FIRST and before the active-device cache, because every connect path funnels through here — the
+        // standing connect, the reconnect schedule, and a manual tap — so one refusal here is the whole
+        // behaviour rather than three gates that can disagree. Hard-false on release builds.
+        if DebugMirror.suppressesStrapWork { return false }
         if whoopIsActiveDevice { return true }
         // The flag is a CACHE of a registry fact, and the registry is the authority. Re-validate before
         // refusing, so the gate can never latch: it is set from the coordinator's stop/start closures and
@@ -3154,7 +3159,11 @@ public final class BLEManager: NSObject, ObservableObject {
     /// without a CoreBluetooth seam. Note this intentionally does NOT consult `backfillStarted`
     /// (that flag guards the once-per-connect INITIAL kick); the periodic re-trigger is separate.
     static func shouldRunPeriodicBackfill(connected: Bool, bonded: Bool, backfilling: Bool) -> Bool {
-        connected && bonded && !backfilling
+        // Mirror mode has nothing to offload — its data arrives from a restored snapshot — and the 900 s
+        // tick is half of why two installs on one strap drain a battery. Gated here as well as at the
+        // connect, because a connection that predates the setting would otherwise keep ticking.
+        if DebugMirror.suppressesStrapWork { return false }
+        return connected && bonded && !backfilling
     }
 
     /// #1466: did this offload hand over anything at all? Acked chunks, persisted rows, or deep packets.

@@ -108,6 +108,16 @@ struct CoachView: View {
                     }
                 }
                 // K2: wipe the persisted + in-memory conversation. Confirmed, since it's destructive.
+                // Available in RELEASE builds too, deliberately: a diagnostic only the dev build can take
+                // is never there when something actually goes wrong on the install being used.
+                ToolbarItem {
+                    ShareLink(item: coachDumpFile,
+                              preview: SharePreview(CoachDump.filename())) {
+                        Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    .help("Save the conversation and any proposed actions as JSON")
+                    .disabled(coach.messages.isEmpty)
+                }
                 ToolbarItem {
                     Button(role: .destructive) {
                         showClearConfirm = true
@@ -996,6 +1006,25 @@ struct CoachView: View {
     ///
     /// `animated: false` for the first pass — animating a jump the user did not ask for reads as the screen
     /// scrolling away from them, and on open there is nothing to animate FROM.
+    /// The dump, written to a temporary file so `ShareLink` offers it as a FILE rather than pasting a wall
+    /// of JSON into a message. Rebuilt on access: the proposals it carries live only in memory, so a cached
+    /// URL would hand over a snapshot from before the thing the user is trying to report.
+    private var coachDumpFile: URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(CoachDump.filename())
+        let json = CoachDump.json(messages: coach.messages,
+                                  provider: coach.provider.rawValue,
+                                  model: coach.model,
+                                  dataConsent: coach.dataConsent,
+                                  onDeviceSignals: coach.includeOnDeviceSignals,
+                                  hasCustomPrompt: coach.hasCustomSystemPrompt,
+                                  customPromptMissesFoodProtocol: coach.customPromptMissesFoodProtocol)
+        // A failed encode still produces a file, carrying the reason. An empty share sheet would say
+        // nothing, and the reason — a non-finite number reaching a macro field — is itself the bug.
+        try? (json ?? "{\"error\":\"could not encode the conversation\"}")
+            .write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
         let jump = {
             if coach.sending {

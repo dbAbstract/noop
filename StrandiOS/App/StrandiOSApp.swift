@@ -90,6 +90,11 @@ struct StrandiOSApp: App {
         // here to repair the one case that loses a pending request: a reinstall or a device restore, after
         // which the stored "on" would otherwise describe a trigger that no longer exists.
         FoodLogReminder.schedule()
+        // Mirror mode (dev builds only): swap in the release build's newest backup BEFORE the store is
+        // opened. After `AppModel()` exists there is a live GRDB connection, and replacing the file under
+        // it is what makes `DataBackup.restore` demand a relaunch — done here, there is nothing to
+        // invalidate. A no-op on release builds and whenever nothing newer has been published.
+        DebugMirror.refreshFromProd()
         let model = AppModel()
         _model = StateObject(wrappedValue: model)
         CoachBriefScheduler.register(generateBrief: { [weak coach = model.coach] in

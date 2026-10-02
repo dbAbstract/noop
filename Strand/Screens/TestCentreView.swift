@@ -29,6 +29,8 @@ struct TestCentreView: View {
     @State private var showRecalibrateConfirm = false
     @State private var infoTitle = ""
     @State private var infoMessage = ""
+    @State private var mirrorEnabled = DebugMirror.isEnabled
+    @State private var mirrorNote: String?
     @State private var showInfo = false
 
     // #1853: skin-temp absolute backfill (on-demand, diagnostic-first). Runs the walker that fills
@@ -164,6 +166,7 @@ struct TestCentreView: View {
         ScreenScaffold(title: "Test Centre",
                        subtitle: "Turn on a test for the thing that's wrong, wear the strap, then tap Report. All on \(Platform.deviceNounPhrase).") {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
+                mirrorModeCard.staggeredAppear(index: 0)
                 domainModesCard.staggeredAppear(index: 0)
                 diagnosticToolsCard.staggeredAppear(index: 1)
                 if is5MG { rawDataCollectorCard.staggeredAppear(index: 2) }
@@ -199,6 +202,82 @@ struct TestCentreView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text(infoMessage)
+        }
+    }
+
+    // MARK: - Mirror mode (dev builds only)
+
+    /// Point this install at the release build's backup folder instead of at the strap.
+    ///
+    /// Rendered only on a dev build — `DebugMirror.isAvailable` is a compile-time constant, so the release
+    /// app does not carry a switch that cannot do anything.
+    @ViewBuilder private var mirrorModeCard: some View {
+        if DebugMirror.isAvailable {
+            NoopCard(tint: StrandPalette.metricAmber) {
+                VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                    Text("MIRROR THE RELEASE APP")
+                        .font(StrandFont.overline).tracking(StrandFont.overlineTracking)
+                        .foregroundStyle(StrandPalette.textSecondary)
+
+                    Toggle(isOn: Binding(get: { mirrorEnabled },
+                                         set: { mirrorEnabled = $0; DebugMirror.setEnabled($0) })) {
+                        Text("Read the release app's data")
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textPrimary)
+                    }
+                    .toggleStyle(.switch)
+                    .tint(StrandPalette.accent)
+
+                    // States both halves, because the battery half is the surprising one: this does not
+                    // sync less, it stops talking to the strap entirely.
+                    Text("This build stops connecting to your strap altogether — no reconnects, no 15-minute offloads — and instead loads the newest backup from the folder below at launch. Two installs fighting over one strap is what drains the battery, and it means only one database to keep up to date.")
+                        .font(StrandFont.footnote)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if mirrorEnabled {
+                        Divider().overlay(StrandPalette.hairline)
+                        if let label = FolderBackup.folderLabel() {
+                            Text("Folder: \(label)")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                        } else {
+                            Text("No folder yet. Pick the same one the release app backs up to — Settings → Backup & Sync there.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.statusWarning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let last = DebugMirror.lastRestoredSnapshot {
+                            Text("Last loaded: \(last)")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                        }
+                        if let note = mirrorNote {
+                            Text(note)
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        // A restore cannot take effect in a running process — the open database connection
+                        // still points at the replaced file — so this one says to relaunch. The launch path
+                        // needs no such warning, which is why that is where it normally happens.
+                        NoopButton("Load newest now", systemImage: "arrow.down.circle") {
+                            switch DebugMirror.refreshFromProd() {
+                            case .restored(let name):
+                                mirrorNote = String(localized: "Loaded \(name). Force-quit and reopen to see it.")
+                            case .upToDate:
+                                mirrorNote = String(localized: "Already on the newest backup.")
+                            case .noFolder:
+                                mirrorNote = String(localized: "Pick the release app's backup folder first.")
+                            case .failed(let message):
+                                mirrorNote = message
+                            case .notMirroring:
+                                mirrorNote = String(localized: "Mirror mode is off.")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
