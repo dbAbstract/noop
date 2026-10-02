@@ -247,6 +247,13 @@ struct TestCentreView: View {
                                 .foregroundStyle(StrandPalette.statusWarning)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
+                        // The freshness limit, stated where it will actually be read. A mirror is only as
+                        // current as the newest snapshot, and the default cadence is DAILY — so today's
+                        // logging will not be here until the release app publishes again.
+                        Text("You see whatever the release app last published. Turn on \"Publish hourly\" there (Settings → Backup & Sync) or today's changes will be up to a day behind.")
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                         if let last = DebugMirror.lastRestoredSnapshot {
                             Text("Last loaded: \(last)")
                                 .font(StrandFont.caption)

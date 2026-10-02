@@ -9,6 +9,7 @@ struct BackupSyncView: View {
     @EnvironmentObject var model: AppModel
 
     @State private var auto = FolderBackup.autoEnabled
+    @State private var frequent = FolderBackup.publishFrequently
     @State private var folderLabel = FolderBackup.folderLabel()
     @State private var lastMs = FolderBackup.lastBackupMs
     @State private var keep = FolderBackup.keepCount
@@ -110,7 +111,7 @@ struct BackupSyncView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Daily auto-backup")
                             .font(StrandFont.body).foregroundStyle(StrandPalette.textPrimary)
-                        Text("Backs up to your folder about once a day and keeps the latest \(keep). On this platform it runs when you next open NOOP.")
+                        Text("Backs up to your folder about once \(frequent ? "an hour" : "a day") and keeps the latest \(keep). On this platform it runs when you next open NOOP.")
                             .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -119,6 +120,26 @@ struct BackupSyncView: View {
                         .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
                         .disabled(folderLabel == nil)
                         .onChangeCompat(of: auto) { on in FolderBackup.autoEnabled = on }
+                }
+                // Hourly rather than daily. Its own row rather than folded into the one above, because the
+                // cost is different in kind: a full database copy per hour instead of per day.
+                if auto {
+                    HStack(alignment: .center, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Publish hourly")
+                                .font(StrandFont.body).foregroundStyle(StrandPalette.textPrimary)
+                            // Names WHO this is for. Most installs should leave it off, and the one reason
+                            // to turn it on is specific enough to state outright.
+                            Text("For running a second NOOP install that mirrors this one. A mirror is only as fresh as the newest snapshot, so a daily cadence leaves it a day behind. Costs a full database copy each hour; retention below still bounds the folder.")
+                                .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Toggle("Publish hourly", isOn: $frequent)
+                            .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
+                            .disabled(folderLabel == nil)
+                            .onChangeCompat(of: frequent) { on in FolderBackup.publishFrequently = on }
+                    }
                 }
                 // Retention: how many dated snapshots to keep. Wired to FolderBackup.keepCount; the next
                 // backup prunes the oldest beyond this count (BackupSync.snapshotsToPrune, unchanged).

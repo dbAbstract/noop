@@ -32,6 +32,17 @@ enum BackupSync {
     /// silently-failing auto-backup is visible instead of only discovered when a restore is needed.
     static let staleThresholdMs = 3 * 24 * 60 * 60 * 1000
 
+    /// The threshold when PUBLISHING FREQUENTLY is on: 1 hour.
+    ///
+    /// Exists for the dev-build mirror. The release app is the only writer of snapshots, and a dev build
+    /// reading them is only ever as fresh as the last one — so a three-day cadence makes a mirror useless
+    /// for checking work done today, which is precisely what it is for.
+    ///
+    /// An hour rather than minutes: a snapshot is a full database copy, and `catchUpIfDue` runs on
+    /// foreground, so a shorter window would mean a copy on nearly every app open. Pruning keeps the folder
+    /// bounded either way (`keepCount`), but the write cost is real.
+    static let frequentThresholdMs = 60 * 60 * 1000
+
     /// True when auto-backup should be flagged STALE: the last SUCCESSFUL backup is older than
     /// `thresholdMs`. `lastBackupMs == 0` (never backed up while auto is on) also counts as stale. Pure so
     /// it's unit-tested with literal ms; the caller supplies `nowMs` and gates on `autoEnabled`/folder.
@@ -142,6 +153,7 @@ enum FolderBackup {
     private static let lastKey = "backupSync.lastMs"
     private static let keepKey = "backupSync.keepCount"
     private static let internalKey = "backupSync.useInternalFolder"   // #52 picker-free fallback
+    private static let frequentKey = "backupSync.publishFrequently"
 
     /// Default snapshots kept by prune: 7, i.e. a week of daily rollback points. (Mirrors the Android
     /// DEFAULT_KEEP; the Android keep-count is likewise user-adjustable.)
@@ -152,6 +164,23 @@ enum FolderBackup {
 
     /// How many latest snapshots to keep; older ones are pruned (oldest-first). User-adjustable via the
     /// picker; unset reads back as [defaultKeep]. Clamped to a sane 1...100.
+    /// Publish snapshots hourly rather than every three days.
+    ///
+    /// Default OFF — this is a cost most installs should not pay. On for anyone running the dev build as a
+    /// mirror, where the whole point is that the folder is current.
+    static var publishFrequently: Bool {
+        get { UserDefaults.standard.bool(forKey: frequentKey) }
+        set { UserDefaults.standard.set(newValue, forKey: frequentKey) }
+    }
+
+    /// The threshold actually in force.
+    /// Daily by default — the cadence `catchUpIfDue` had before this existed, so an install that never
+    /// opts in behaves exactly as it did. NOT the 3-day `staleThresholdMs`, which is the threshold for
+    /// WARNING that a backup is old rather than for taking one.
+    static var activeThresholdMs: Int {
+        publishFrequently ? BackupSync.frequentThresholdMs : dayMs
+    }
+
     static var keepCount: Int {
         get {
             let v = UserDefaults.standard.integer(forKey: keepKey)   // 0 when never set
@@ -346,7 +375,10 @@ enum FolderBackup {
     static func catchUpIfDue(checkpoint: @escaping () async -> Bool) async {
         guard autoEnabled, hasFolder else { return }
         let nowMs = Int(Date().timeIntervalSince1970 * 1000.0)
-        guard nowMs - lastBackupMs >= dayMs else { return }
+        // Hourly when publishing frequently, daily otherwise. The dev-build mirror reads these snapshots
+        // and is only ever as fresh as the newest one, so a daily cadence makes it useless for reviewing
+        // work done today — which is the one thing a mirror is for.
+        guard nowMs - lastBackupMs >= FolderBackup.activeThresholdMs else { return }
         await backupNow(checkpoint: checkpoint)
     }
 

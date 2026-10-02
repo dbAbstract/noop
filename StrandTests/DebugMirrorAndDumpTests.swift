@@ -77,6 +77,26 @@ final class DebugMirrorAndDumpTests: XCTestCase {
         #endif
     }
 
+    // MARK: - Publish cadence
+
+    /// Default behaviour is UNCHANGED: daily, the cadence `catchUpIfDue` had before the option existed.
+    /// Deliberately not the 3-day `staleThresholdMs`, which is the threshold for WARNING that a backup is
+    /// old rather than for taking one — conflating them would have quietly tripled the interval.
+    func testTheDefaultCadenceIsStillDaily() {
+        FolderBackup.publishFrequently = false
+        XCTAssertEqual(FolderBackup.activeThresholdMs, 24 * 60 * 60 * 1000)
+        XCTAssertNotEqual(FolderBackup.activeThresholdMs, BackupSync.staleThresholdMs)
+    }
+
+    /// The mirror's whole problem: it can only be as fresh as the newest snapshot, so a daily cadence
+    /// leaves it a day behind the work being reviewed.
+    func testPublishingFrequentlyShortensTheIntervalToAnHour() {
+        FolderBackup.publishFrequently = true
+        XCTAssertEqual(FolderBackup.activeThresholdMs, BackupSync.frequentThresholdMs)
+        XCTAssertEqual(FolderBackup.activeThresholdMs, 60 * 60 * 1000)
+        FolderBackup.publishFrequently = false
+    }
+
     // MARK: - The coach dump
 
     private func message(_ role: ChatMessage.Role, _ text: String,

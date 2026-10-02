@@ -55,11 +55,30 @@ enum DebugMirror {
     static func setEnabled(_ on: Bool) {
         #if NOOP_DEV_BUILD
         UserDefaults.standard.set(on, forKey: enabledKey)
+        if on { enableMirroredFeatures() }
         // The marker is cleared on EVERY transition, in both directions. Turning mirror mode off and back on
         // should re-read the folder rather than trust a marker describing a database that has since been
         // written to by a strap — the one case where the marker would be a lie.
         UserDefaults.standard.removeObject(forKey: lastRestoredKey)
         #endif
+    }
+
+    /// Turn on the feature toggles the mirrored data needs in order to be visible.
+    ///
+    /// THE BUG THIS FIXES. `.noopbak` carries the DATABASE plus a whitelist of scalar settings, and that
+    /// whitelist deliberately excludes every `noop.*` feature toggle as device-specific. Correct for a real
+    /// restore — but it means a mirror gets prod's food entries, weigh-ins and diet goal while
+    /// `noop.foodLogging` stays off, so the diet card, the Diet screen and the Calories diet branch are all
+    /// hidden and the data looks absent rather than merely un-surfaced.
+    ///
+    /// Written rather than intercepted at the read: the flag is bound through `@AppStorage` in a dozen
+    /// views, and a mirror-aware read would have to be added to each — twelve places to miss one.
+    ///
+    /// Left ON when mirror mode is switched off, deliberately. It is a feature toggle the user can flip
+    /// back in Settings, and silently turning off a feature they may have been using is worse than leaving
+    /// an extra one on.
+    private static func enableMirroredFeatures() {
+        UserDefaults.standard.set(true, forKey: FoodLogStore.enabledKey)
     }
 
     /// True when the app must not open or hold a strap connection.
@@ -148,6 +167,9 @@ extension DebugMirror {
         switch FolderBackup.restore(snapshotNamed: target) {
         case .imported:
             noteRestored(target)
+            // Also here, not only on the toggle: a restore can bring food data to an install whose flag was
+            // never set — a mirror enabled before prod had any diet history, say.
+            enableMirroredFeatures()
             return .restored(snapshot: target)
         case .failure(let message):
             // The marker is deliberately NOT advanced on a failure, so the next launch tries again rather
