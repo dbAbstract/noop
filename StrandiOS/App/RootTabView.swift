@@ -40,6 +40,8 @@ struct RootTabView: View {
 
     /// Which quick-action screen the centre FAB is presenting (nil = sheet closed).
     @State private var quickAction: QuickAction?
+    @State private var quickAddLibrary: [FoodItem] = []
+    @State private var quickAddRecipes: [Recipe] = []
     /// Presents the Devices manager (pair / switch bands) when a screen asks the shell to open it.
     @State private var showDevices = false
     /// A routed v5 pillar screen (Insights hub / Lab Book / fused record / Rhythm) presented as a sheet
@@ -344,7 +346,7 @@ struct RootTabView: View {
                 case .journal: InsightsView()
                 // .food opens through the quick-action Food sheet (handled above); this keeps the switch
                 // exhaustive and falls back to the food log itself if it ever reaches the host.
-                case .food: FoodLogView()
+                case .food: DietDetailView()
                 // .coach switches to the Coach tab (handled above — the morning-brief tap-through and the
                 // #1862 launcher both arrive that way, the launcher's question riding on
                 // `AICoachEngine.pendingPrompt`); this keeps the switch exhaustive and falls back to Coach if
@@ -391,9 +393,13 @@ struct RootTabView: View {
             .presentationDetents([.height(QuickActionSheetMetrics.height(foodEnabled: foodLoggingEnabled))])
             .presentationDragIndicator(.hidden)
         case .food:
-            quickScreen(FoodLogView())
+            quickScreen(DietDetailView())
         case .weight:
             quickScreen(WeightView())
+        case .addFood:
+            // The sheet on its own, with no screen behind it. Dismissing returns the user to wherever they
+            // were rather than stranding them on a food screen they did not ask for.
+            quickAddFoodSheet
         case .live:
             quickScreen(LiveView())
         case .workout:
@@ -407,6 +413,25 @@ struct RootTabView: View {
 
     /// Wraps a routed quick-action screen in its own nav stack so it has a title bar + the
     /// shared surface background, matching how the More-tab links present these same views.
+    /// The Add-food sheet with nothing behind it, for the FAB's "Log food".
+    ///
+    /// Loads the library and recipes itself rather than taking them from a host screen, because there is no
+    /// host — that is the point of this route. Recipes compose against the SAME library read, so the two
+    /// cannot describe different libraries.
+    @ViewBuilder
+    private var quickAddFoodSheet: some View {
+        AddFoodSheet(library: quickAddLibrary, recipes: quickAddRecipes) { item, portion, save in
+            Task {
+                if save { await repo.saveFoodItem(item) }
+                await repo.logFood(item: item, portion: portion, saveToLibrary: save)
+            }
+        }
+        .task {
+            quickAddLibrary = await repo.foodLibrary()
+            quickAddRecipes = await repo.recipes(library: quickAddLibrary)
+        }
+    }
+
     private func quickScreen<V: View>(_ view: V) -> some View {
         NavigationStack {
             view
@@ -705,7 +730,7 @@ private struct MoreRow: View {
 /// The destinations the centre FAB can present. `.menu` is the action sheet itself; the rest
 /// route to existing screens. `Identifiable` so it drives `.sheet(item:)`.
 private enum QuickAction: Int, Identifiable {
-    case menu, live, workout, journal, breathe, food, weight
+    case menu, live, workout, journal, breathe, food, weight, addFood
     var id: Int { rawValue }
 }
 
@@ -717,10 +742,10 @@ private enum QuickActionSheetMetrics {
     /// One row: 38pt tile + 10pt vertical padding either side, plus the 8pt VStack spacing above it.
     static let rowHeight: CGFloat = 66
 
-    /// Food logging adds TWO rows — Log food and Log weight — because the weigh-in is the other half of
-    /// the same calibration and is gated on the same switch.
+    /// Food logging adds THREE rows — Log food (straight to the sheet), Open diet, and Log weight. The
+    /// weigh-in is the other half of the same calibration and rides the same switch.
     static func height(foodEnabled: Bool) -> CGFloat {
-        baseHeight + (foodEnabled ? rowHeight * 2 : 0)
+        baseHeight + (foodEnabled ? rowHeight * 3 : 0)
     }
 }
 
@@ -759,7 +784,13 @@ private struct QuickActionSheet: View {
                 // Hidden entirely when the feature is off, matching how its Today card is gated — an
                 // always-present row for a disabled feature is a dead end.
                 if foodLoggingEnabled {
-                    row("Log food", icon: "fork.knife", tint: StrandPalette.metricAmber) { onPick(.food) }
+                    // Straight to the ADD sheet, not to a screen with an Add button on it. Logging a meal
+                    // was FAB → Log food → Add food → sheet; the middle step existed only because the food
+                    // log used to be the only place the sheet lived. The Diet screen is still reachable
+                    // from Today's diet card for everything that is not logging.
+                    row("Log food", icon: "fork.knife", tint: StrandPalette.metricAmber) { onPick(.addFood) }
+                    row("Open diet", icon: "chart.line.uptrend.xyaxis",
+                        tint: StrandPalette.metricAmber) { onPick(.food) }
                     // The weigh-in gets its own row rather than living inside the food log, where it was
                     // obscure enough that the user never found it. It is the other half of the same
                     // calibration and is skipped far more often, so it needs the shorter path.

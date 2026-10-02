@@ -23,6 +23,10 @@ struct WeightView: View {
     @State private var editingDay: WeightEditTarget?
     @State private var reloadTick = 0
     @State private var saving = false
+    /// Chart window in days. 90 by default: long enough to see a trend at a small deficit, short enough
+    /// that a few early readings do not compress the recent ones into a flat line.
+    @State private var rangeDays = 90
+    @State private var goalWeightKg: Double?
 
     @AppStorage(CardAppearancePrefs.opacityKey) private var cardOpacityPercent = CardAppearancePrefs.defaultPercent
     private var cardOpacity: Double { max(0, min(1, Double(cardOpacityPercent) / 100)) }
@@ -36,6 +40,7 @@ struct WeightView: View {
                        onRefresh: { await reload() }) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
                 logSection
+                chartSection
                 trendSection
                 historySection
             }
@@ -121,6 +126,87 @@ struct WeightView: View {
             saving = false
             reloadTick += 1
         }
+    }
+
+    // MARK: - Chart
+
+    /// The weigh-ins plotted, with the goal weight as a reference line.
+    ///
+    /// The RAW readings rather than the smoothed trend, deliberately: these are the numbers the user
+    /// entered, and a chart of a derived line they cannot check against the scale invites "that is not what
+    /// it said this morning". The smoothed figure and the fitted rate stay in the text below, which is the
+    /// only medium that can carry an interval — a line on its own always looks exact.
+    @ViewBuilder private var chartSection: some View {
+        // Two points is the minimum that makes a line mean anything; one reading is a dot and reads as a
+        // trend to nobody.
+        if chartPoints.count >= 2 {
+            VStack(alignment: .leading, spacing: NoopMetrics.gap) {
+                SectionHeader("Over time", overline: "\(chartPoints.count) readings")
+                NoopCard {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        Picker("Range", selection: $rangeDays) {
+                            Text("30d").tag(30)
+                            Text("90d").tag(90)
+                            Text("180d").tag(180)
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityLabel("Chart range")
+
+                        TrendChart(points: chartPoints,
+                                   gradient: StrandPalette.chargeGradient,
+                                   valueRange: chartRange,
+                                   showsArea: true,
+                                   // The goal, drawn as the line to arrive at. Nil without a goal rather
+                                   // than defaulted to something — a reference line nobody chose would read
+                                   // as a target the app had set for them.
+                                   baselineValue: goalWeightKg,
+                                   height: NoopMetrics.chartHeight,
+                                   valueFormat: { String(format: "%.1f kg", $0) },
+                                   accessibilityLabel: String(localized: "Weight over time"))
+
+                        if let goal = goalWeightKg {
+                            Text("The flat line is your goal, \(String(format: "%.1f", goal)) kg.")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                        }
+                    }
+                }
+                .opacity(cardOpacity)
+            }
+        }
+    }
+
+    /// Readings inside the selected window, oldest first.
+    private var chartPoints: [TrendPoint] {
+        let cutoff = Repository.localDayKey(Date().addingTimeInterval(-Double(rangeDays) * 86_400))
+        return history
+            .filter { $0.day >= cutoff }
+            .compactMap { row in
+                guard let date = Self.date(from: row.day) else { return nil }
+                return TrendPoint(date: date, value: row.kg)
+            }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// The y-range, padded so the line is not drawn against the frame.
+    ///
+    /// Spans the goal as well as the readings when there is one, or the reference line would sit outside the
+    /// chart and silently not render — a target you cannot see is worse than no target drawn.
+    private var chartRange: ClosedRange<Double> {
+        let values = chartPoints.map(\.value) + [goalWeightKg].compactMap { $0 }
+        guard let lo = values.min(), let hi = values.max() else { return 0...100 }
+        // A minimum span, so a fortnight that moved 300 g does not render as a dramatic cliff.
+        let pad = max(1.0, (hi - lo) * 0.15)
+        return (lo - pad)...(hi + pad)
+    }
+
+    /// Parse a "yyyy-MM-dd" day key back to a date for the chart's x-axis.
+    private static func date(from dayKey: String) -> Date? {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: dayKey)
     }
 
     // MARK: - Trend
@@ -242,5 +328,6 @@ struct WeightView: View {
         }
         trend = WeightTrend.fit(readings)
         smoothed = WeightTrend.smoothed(readings)
+        goalWeightKg = await repo.currentDietGoal()?.targetWeightKg
     }
 }

@@ -74,7 +74,10 @@ extension View {
             case .sleep: SleepView()
             case .health: HealthView()
             case .hydration: HydrationView()
-            case .food: FoodLogView()
+            // The food log is now the Diet screen's "Day" half, so this route lands there rather than on a
+            // second screen showing the same thing. Kept as a route because the food-log reminder's
+            // notification taps through to it.
+            case .food: DietDetailView()
             case .diet: DietDetailView()
             case .weight: WeightView()
             case .coupled: CoupledView()

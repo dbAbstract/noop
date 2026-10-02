@@ -61,17 +61,23 @@ struct FoodLogView: View {
     @AppStorage(CardAppearancePrefs.opacityKey) private var cardOpacityPercent = CardAppearancePrefs.defaultPercent
     private var cardOpacity: Double { max(0, min(1, Double(cardOpacityPercent) / 100)) }
 
+    /// When false this renders its sections BARE, for composition inside another screen's scaffold.
+    ///
+    /// The diet screen hosts this as its "Day" half, and two nested `ScreenScaffold`s would mean two scroll
+    /// views fighting over one gesture. Defaults to true so the standalone route — the food-log reminder's
+    /// tap-through — is unchanged.
+    var ownsScaffold: Bool = true
+
     var body: some View {
-        ScreenScaffold(title: "Food",
-                       subtitle: "What you ate today, on \(Platform.deviceNounPhrase) only. Nothing is looked up online.",
-                       onRefresh: { await reload() }) {
-            VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
-                daySection
-                totalsSection
-                entriesSection
-                recipesSection
-                quickAddSection
-                historySection
+        Group {
+            if ownsScaffold {
+                ScreenScaffold(title: "Food",
+                               subtitle: "What you ate today, on \(Platform.deviceNounPhrase) only. Nothing is looked up online.",
+                               onRefresh: { await reload() }) {
+                    sections
+                }
+            } else {
+                sections
             }
         }
         .task(id: "\(reloadTick)-\(dayOffset)") { await reload() }
@@ -102,6 +108,17 @@ struct FoodLogView: View {
                     reloadTick += 1
                 }
             }
+        }
+    }
+
+    private var sections: some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+            daySection
+            totalsSection
+            entriesSection
+            recipesSection
+            quickAddSection
+            historySection
         }
     }
 
