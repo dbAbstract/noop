@@ -91,6 +91,23 @@ enum DebugMirror {
         UserDefaults.standard.string(forKey: lastRestoredKey)
     }
 
+    /// What the last launch attempt did, so a mirror that quietly does nothing can be diagnosed from the
+    /// screen rather than guessed at.
+    ///
+    /// THE REASON THIS EXISTS: `refreshFromProd` runs before any UI and returns its outcome to a caller
+    /// that had nowhere to put it, so every failure mode — no folder, a bookmark that would not resolve, a
+    /// rejected archive — looked identical to "working, but prod has published nothing new". That is
+    /// exactly the position this feature left the user in.
+    private static let lastOutcomeKey = "noop.debugMirrorLastOutcome"
+
+    static var lastLaunchOutcome: String? {
+        UserDefaults.standard.string(forKey: lastOutcomeKey)
+    }
+
+    static func noteOutcome(_ text: String) {
+        UserDefaults.standard.set(text, forKey: lastOutcomeKey)
+    }
+
     /// Record a restore, so the next resume knows there is nothing new to do.
     static func noteRestored(_ name: String) {
         UserDefaults.standard.set(name, forKey: lastRestoredKey)
@@ -154,10 +171,21 @@ extension DebugMirror {
     @discardableResult
     static func refreshFromProd() -> RefreshOutcome {
         guard isEnabled else { return .notMirroring }
-        guard FolderBackup.hasFolder else { return .noFolder }
+        guard FolderBackup.hasFolder else {
+            noteOutcome("No folder set in THIS app. Pick it in Backup & Sync here, not only in the release app.")
+            return .noFolder
+        }
 
         let available = FolderBackup.listSnapshots().map(\.name)
+        // Distinguished from "nothing newer", because the two look identical on screen and have completely
+        // different fixes: an empty listing usually means the bookmark resolved to a folder this app cannot
+        // actually read, which is the likeliest failure for a bookmark the OTHER app created.
+        if available.isEmpty {
+            noteOutcome("Folder is set but no snapshots are visible — the release app may not have published yet, or this app cannot read that folder. Re-pick it here.")
+            return .noFolder
+        }
         guard let target = snapshotToRestore(available: available, lastRestored: lastRestoredSnapshot) else {
+            noteOutcome("Already on \(lastRestoredSnapshot ?? "the newest"), \(available.count) snapshot(s) seen.")
             return .upToDate
         }
 
@@ -170,10 +198,12 @@ extension DebugMirror {
             // Also here, not only on the toggle: a restore can bring food data to an install whose flag was
             // never set — a mirror enabled before prod had any diet history, say.
             enableMirroredFeatures()
+            noteOutcome("Loaded \(target).")
             return .restored(snapshot: target)
         case .failure(let message):
             // The marker is deliberately NOT advanced on a failure, so the next launch tries again rather
             // than recording a broken restore as done.
+            noteOutcome("Restore failed: \(message)")
             return .failed(message)
         case .restoreTooLarge(_, let limit):
             // The decompression guard. Mirror mode does NOT override it: the ceiling exists to stop a

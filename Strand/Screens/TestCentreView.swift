@@ -254,6 +254,29 @@ struct TestCentreView: View {
                             .font(StrandFont.caption)
                             .foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
+                        // A picker HERE, because the bookmark is per-app: one created by the release app
+                        // lives in the release app's container and this install has none until it picks the
+                        // folder itself. That was almost certainly why the first mirror silently did nothing.
+                        NoopButton(FolderBackup.folderLabel() == nil ? "Pick the backup folder"
+                                                                    : "Re-pick the folder",
+                                   systemImage: "folder", kind: .secondary) {
+                            Task {
+                                #if os(iOS)
+                                _ = await FolderBackup.pickFolder()
+                                #else
+                                _ = FolderBackup.pickFolder()
+                                #endif
+                                mirrorNote = FolderBackup.folderLabel().map {
+                                    String(localized: "Folder set: \($0). Tap Load newest now.")
+                                } ?? String(localized: "No folder chosen.")
+                            }
+                        }
+                        if let outcome = DebugMirror.lastLaunchOutcome {
+                            Text("Last launch: \(outcome)")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         if let last = DebugMirror.lastRestoredSnapshot {
                             Text("Last loaded: \(last)")
                                 .font(StrandFont.caption)

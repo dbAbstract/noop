@@ -33,6 +33,17 @@ struct ScreenScaffold<Content: View, Trailing: View, Bottom: View>: View {
     ///
     /// Defaults to `EmptyView` through the convenience init, so no existing screen is affected.
     @ViewBuilder var bottomBar: () -> Bottom
+    /// Whether a bar was actually supplied.
+    ///
+    /// REQUIRED, not an optimisation. Attaching `.safeAreaInset(edge: .bottom)` with an `EmptyView` is NOT
+    /// layout-neutral: it reserves a region the scroll view then treats as content, so every screen gained
+    /// dead space below its last card and could be dragged up and off the screen. Today was the only screen
+    /// unaffected, because it builds its own `ScrollView` rather than using this.
+    ///
+    /// A stored flag rather than a check on `Bottom.self == EmptyView.self`, because a caller may
+    /// legitimately pass a conditional bar that resolves to empty — the question is whether one was
+    /// OFFERED, which only the init knows.
+    var hasBottomBar: Bool = false
     @ViewBuilder var content: () -> Content
 
     // iPad runs the shared screens full-screen, where an uncapped column gives 120+ character lines
@@ -85,8 +96,8 @@ struct ScreenScaffold<Content: View, Trailing: View, Bottom: View>: View {
         // on the opaque canvas and stay fully legible (2026-06-23: cards were "losing the data").
         // Docked below the scroll content. On iOS the keyboard lifts a bottom safe-area inset for free,
         // which is exactly the property a composer needs and the reason this is not just the column's last
-        // row. `EmptyView` for every screen that passes nothing, so the inset is layout-neutral there.
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomBar() }
+        // row. Attached ONLY when a bar was supplied — see `hasBottomBar`.
+        .modifier(BottomBarIfNeeded(isActive: hasBottomBar, bar: bottomBar))
         .background(alignment: .top) {
             ZStack(alignment: .top) {
                 StrandPalette.surfaceBase
@@ -166,7 +177,7 @@ extension ScreenScaffold where Trailing == EmptyView {
          @ViewBuilder content: @escaping () -> Content) {
         self.init(title: title, subtitle: subtitle, onRefresh: onRefresh, lazy: lazy,
                   topBackground: topBackground, trailing: { EmptyView() },
-                  bottomBar: bottomBar, content: content)
+                  bottomBar: bottomBar, hasBottomBar: true, content: content)
     }
 }
 
@@ -179,6 +190,25 @@ extension ScreenScaffold where Bottom == EmptyView {
         self.init(title: title, subtitle: subtitle, onRefresh: onRefresh, lazy: lazy,
                   topBackground: topBackground, trailing: trailing,
                   bottomBar: { EmptyView() }, content: content)
+    }
+}
+
+/// Applies `.safeAreaInset(edge: .bottom)` only when a bar was supplied.
+///
+/// Same reasoning as `RefreshableIfNeeded` below, and the same shape: a ViewModifier keeps both branches
+/// the same opaque type, and a screen with no bar never attaches the modifier at all. That last part is the
+/// whole point here — an inset holding an `EmptyView` still reserves space, which is what let every
+/// scaffold screen scroll past its own content.
+private struct BottomBarIfNeeded<Bar: View>: ViewModifier {
+    let isActive: Bool
+    let bar: () -> Bar
+
+    func body(content: Content) -> some View {
+        if isActive {
+            content.safeAreaInset(edge: .bottom, spacing: 0) { bar() }
+        } else {
+            content
+        }
     }
 }
 
