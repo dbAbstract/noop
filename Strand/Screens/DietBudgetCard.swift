@@ -208,11 +208,14 @@ struct DietBudgetCard: View {
 
     private func reload() async {
         guard foodEnabled else { energy = nil; return }
-        macros = await repo.foodTotals()
+        // The diet day everywhere on this card, so the budget, the total and whatever a 00:15 snack was
+        // logged against are all the same day.
+        let day = await repo.dietDayKey()
+        macros = await repo.foodTotals(day: day)
         consumed = macros.kcal
         // Recomputes and banks the day's figures, so the series backing the detail screen stays current
         // without a second pass.
-        energy = await repo.refreshDietDay(profile: profile)
+        energy = await repo.refreshDietDay(day: day, profile: profile)
         if let budget = energy?.budgetKcal(), let rate = await repo.currentDietGoal()?.proteinGPerKg {
             targets = MacroTargets.targets(budgetKcal: budget, weightKg: profile.weightKg,
                                            proteinGPerKg: rate)

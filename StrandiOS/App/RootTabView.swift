@@ -423,7 +423,8 @@ struct RootTabView: View {
         AddFoodSheet(library: quickAddLibrary, recipes: quickAddRecipes) { item, portion, save in
             Task {
                 if save { await repo.saveFoodItem(item) }
-                await repo.logFood(item: item, portion: portion, saveToLibrary: save)
+                await repo.logFood(item: item, portion: portion,
+                                   day: await repo.dietDayKey(), saveToLibrary: save)
             }
         }
         .task {

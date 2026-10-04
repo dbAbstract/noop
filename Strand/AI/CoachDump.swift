@@ -126,6 +126,10 @@ enum CoachDump {
         case .implausibleWeight(let kg, let last):
             out["kg"] = kg
             out["lastKnownKg"] = last
+        case .duplicate(let name):
+            // Worth carrying: a run of these says the model is repeating its own earlier output, which is a
+            // different report from "it proposed something wrong".
+            out["duplicateOf"] = name
         }
         return out
     }
@@ -139,6 +143,7 @@ enum CoachDump {
         case .weight: return "weight"
         case .unresolved: return "unresolved"
         case .implausibleWeight: return "implausibleWeight"
+        case .duplicate: return "duplicate"
         }
     }
 

@@ -339,16 +339,30 @@ final class AICoachEngine: ObservableObject {
     smaller."
     Rules:
     • SEVERAL FOODS IN ONE REPLY. "Eggs, toast and a coffee" is three entries in one actions array, not \
-    three conversations. Up to six.
+    three conversations. Up to six. But see the one-dish rule below: separate ITEMS, not the parts of one.
+    • ONLY WHAT THEY JUST TOLD YOU. Emit actions for the message you are replying to and nothing else. Do \
+    NOT re-emit an action from an earlier turn — if they logged a banana this morning and now mention an \
+    apple, the reply carries the apple alone. The EATEN block above already shows you what is logged; \
+    repeating it tries to log their breakfast twice.
     • `log` with an id from SAVED FOODS whenever the food is already there — prefer it over `create`, and \
     if the list says some foods were not shown, ask before assuming something is new.
     • `create` logs a food. `save` only adds it to their library and logs NOTHING: use it when they ask to \
     save something for later, or want to log it against a day themselves.
+    • THE DAY ROLLS OVER AT SLEEP, NOT MIDNIGHT. If they are still up at 00:30 and eat something, "today" \
+    already means the day they have been awake for — the app works that out. So do not ask which day they \
+    want it on, and do not reach for "yesterday" just because the clock has passed midnight. Only use \
+    `yesterday` when they are talking about a day they have since slept through.
     • `day` is "today" (the default), "yesterday", or "YYYY-MM-DD". Use it when they say when they ate. \
     Never invent a date from a vague phrase — if they say "a few days ago", ask which day.
-    • `meal` is "breakfast", "lunch", "dinner" or "snack". Set it when they SAY which meal it was — it is \
-    the only way a backdated entry gets grouped, since a past day has no usable time to work it out from. \
-    Do not guess one they did not state.
+    • `meal` is "breakfast", "lunch", "dinner" or "snack". NEVER ASK which meal something was — just omit \
+    the field and the app works it out from the time. Set it only when they volunteer it ("for lunch I \
+    had…") or when they are logging a PAST day, which has no usable time to infer from. A question about \
+    which meal an apple was is a question that costs more than the answer is worth.
+    • ONE DISH IS ONE ENTRY. When they describe a single dish by its parts — "a katsu curry with rice, \
+    chicken, sauce and salad" — that is ONE `create` whose macros are the whole plate, named after the \
+    dish. Four entries for four components is wrong: they ate one thing, and it makes their log unreadable \
+    and their recent-foods list useless. Only emit separate entries for things eaten SEPARATELY — a main \
+    and a drink and a pudding are three.
     • `edit` corrects a saved food's numbers. Never `edit` a food marked recipe.
     • Macros are PER SERVING; `portion` is how many servings. Your kcal must agree with your own macros \
     (4 kcal/g protein and carbs, 9 kcal/g fat) within about 10%, or the entry is discarded — so do the \
@@ -1132,14 +1146,30 @@ final class AICoachEngine: ObservableObject {
         // 160 lb figure stated in the wrong unit. nil on a first weigh-in, which is correct: there is
         // nothing for it to be inconsistent with.
         let lastWeight = await repo.weightHistory(days: 60).last?.kg
-        return requests.compactMap {
-            FoodProposal.resolve($0,
-                                 library: library,
-                                 recipeIds: recipeIds,
-                                 // The same default the Add food sheet uses, so a food created by either
-                                 // route reads identically in the log.
-                                 defaultServingLabel: String(localized: "1 serving"),
-                                 lastKnownWeightKg: lastWeight)
+        // The diet day, so "I just had an apple" at 00:15 lands on the day being lived rather than opening
+        // a fresh budget fifteen minutes old.
+        let dietToday = await repo.dietDayKey()
+        // Everything this conversation has already WRITTEN. Models repeat their own previous structured
+        // output — mention an apple after logging a banana and the reply carries both — so the check is
+        // against what was applied rather than against what was merely proposed. A proposal the user
+        // declined is not a duplicate; they may well say it again on purpose.
+        let applied = Set(messages
+            .flatMap(\.proposals)
+            .filter { $0.state == .applied }
+            .compactMap(\.dedupeKey))
+
+        return requests.compactMap { request -> FoodProposal? in
+            guard let resolved = FoodProposal.resolve(request,
+                                                      library: library,
+                                                      recipeIds: recipeIds,
+                                                      // The same default the Add food sheet uses, so a food
+                                                      // created by either route reads identically in the log.
+                                                      defaultServingLabel: String(localized: "1 serving"),
+                                                      lastKnownWeightKg: lastWeight,
+                                                      todayKey: dietToday) else { return nil }
+            guard let key = resolved.dedupeKey, applied.contains(key) else { return resolved }
+            return FoodProposal(kind: .duplicate(of: resolved.displayName),
+                                dayKey: resolved.dayKey, dayLabel: resolved.dayLabel)
         }
     }
 
@@ -1200,7 +1230,10 @@ final class AICoachEngine: ObservableObject {
         // WHAT WAS ACTUALLY EATEN TODAY, which was the glaring omission: the coach knew the totals and the
         // library but not what the day consisted of, so it could neither refer to a meal already logged nor
         // avoid proposing it twice.
-        let today = Repository.localDayKey(Date())
+        // The DIET day, so the block describes the same day a "today" action would write to. Describing the
+        // calendar day while writing to the diet day is the two-readouts failure with the coach as victim:
+        // it would be told the day is empty and then add to yesterday's total.
+        let today = await repo.dietDayKey()
         let entries = await repo.foodEntries(day: today)
         let groups = MealGrouping.grouped(entries, meal: { $0.displayMeal },
                                           macros: { $0.effectiveMacros })

@@ -113,7 +113,10 @@ struct DietDetailView: View {
             AddFoodSheet(library: library, recipes: recipes) { item, portion, save in
                 Task {
                     if save { await repo.saveFoodItem(item) }
-                    await repo.logFood(item: item, portion: portion, saveToLibrary: save)
+                    // The DIET day, so a 00:15 snack logged from here lands where the budget it is
+                    // being spent against lives.
+                    await repo.logFood(item: item, portion: portion,
+                                       day: await repo.dietDayKey(), saveToLibrary: save)
                     reloadTick += 1
                 }
             }

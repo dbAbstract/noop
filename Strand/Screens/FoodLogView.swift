@@ -45,14 +45,24 @@ struct FoodLogView: View {
     /// is working needs 70% intake coverage over three weeks, and four forgotten days put that out of
     /// reach permanently. Backfilling is the difference between a gap and a dead end.
     @State private var dayOffset = 0
+    /// An instant inside the current DIET day, which in the small hours may be yesterday. Resolved on load
+    /// because the answer needs a sleep read; nil means "not yet asked", and the calendar day stands in.
+    @State private var dietDayAnchor: Date?
 
     /// How far back logging may reach, in days. Two weeks: the coverage window this protects is three
     /// weeks, and beyond that someone is reconstructing rather than remembering. Shared by the stepper
     /// and the history chart so the two cannot disagree about what is reachable.
     private static let maxDayOffset = 13
 
+    /// The day everything on this screen reads and writes.
+    ///
+    /// Offset from the DIET day rather than the calendar day, so a 00:15 snack lands on the day still being
+    /// lived — see `DietDayBoundary`. `dietDayAnchor` is resolved asynchronously on load and falls back to
+    /// the calendar day until it is, which is correct outside the small hours and is the only time this
+    /// screen is opened in them.
     private var selectedDay: String {
-        Repository.localDayKey(Date().addingTimeInterval(-Double(dayOffset) * 86_400))
+        let anchor = dietDayAnchor ?? Date()
+        return Repository.localDayKey(anchor.addingTimeInterval(-Double(dayOffset) * 86_400))
     }
 
     private var isToday: Bool { dayOffset == 0 }
@@ -605,6 +615,7 @@ struct FoodLogView: View {
     private func reload() async {
         entries = await repo.foodEntries(day: selectedDay)
         totals = FoodEntries.total(entries)
+        dietDayAnchor = await repo.dietDayAnchor()
         library = await repo.foodLibrary()
         // After the library, and passed it explicitly: composing a recipe needs the same snapshot of the
         // library the rest of this screen is rendering.
