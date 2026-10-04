@@ -182,6 +182,63 @@ extension Repository {
             .reduce(0.0) { $0 + max(0, $1.energyKcal ?? 0) }
     }
 
+    // MARK: - Which diet day it is
+
+    /// The day key the DIET path should use for an instant.
+    ///
+    /// Differs from `Repository.localDayKey` only in the small hours, and only when sleep says the wearer is
+    /// still up — see `DietDayBoundary`. Food eaten at 00:15 before bed belongs to the day being lived, not
+    /// to a budget that reset fifteen minutes ago.
+    ///
+    /// DELIBERATELY NOT A CHANGE TO `localDayKey`. That key is how recovery, strain, sleep and steps are
+    /// stored; moving it would re-key every series in the app and make existing history disagree with
+    /// itself. Only the diet path asks this, because only the diet path is about a budget being spent while
+    /// awake.
+    ///
+    /// Falls back to the calendar day whenever sleep is unknown, which is the conservative direction: the
+    /// alternative assumes the user is awake and silently backdates every entry on a night the strap missed.
+    func dietDayKey(now: Date = Date()) async -> String {
+        guard DietDayBoundary.isInRolloverWindow(minuteOfDay: FoodEntries.minuteOfDay(now)) else {
+            // The overwhelmingly common path, and it costs nothing — no sleep read at all outside the
+            // window, so the normal case does not pay for the edge case.
+            return Repository.localDayKey(now)
+        }
+        let calendarDay = Repository.localDayKey(now)
+        let sleep = await sleepHoursForDay(calendarDay, now: now)
+        let back = DietDayBoundary.daysBack(minuteOfDay: FoodEntries.minuteOfDay(now),
+                                            hoursSleptSinceMidnight: sleep.elapsed,
+                                            // `sleepHoursForDay` returns (0, 0) both when nothing is
+                                            // recorded and when a worn strap recorded no sleep. Only the
+                                            // first is "unknown", and `hasAnySleepRecord` tells them apart —
+                                            // treating them alike would backdate on every missed night.
+                                            sleepIsKnown: await hasAnySleepRecord(near: now))
+        guard back > 0 else { return calendarDay }
+        return Repository.localDayKey(now.addingTimeInterval(-Double(back) * 86_400))
+    }
+
+    /// An instant INSIDE the current diet day, for callers that do day arithmetic from it.
+    ///
+    /// Returned as a Date rather than a key so a caller can step backwards from it — the food log's day
+    /// stepper subtracts whole days, and doing that from a key would mean parsing it back first.
+    func dietDayAnchor(now: Date = Date()) async -> Date {
+        let key = await dietDayKey(now: now)
+        guard key != Repository.localDayKey(now) else { return now }
+        // One day back is the only shift `DietDayBoundary` produces, so this needs no search.
+        return now.addingTimeInterval(-86_400)
+    }
+
+    /// Whether the strap has recorded ANY sleep recently enough to make "have you slept yet" answerable.
+    ///
+    /// Separate from the hours read because absent and zero are different claims: a worn strap reporting no
+    /// sleep since midnight means the wearer is up, while no record at all means nobody knows. Acting on the
+    /// second as though it were the first is what would backdate entries on a night the strap missed.
+    func hasAnySleepRecord(near now: Date = Date()) async -> Bool {
+        let to = Int(now.timeIntervalSince1970)
+        let from = to - 48 * 3_600
+        if !(await sleepSessions(from: from, to: to)).isEmpty { return true }
+        return !(await computedSleepSessions(from: from, to: to)).isEmpty
+    }
+
     // MARK: - Sleep belonging to a day
 
     /// Hours of sleep that fall inside a local day, and how many of those have already elapsed.

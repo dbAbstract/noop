@@ -38,6 +38,8 @@ struct FoodProposalCard: View {
                     unresolvedBody(handle)
                 } else if case .implausibleWeight(let kg, let last) = proposal.kind {
                     implausibleWeightBody(kg: kg, last: last)
+                } else if case .duplicate(let name) = proposal.kind {
+                    duplicateBody(name)
                 } else {
                     detail
                     if proposal.state == .pending { actions } else { settled }
@@ -50,7 +52,7 @@ struct FoodProposalCard: View {
 
     private var tint: Color {
         switch proposal.kind {
-        case .unresolved, .implausibleWeight: return StrandPalette.strain066
+        case .unresolved, .implausibleWeight, .duplicate: return StrandPalette.strain066
         case .edit, .save: return StrandPalette.chargeColor
         default: return StrandPalette.accent
         }
@@ -93,6 +95,19 @@ struct FoodProposalCard: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// The coach re-proposed something this conversation already logged.
+    ///
+    /// No confirm button — tapping would log it twice. Said out loud rather than dropped, because a silent
+    /// drop makes the model's repetition invisible AND leaves a genuine second helping looking broken; the
+    /// copy therefore says how to log it anyway.
+    @ViewBuilder
+    private func duplicateBody(_ name: String) -> some View {
+        Text("You already logged \(name) and the coach offered it again, so nothing was added. If you really did have another, say so and it will log a second one.")
+            .font(StrandFont.footnote)
+            .foregroundStyle(StrandPalette.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     private var icon: String {
         switch proposal.kind {
         case .log: return "plus.circle"
@@ -100,6 +115,7 @@ struct FoodProposalCard: View {
         case .save: return "tray.and.arrow.down"
         case .edit: return "pencil"
         case .weight: return "scalemass"
+        case .duplicate: return "doc.on.doc"
         case .unresolved, .implausibleWeight: return "questionmark.circle"
         }
     }
@@ -113,6 +129,7 @@ struct FoodProposalCard: View {
         case .weight: return String(localized: "WEIGH-IN")
         case .unresolved: return String(localized: "COULDN'T MATCH")
         case .implausibleWeight: return String(localized: "CHECK THE UNITS")
+        case .duplicate: return String(localized: "ALREADY LOGGED")
         }
     }
 
@@ -174,7 +191,7 @@ struct FoodProposalCard: View {
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
-            case .unresolved, .implausibleWeight:
+            case .unresolved, .implausibleWeight, .duplicate:
                 EmptyView()
             }
 

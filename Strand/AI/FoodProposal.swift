@@ -33,6 +33,13 @@ struct FoodProposal: Identifiable, Equatable {
         case save(name: String, servingLabel: String, macros: MacroTotals)
         /// Record a weigh-in.
         case weight(kg: Double)
+        /// The model re-emitted an action this conversation has ALREADY applied.
+        ///
+        /// Models repeat their own previous structured output: mention an apple after logging a banana and
+        /// the reply carries both. Rendered as a stated note with no confirm button — not silently dropped,
+        /// because then the model's mistake is invisible and a genuine second helping looks like a bug, and
+        /// not silently offered, because one tap would log breakfast twice.
+        case duplicate(of: String)
         /// The model referred to a food that could not be resolved. Rendered as a plain note, with no
         /// confirm button, because there is nothing safe to confirm.
         case unresolved(handle: String)
@@ -70,6 +77,24 @@ struct FoodProposal: Identifiable, Equatable {
         self.meal = meal
     }
 
+    /// A content identity for spotting a re-proposal.
+    ///
+    /// Deliberately coarse: the kind, the name and the day. Not the portion or the macros — a model
+    /// repeating itself often jitters a figure slightly, and a duplicate that differs by 2 kcal is still a
+    /// duplicate. The cost of being coarse is that a genuine second identical helping on the same day is
+    /// flagged, which the card's wording handles by telling the user how to log it anyway.
+    var dedupeKey: String? {
+        switch kind {
+        case .log(let item, _): return "log:\(item.id.uuidString):\(dayKey)"
+        case .create(let name, _, _, _): return "create:\(name.lowercased()):\(dayKey)"
+        case .save(let name, _, _): return "save:\(name.lowercased())"
+        case .edit(let item, _, _): return "edit:\(item.id.uuidString)"
+        case .weight: return "weight:\(dayKey)"
+        // Nothing was written, so there is nothing to duplicate.
+        case .unresolved, .implausibleWeight, .duplicate: return nil
+        }
+    }
+
     /// Whether this writes to a day other than today, which the card must say out loud.
     func targetsAnotherDay(today: String) -> Bool { dayKey != today }
 
@@ -89,7 +114,7 @@ struct FoodProposal: Identifiable, Equatable {
         // None of these add to a day. An edit changes a definition, a save only fills the library, a
         // weigh-in is not food — showing "this adds N kcal" on any of them would answer a question the
         // card is not asking.
-        case .edit, .save, .weight, .unresolved, .implausibleWeight:
+        case .edit, .save, .weight, .unresolved, .implausibleWeight, .duplicate:
             return nil
         }
     }
@@ -102,6 +127,7 @@ struct FoodProposal: Identifiable, Equatable {
         case .edit(let item, let name, _): return name ?? item.name
         case .weight(let kg), .implausibleWeight(let kg, _):
             return String(format: "%.1f kg", locale: AppLanguage.activeLocale, kg)
+        case .duplicate(let name): return name
         case .unresolved: return String(localized: "Unrecognised food")
         }
     }
@@ -124,10 +150,16 @@ extension FoodProposal {
     /// Range-checked HERE rather than in the parser, because "how far back may this go" is a product rule
     /// about the food log, not a fact about JSON. A future date is refused outright: nothing has been eaten
     /// tomorrow, so it is a model error rather than a backdated entry.
-    static func resolveDay(_ day: FoodActionDay, now: Date = Date()) -> (key: String, label: String)? {
+    /// `todayKey` is injected rather than computed, so a caller can hand in the DIET day — which in the
+    /// small hours is yesterday's calendar day. Defaulted to the calendar day, so a caller that does not
+    /// care (and every test) behaves exactly as before.
+    static func resolveDay(_ day: FoodActionDay, now: Date = Date(),
+                           todayKey: String? = nil) -> (key: String, label: String)? {
         switch day {
         case .today:
-            return (Repository.localDayKey(now), String(localized: "Today"))
+            // "Today" means the day the user is LIVING, which before bed at 00:15 is still yesterday by the
+            // calendar. The label stays "Today" because that is what they mean by it.
+            return (todayKey ?? Repository.localDayKey(now), String(localized: "Today"))
         case .daysAgo(let n):
             guard n >= 0, n <= maxDaysAgo else { return nil }
             let date = now.addingTimeInterval(-Double(n) * 86_400)
@@ -169,10 +201,11 @@ extension FoodProposal {
                         recipeIds: Set<UUID>,
                         defaultServingLabel: String,
                         lastKnownWeightKg: Double?,
-                        now: Date = Date()) -> FoodProposal? {
+                        now: Date = Date(),
+                        todayKey: String? = nil) -> FoodProposal? {
         // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
         // against last Tuesday" answered by writing to today is the wrong day recorded as fact.
-        guard let day = resolveDay(request.day, now: now) else { return nil }
+        guard let day = resolveDay(request.day, now: now, todayKey: todayKey) else { return nil }
 
         let entries = library.map {
             FoodDigestEntry(id: $0.id.uuidString, name: $0.name, servingLabel: $0.servingLabel,
@@ -286,8 +319,9 @@ extension Repository {
             // trend while the budget went on pricing an old mass.
             return await logWeight(kg: kg, day: day, profile: profile)
 
-        case .unresolved, .implausibleWeight:
-            // Nothing safe to do. Deliberately not "create it anyway" or "store it anyway".
+        case .unresolved, .implausibleWeight, .duplicate:
+            // Nothing safe to do. Deliberately not "create it anyway", "store it anyway", or "log it
+            // again" — a duplicate reaching the write path is the double-log this case exists to prevent.
             return false
         }
     }
