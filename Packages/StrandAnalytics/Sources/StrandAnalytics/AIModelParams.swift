@@ -30,6 +30,36 @@ public enum AIModelParams {
     /// Exact ids that take the modern shape but carry no dash suffix, so the prefix rule would miss them.
     public static let modernExact: Set<String> = ["o1", "o3", "o4", "gpt-5"]
 
+    /// Completion cap for the gpt-4 family: the visible answer only.
+    public static let standardMaxTokens = 4096
+
+    /// Completion cap for reasoning models, which is a DIFFERENT QUANTITY despite the similar name.
+    ///
+    /// `max_completion_tokens` counts REASONING tokens as well as the visible reply, so a cap sized for an
+    /// answer starves the thinking that produces it: gpt-5 spends the whole budget reasoning, hits the cap,
+    /// and returns an EMPTY message with `finish_reason: "length"`. On screen that is a long "thinking…"
+    /// followed by nothing — which is exactly the failure this value was set too low to avoid.
+    ///
+    /// 16384 is headroom rather than a target. The system prompt still governs reply length, and an unused
+    /// allowance costs nothing: completion tokens are billed as generated, not as reserved.
+    public static let reasoningMaxTokens = 16_384
+
+    /// How hard a reasoning model should think, where the parameter is supported.
+    ///
+    /// "low", deliberately. This is a food-logging assistant: the work is reading a sentence about toast and
+    /// returning a macro estimate, not solving a proof. Deep reasoning spends minutes and thousands of
+    /// tokens to answer a question that does not need them, and the latency is what reads as a hang.
+    public static let reasoningEffort = "low"
+
+    /// Whether the model accepts `reasoning_effort`.
+    ///
+    /// Tied to the same families that need the modern body — the two travel together on OpenAI's side — but
+    /// named separately, because a future model could want one and not the other and a shared flag would
+    /// hide that.
+    public static func acceptsReasoningEffort(model: String) -> Bool {
+        needsModernParams(model: model)
+    }
+
     /// Whether this model needs the modern parameter shape.
     ///
     /// Unknown models answer FALSE — the gpt-4 shape — because that is what every OpenAI-compatible

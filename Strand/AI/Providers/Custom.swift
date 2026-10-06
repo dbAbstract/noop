@@ -74,10 +74,16 @@ struct CustomClient: AIProviderClient {
     ) async throws {
         var body: [String: Any] = ["model": model, "messages": wire, "stream": true]
         if modernParams {
-            body["max_completion_tokens"] = 4096
+            // Sized for REASONING plus the reply, not the reply alone — see `reasoningMaxTokens`. A cap of
+            // 4096 let gpt-5 spend the lot thinking and return an empty message.
+            body["max_completion_tokens"] = AIModelParams.reasoningMaxTokens
+            if AIModelParams.acceptsReasoningEffort(model: model) {
+                // Keeps a food-logging answer from taking minutes. The latency is what reads as a hang.
+                body["reasoning_effort"] = AIModelParams.reasoningEffort
+            }
         } else {
             body["temperature"] = 0.6
-            body["max_tokens"] = 4096
+            body["max_tokens"] = AIModelParams.standardMaxTokens
         }
 
         var req = URLRequest(url: AIProvider.custom.endpoint)
@@ -167,10 +173,16 @@ struct CustomClient: AIProviderClient {
         // #1074: 900 truncated detailed coaching replies mid-sentence on cloud providers; 4096 lets a
         // full multi-section reply complete (a cap, not a target). Matches the Gemini leg + Android.
         if modernParams {
-            body["max_completion_tokens"] = 4096
+            // Sized for REASONING plus the reply, not the reply alone — see `reasoningMaxTokens`. A cap of
+            // 4096 let gpt-5 spend the lot thinking and return an empty message.
+            body["max_completion_tokens"] = AIModelParams.reasoningMaxTokens
+            if AIModelParams.acceptsReasoningEffort(model: model) {
+                // Keeps a food-logging answer from taking minutes. The latency is what reads as a hang.
+                body["reasoning_effort"] = AIModelParams.reasoningEffort
+            }
         } else {
             body["temperature"] = 0.6
-            body["max_tokens"] = 4096
+            body["max_tokens"] = AIModelParams.standardMaxTokens
         }
 
         var req = URLRequest(url: AIProvider.custom.endpoint)

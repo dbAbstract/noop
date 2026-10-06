@@ -60,6 +60,33 @@ final class AIModelParamsTests: XCTestCase {
         XCTAssertTrue(AIModelParams.needsModernParams(model: " gpt-5 "))
     }
 
+    // MARK: - Token caps
+
+    /// THE BUG THAT CAUSED A HANG. `max_completion_tokens` counts reasoning tokens too, so a cap sized for
+    /// the answer alone let gpt-5 spend the lot thinking and return an EMPTY message — on screen, a long
+    /// "thinking…" followed by nothing.
+    func testTheReasoningCapIsMuchLargerThanTheStandardOne() {
+        XCTAssertGreaterThan(AIModelParams.reasoningMaxTokens,
+                             AIModelParams.standardMaxTokens * 2,
+                             "a reasoning cap must leave room for thinking AND the reply")
+        XCTAssertEqual(AIModelParams.standardMaxTokens, 4096)
+    }
+
+    /// Low effort on purpose: this is a food-logging assistant, and deep reasoning spends minutes on a
+    /// question about toast. The latency is what reads as a hang.
+    func testReasoningEffortIsLow() {
+        XCTAssertEqual(AIModelParams.reasoningEffort, "low")
+    }
+
+    /// The parameter must only be sent where it is accepted — a gpt-4 model would 400 on it, which would
+    /// turn a working configuration into a broken one.
+    func testReasoningEffortIsOnlyForModelsThatTakeIt() {
+        XCTAssertTrue(AIModelParams.acceptsReasoningEffort(model: "gpt-5"))
+        XCTAssertTrue(AIModelParams.acceptsReasoningEffort(model: "o3-mini"))
+        XCTAssertFalse(AIModelParams.acceptsReasoningEffort(model: "gpt-4o"))
+        XCTAssertFalse(AIModelParams.acceptsReasoningEffort(model: "llama-3.3-70b"))
+    }
+
     // MARK: - The retry trigger
 
     /// The exact message the user hit.

@@ -962,7 +962,18 @@ final class AICoachEngine: ObservableObject {
                 let text: String
                 if !clean.isEmpty { text = clean }
                 else if !proposals.isEmpty { text = String(localized: "Here's what I've got:") }
-                else { text = "(no reply)" }
+                else {
+                    // "(no reply)" said nothing about WHY, and on a reasoning model there is a specific
+                    // likely cause worth naming: the token cap covers reasoning as well as the answer, so a
+                    // model that thinks too hard returns nothing at all. Marked as a failure so the retry
+                    // affordance appears — re-asking is the actual remedy, and the user had been
+                    // copy-pasting instead.
+                    text = AIModelParams.needsModernParams(model: model)
+                        ? String(localized: "The model used its whole budget thinking and sent no answer. Send again — it usually succeeds on a second try.")
+                        : String(localized: "The model returned an empty reply. Send again.")
+                    markFailed(userMessageId: userId,
+                               reason: String(localized: "Empty reply from \(model)."))
+                }
                 messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
                                                 text: text, proposals: proposals)
             }
