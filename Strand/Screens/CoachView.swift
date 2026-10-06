@@ -536,7 +536,16 @@ struct CoachView: View {
                         LazyVStack(alignment: .leading, spacing: 12) {
                             ForEach(coach.messages) { message in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    bubble(message)
+                                    // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
+                                    // `send` appends it so deltas have somewhere to land. Drawn, it is an
+                                    // empty bubble sitting above "Coach is thinking…", which is two things
+                                    // on screen for one state. The typing indicator IS its visual.
+                                    //
+                                    // Also catches a reply that is nothing but an action block mid-stream:
+                                    // `displayText` hides the JSON, so the bubble would be empty for real.
+                                    if !isEmptyPlaceholder(message) {
+                                        bubble(message)
+                                    }
                                     // The proposal card rides UNDER its own turn rather than inside the
                                     // bubble: it is not prose, it is not selectable, and it must not be
                                     // swept up by the bubble's Copy/Share context menu.
@@ -640,6 +649,15 @@ struct CoachView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
+    }
+
+    /// An assistant turn with nothing to show yet.
+    ///
+    /// Only ever true for the ASSISTANT: a user bubble with empty text cannot happen (`send` rejects a
+    /// blank question), and treating one as a placeholder would silently hide a real turn.
+    private func isEmptyPlaceholder(_ message: ChatMessage) -> Bool {
+        message.role == .assistant
+            && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     @ViewBuilder
