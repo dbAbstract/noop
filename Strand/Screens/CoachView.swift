@@ -58,38 +58,35 @@ struct CoachView: View {
     private var suggestions: [String] { coach.suggestions }
 
     var body: some View {
-        ScreenScaffold(title: "Coach",
-                       subtitle: "Ask about your charge, effort, rest and workouts, grounded in your own numbers.",
-                       // Liquid finish: the same full-bleed day-of-sky backdrop Today + the other liquid
-                       // tabs carry, so Coach sits in one atmosphere. Static + non-interactive; the frosted
-                       // message/setup cards below sit on the opaque canvas and stay legible.
-                       topBackground: liquidScaffoldSky(),
-                       bottomBar: {
-                           // DOCKED, not the column's last row. A multiline field growing inside the scroll
-                           // content extends toward the keyboard while the avoidance offset stays where it
-                           // was computed, so the line being typed slides underneath. As a safe-area inset
-                           // the keyboard lifts the whole bar, which cannot fall out of step.
-                           if coach.isConfigured { composerBar }
-                       }) {
+        // NOT a ScreenScaffold, and that is the whole point of this layout.
+        //
+        // This screen used to be a scaffold column containing a 220–460 pt transcript ScrollView, so there
+        // were TWO scroll views stacked: the page and the chat. That is what made it feel ungrounded — a
+        // drag near the transcript edge scrolled the wrong one, the chat could only ever show a slice of
+        // itself, and the composer sat in the OUTER scroll where the keyboard's avoidance offset could not
+        // follow a growing field.
+        //
+        // One scroll view now, holding the transcript, filling the screen. The header is fixed above it and
+        // the composer is a safe-area inset ON it — which is what makes the keyboard lift the composer and
+        // shorten the scrollable area in one motion, the behaviour every chat app has.
+        Group {
             if coach.isConfigured {
-                connectedHeader
-                transcript
-                if let error = coach.errorText, !error.isEmpty {
-                    errorBanner(error)
-                }
-                if coach.keyRejected || showKeyEditor { keyRepairPanel }
-                // K7: show follow-up chips after each assistant reply (when the transcript is
-                // non-empty and the last message is from the assistant and not mid-send);
-                // otherwise show the initial contextual chips.
-                if showFollowUpChips {
-                    followUpChips
-                } else {
-                    suggestionChips
-                }
-                privacyFootnote
+                chatLayout
             } else {
-                setupCard
+                // Unconfigured is a PAGE, not a chat: a form to fill in, which should scroll normally.
+                ScrollView {
+                    setupCard
+                        .padding(.horizontal, NoopMetrics.screenHPadding)
+                        .padding(.vertical, 20)
+                }
             }
+        }
+        .background(alignment: .top) {
+            ZStack(alignment: .top) {
+                StrandPalette.surfaceBase
+                liquidScaffoldSky()
+            }
+            .ignoresSafeArea()
         }
         // macOS only. On iOS these actions live in `connectionMenu` instead, because this bar is hidden for
         // a primary tab root and VISIBLE in the pillar sheet, so leaving them here would render nothing
@@ -463,6 +460,13 @@ struct CoachView: View {
             } label: {
                 Label("Update key", systemImage: "key.fill")
             }
+            // Here as well as in the macOS toolbar, because on THIS platform the toolbar route is
+            // withdrawn (see the doc above) — so a ShareLink placed there rendered nowhere on iPhone,
+            // which is exactly where the diagnostic is wanted.
+            ShareLink(item: coachDumpFile, preview: SharePreview(CoachDump.filename())) {
+                Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
+            }
+            .disabled(coach.messages.isEmpty)
             Button {
                 showClearConfirm = true
             } label: {
@@ -488,10 +492,42 @@ struct CoachView: View {
     }
     #endif
 
+    /// Header fixed, transcript scrolling, composer docked to the transcript's own scroll view.
+    private var chatLayout: some View {
+        VStack(spacing: 0) {
+            connectedHeader
+                .padding(.horizontal, NoopMetrics.screenHPadding)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+
+            transcript
+        }
+        // On the VStack rather than inside it, so the keyboard lifts the composer AND shortens the
+        // transcript together. Inside the scroll content, a growing field slides under the keyboard —
+        // which was the original complaint.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let error = coach.errorText, !error.isEmpty {
+                    errorBanner(error)
+                }
+                if coach.keyRejected || showKeyEditor { keyRepairPanel }
+                // Chips sit WITH the composer rather than above the transcript: they are things to say, so
+                // they belong beside the place you say them, and scrolling the chat should not scroll them
+                // away mid-thought.
+                if showFollowUpChips { followUpChips } else { suggestionChips }
+                composerBar
+            }
+            .padding(.horizontal, NoopMetrics.screenHPadding)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+            .background(.bar)
+        }
+    }
+
     private var transcript: some View {
-        StrandCard(padding: 16) {
+        Group {
             if coach.messages.isEmpty {
-                emptyTranscript
+                ScrollView { emptyTranscript.padding(NoopMetrics.screenHPadding) }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -528,7 +564,9 @@ struct CoachView: View {
                     #if os(iOS)
                     .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                     #endif
-                    .frame(minHeight: 220, maxHeight: 460)
+                    // No height cap. It fills whatever the header and the docked composer leave, which is
+                    // what makes this read as a chat rather than as a card with a chat in it.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // On APPEAR as well as on change. A restored transcript changes neither the message
                     // count nor `sending`, so without this, opening Coach sat on the oldest message — the
                     // one part of the conversation nobody wants to read first.

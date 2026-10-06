@@ -13,23 +13,30 @@ struct OpenAIClient: AIProviderClient {
         var wire: [[String: Any]] = [["role": "system", "content": systemPrompt]]
         for m in messages { wire.append(["role": m.role.rawValue, "content": m.content]) }
 
-        // Standard params first (gpt-4 family). Newer/reasoning models reject `temperature` and want
-        // `max_completion_tokens`; if the provider 400s about either, retry with the modern shape.
+        // The shape is chosen from the MODEL ID first (`AIModelParams`), so a gpt-5 request does not have
+        // to fail once before working. The 400-retry below is a safety net for a family that is not in that
+        // list yet — and it flips to the OTHER shape rather than always to the modern one, so it recovers
+        // in both directions.
+        let modern = AIModelParams.needsModernParams(model: model)
         do {
-            return try await chat(key: key, model: model, wire: wire, modernParams: false, session: session)
+            return try await chat(key: key, model: model, wire: wire, modernParams: modern, session: session)
         } catch let AICoachError.server(code, detail) where code == 400 {
-            let d = detail.lowercased()
-            if d.contains("max_completion_tokens") || d.contains("max_tokens")
-                || d.contains("temperature") || d.contains("unsupported") {
-                return try await chat(key: key, model: model, wire: wire, modernParams: true, session: session)
+            guard AIModelParams.isParameterShapeError(detail) else {
+                throw AICoachError.server(code, detail)
             }
-            throw AICoachError.server(code, detail)
+            return try await chat(key: key, model: model, wire: wire, modernParams: !modern,
+                                  session: session)
         }
     }
 
     /// K1: Stream via `stream: true`. Same body as `send`, with `stream: true` added. SSE parsing
-    /// via `SseDeltas.openAiDelta`. The modern-params retry on 400 is NOT streamed (rare path;
-    /// falls back to `send`'s retry). Byte-parity pin in `SseDeltasTests.openAiReassembleMatchesFullReply`.
+    /// via `SseDeltas.openAiDelta`. Byte-parity pin in `SseDeltasTests.openAiReassembleMatchesFullReply`.
+    ///
+    /// THE PARAMETER-SHAPE RETRY LIVES HERE TOO, which it did not before. The old comment claimed this path
+    /// "falls back to `send`'s retry" — it does not: streaming is the MAIN chat path, so a gpt-5 user got
+    /// the provider's raw 400 about `max_tokens` and no reply at all. The retry is re-issued as a
+    /// non-streamed `send`, because the first attempt may already have emitted deltas and re-streaming
+    /// would duplicate them on screen.
     func stream(
         key: String,
         model: String,
@@ -41,9 +48,38 @@ struct OpenAIClient: AIProviderClient {
         var wire: [[String: Any]] = [["role": "system", "content": systemPrompt]]
         for m in messages { wire.append(["role": m.role.rawValue, "content": m.content]) }
 
+        let modern = AIModelParams.needsModernParams(model: model)
+        do {
+            try await streamOnce(key: key, model: model, wire: wire, modernParams: modern,
+                                 session: session, onDelta: onDelta)
+        } catch let AICoachError.server(code, detail) where code == 400 {
+            guard AIModelParams.isParameterShapeError(detail) else {
+                throw AICoachError.server(code, detail)
+            }
+            // Re-issued NON-STREAMED and delivered as one delta. A 400 arrives before any body, so nothing
+            // has been shown yet — but re-streaming would risk duplicating deltas if that ever changed,
+            // and the whole reply in one chunk renders identically.
+            let whole = try await chat(key: key, model: model, wire: wire, modernParams: !modern,
+                                       session: session)
+            onDelta(whole)
+        }
+    }
+
+    private func streamOnce(
+        key: String,
+        model: String,
+        wire: [[String: Any]],
+        modernParams: Bool,
+        session: URLSession,
+        onDelta: (String) -> Void
+    ) async throws {
         var body: [String: Any] = ["model": model, "messages": wire, "stream": true]
-        body["temperature"] = 0.6
-        body["max_tokens"] = 4096
+        if modernParams {
+            body["max_completion_tokens"] = 4096
+        } else {
+            body["temperature"] = 0.6
+            body["max_tokens"] = 4096
+        }
 
         var req = URLRequest(url: AIProvider.openAI.endpoint)
         req.httpMethod = "POST"

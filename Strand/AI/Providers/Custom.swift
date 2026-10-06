@@ -18,23 +18,26 @@ struct CustomClient: AIProviderClient {
         var wire: [[String: Any]] = [["role": "system", "content": systemPrompt]]
         for m in messages { wire.append(["role": m.role.rawValue, "content": m.content]) }
 
-        // Standard params first. Some OpenAI-compatible servers (reasoning models behind a gateway)
-        // reject `temperature`/`max_tokens` and want `max_completion_tokens`; retry on that 400.
+        // The shape comes from the model id where it is recognisable — a gateway addressing `openai/gpt-5`
+        // wants the modern body, and `AIModelParams` strips the vendor prefix to see that. An UNKNOWN id
+        // answers "standard", which is what llama.cpp, Ollama and LM Studio all accept; the retry then
+        // covers whatever the server actually wants.
+        let modern = AIModelParams.needsModernParams(model: model)
         do {
-            return try await chat(key: key, model: model, wire: wire, modernParams: false, session: session)
+            return try await chat(key: key, model: model, wire: wire, modernParams: modern, session: session)
         } catch let AICoachError.server(code, detail) where code == 400 {
-            let d = detail.lowercased()
-            if d.contains("max_completion_tokens") || d.contains("max_tokens")
-                || d.contains("temperature") || d.contains("unsupported") {
-                return try await chat(key: key, model: model, wire: wire, modernParams: true, session: session)
+            guard AIModelParams.isParameterShapeError(detail) else {
+                throw AICoachError.server(code, detail)
             }
-            throw AICoachError.server(code, detail)
+            return try await chat(key: key, model: model, wire: wire, modernParams: !modern,
+                                  session: session)
         }
     }
 
     /// K1: Stream via `stream: true` (most local OpenAI-compatible servers support it). Same body
     /// as `send`'s standard-params path, with `stream: true`. SSE parsing via `SseDeltas.openAiDelta`.
-    /// The modern-params retry on 400 is NOT streamed (rare path; falls back to `send`'s retry).
+    /// The parameter-shape retry runs here too, re-issued non-streamed — the old claim that this path
+    /// "falls back to `send`'s retry" was wrong, since streaming is the path the Coach actually uses.
     func stream(
         key: String,
         model: String,
@@ -47,13 +50,35 @@ struct CustomClient: AIProviderClient {
         var wire: [[String: Any]] = [["role": "system", "content": systemPrompt]]
         for m in messages { wire.append(["role": m.role.rawValue, "content": m.content]) }
 
-        let body: [String: Any] = [
-            "model": model,
-            "messages": wire,
-            "temperature": 0.6,
-            "max_tokens": 4096,
-            "stream": true
-        ]
+        let modern = AIModelParams.needsModernParams(model: model)
+        do {
+            try await streamOnce(key: key, model: model, wire: wire, modernParams: modern,
+                                 session: session, onDelta: onDelta)
+        } catch let AICoachError.server(code, detail) where code == 400 {
+            guard AIModelParams.isParameterShapeError(detail) else {
+                throw AICoachError.server(code, detail)
+            }
+            let whole = try await chat(key: key, model: model, wire: wire, modernParams: !modern,
+                                       session: session)
+            onDelta(whole)
+        }
+    }
+
+    private func streamOnce(
+        key: String,
+        model: String,
+        wire: [[String: Any]],
+        modernParams: Bool,
+        session: URLSession,
+        onDelta: (String) -> Void
+    ) async throws {
+        var body: [String: Any] = ["model": model, "messages": wire, "stream": true]
+        if modernParams {
+            body["max_completion_tokens"] = 4096
+        } else {
+            body["temperature"] = 0.6
+            body["max_tokens"] = 4096
+        }
 
         var req = URLRequest(url: AIProvider.custom.endpoint)
         req.httpMethod = "POST"
