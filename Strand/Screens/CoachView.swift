@@ -546,6 +546,9 @@ struct CoachView: View {
                                         FoodProposalCard(proposal: proposal, messageId: message.id)
                                             .frame(maxWidth: 560, alignment: .leading)
                                     }
+                                    if let failure = message.failure {
+                                        retryRow(message: message, reason: failure)
+                                    }
                                 }
                                 .id(message.id)
                             }
@@ -553,7 +556,10 @@ struct CoachView: View {
                                 typingIndicator.id("typing")
                             }
                         }
-                        .padding(.vertical, 2)
+                        // Restored after the full-screen restructure removed the card wrapper that used
+                        // to supply it — bubbles were sitting flush against both edges.
+                        .padding(.horizontal, NoopMetrics.screenHPadding)
+                        .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     // #697 parity: this screen builds its OWN ScrollView rather than going through
@@ -581,11 +587,45 @@ struct CoachView: View {
                     .onChangeCompat(of: coach.messages.count) { _ in
                         scrollToEnd(proxy)
                     }
+                    // A yield first: the typing indicator is inserted in the same update that flips
+                    // `sending`, so scrolling immediately targets a row that does not exist yet and lands
+                    // short — leaving "thinking" under the keyboard, which is what the user saw.
                     .onChangeCompat(of: coach.sending) { _ in
-                        scrollToEnd(proxy)
+                        Task { @MainActor in
+                            await Task.yield()
+                            scrollToEnd(proxy)
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /// A failed turn carries its own reason and its own retry.
+    ///
+    /// Attached to the MESSAGE rather than shown as a banner, because a banner says "something failed" and
+    /// this says "this one did, press here". The alternative the user was left with was copying their own
+    /// text out and pasting it back — which they did five times, each one re-sending a longer history.
+    @ViewBuilder
+    private func retryRow(message: ChatMessage, reason: String) -> some View {
+        HStack {
+            Spacer(minLength: 48)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(reason)
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.statusWarning)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await coach.retry(messageId: message.id) }
+                } label: {
+                    Label("Send again", systemImage: "arrow.clockwise")
+                        .font(StrandFont.footnote)
+                }
+                .buttonStyle(NoopButtonStyle(.secondary))
+                .disabled(coach.sending)
+            }
+            .frame(maxWidth: 520, alignment: .trailing)
         }
     }
 
@@ -1055,7 +1095,9 @@ struct CoachView: View {
                                   dataConsent: coach.dataConsent,
                                   onDeviceSignals: coach.includeOnDeviceSignals,
                                   hasCustomPrompt: coach.hasCustomSystemPrompt,
-                                  customPromptMissesFoodProtocol: coach.customPromptMissesFoodProtocol)
+                                  customPromptMissesFoodProtocol: coach.customPromptMissesFoodProtocol,
+                                  errorText: coach.errorText,
+                                  isSending: coach.sending)
         // A failed encode still produces a file, carrying the reason. An empty share sheet would say
         // nothing, and the reason — a non-finite number reaching a macro field — is itself the bug.
         try? (json ?? "{\"error\":\"could not encode the conversation\"}")

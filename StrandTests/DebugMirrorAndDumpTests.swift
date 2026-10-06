@@ -104,10 +104,38 @@ final class DebugMirrorAndDumpTests: XCTestCase {
         ChatMessage(role: role, text: text, proposals: proposals)
     }
 
-    private func dump(_ messages: [ChatMessage]) -> String {
+    private func dump(_ messages: [ChatMessage], error: String? = nil,
+                      sending: Bool = false) -> String {
         CoachDump.json(messages: messages, provider: "openai", model: "gpt-x",
                        dataConsent: true, onDeviceSignals: false,
-                       hasCustomPrompt: false, customPromptMissesFoodProtocol: false) ?? ""
+                       hasCustomPrompt: false, customPromptMissesFoodProtocol: false,
+                       errorText: error, isSending: sending) ?? ""
+    }
+
+    /// THE OMISSION THAT MADE A REAL DUMP HARD TO READ. It showed five identical user turns and an empty
+    /// assistant turn with no sign that anything had FAILED — a transcript of failures that does not say
+    /// they failed reads as the app ignoring the user.
+    func testTheDumpCarriesTheFailureAndTheReason() {
+        var failed = message(.user, "log my breakfast")
+        failed.failure = "The request timed out."
+        let json = dump([failed], error: "The request timed out.", sending: true)
+        XCTAssertTrue(json.contains("timed out"))
+        XCTAssertTrue(json.contains("\"failure\""))
+        XCTAssertTrue(json.contains("\"errorText\""))
+        XCTAssertTrue(json.contains("\"failedMessageCount\""))
+        // Explains a trailing empty assistant turn rather than leaving it to look like its own bug.
+        XCTAssertTrue(json.contains("\"isSending\" : true"))
+    }
+
+    func testAHealthyConversationReportsNoFailures() {
+        let json = dump([message(.user, "hello"), message(.assistant, "hi")])
+        XCTAssertTrue(json.contains("\"failedMessageCount\" : 0"))
+        XCTAssertFalse(json.contains("\"failure\""))
+    }
+
+    /// Bumped whenever the shape changes, or a reader guesses from the keys present and gets it wrong.
+    func testTheFormatVersionWasBumpedForTheNewFields() {
+        XCTAssertEqual(CoachDump.formatVersion, 2)
     }
 
     func testTheTranscriptIsCarried() {

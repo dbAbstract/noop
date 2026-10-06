@@ -41,12 +41,21 @@ struct ChatMessage: Identifiable, Equatable {
     /// That is deliberate rather than unfinished — a card restored hours later would invite the user to
     /// log a meal they have long since logged or forgotten, with no way to tell which.
     var proposals: [FoodProposal] = []
+    /// Why this turn did not get through, when it did not.
+    ///
+    /// On the USER's message rather than on the engine, because `errorText` is a single global slot: it
+    /// describes the latest failure and says nothing about WHICH message is unsent. Without this the user
+    /// has no option but to copy their text and paste it again — which is exactly what happened, five
+    /// times, and each retry re-sent the whole accumulated history.
+    var failure: String?
 
-    init(id: UUID = UUID(), role: Role, text: String, proposals: [FoodProposal] = []) {
+    init(id: UUID = UUID(), role: Role, text: String, proposals: [FoodProposal] = [],
+         failure: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.proposals = proposals
+        self.failure = failure
     }
 }
 
@@ -471,9 +480,25 @@ final class AICoachEngine: ObservableObject {
     them to enable "Let the coach use my data" for guidance tailored to their real numbers.
     """
 
-    init(repo: Repository, session: URLSession = .shared) {
+    /// A session with timeouts a REASONING model can live inside.
+    ///
+    /// `URLSession.shared` allows 60 s, and that is what was killing gpt-5: a reasoning model routinely
+    /// sends nothing at all for longer than a minute while it thinks, and for a streamed response the
+    /// request timeout measures the gap BETWEEN arrivals — so the connection died before the first token.
+    /// The user saw "thinking" forever and then a timeout, five times over.
+    ///
+    /// Generous rather than unbounded: a request that has produced nothing in three minutes is stuck, and
+    /// the resource ceiling stops a wedged stream holding on for the whole session.
+    static func makeSession() -> URLSession {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 180
+        config.timeoutIntervalForResource = 600
+        return URLSession(configuration: config)
+    }
+
+    init(repo: Repository, session: URLSession? = nil) {
         self.repo = repo
-        self.session = session
+        self.session = session ?? AICoachEngine.makeSession()
 
         // Restore persisted provider / model (falling back to sane defaults).
         let storedProvider = UserDefaults.standard.string(forKey: Self.providerKey)
@@ -879,7 +904,9 @@ final class AICoachEngine: ObservableObject {
         conversationDay = Self.localEpochDay()
 
         errorText = nil
-        appendMessage(ChatMessage(role: .user, text: trimmed))
+        let userTurn = ChatMessage(role: .user, text: trimmed)
+        let userId = userTurn.id
+        appendMessage(userTurn)
         sending = true
         // K2: persist once the turn is fully settled (success, mid-stream error, or empty-stream
         // removal) — not per streamed chunk, so a long reply doesn't hammer the store.
@@ -952,6 +979,9 @@ final class AICoachEngine: ObservableObject {
                 messages.remove(at: lastIdx)
             }
             errorText = e.errorDescription
+            // Marked on the USER's turn, which is what lets the UI offer a retry instead of leaving the
+            // user to copy their own text out and paste it back in.
+            markFailed(userMessageId: userId, reason: e.errorDescription)
             // Typed, never text-matched: the message is localized and the case is not.
             if case .badKey = e { keyRejected = true } else { keyRejected = false }
         } catch {
@@ -964,9 +994,37 @@ final class AICoachEngine: ObservableObject {
             } else if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                 messages.remove(at: lastIdx)
             }
-            errorText = AICoachError.network(error.localizedDescription).errorDescription
+            let described = AICoachError.network(error.localizedDescription).errorDescription
+            errorText = described
+            markFailed(userMessageId: userId, reason: described)
             keyRejected = false
         }
+    }
+
+    /// Flag a user turn as unsent, by id.
+    private func markFailed(userMessageId: UUID, reason: String?) {
+        guard let idx = messages.firstIndex(where: { $0.id == userMessageId }) else { return }
+        messages[idx].failure = reason ?? String(localized: "Couldn't send.")
+    }
+
+    /// Re-send a turn that failed, without adding a second copy of it.
+    ///
+    /// THE POINT: retrying by retyping appended ANOTHER user message, and the engine sends the whole
+    /// running history — so the five identical turns in one exported transcript were also five growing
+    /// requests, each slower than the last. This drops everything from the failed turn onwards and replays
+    /// it, so the history stays the length it was.
+    ///
+    /// Anything after the failed turn is discarded deliberately: a reply to a later message cannot be
+    /// correct when an earlier one never arrived, and leaving it would make the transcript claim a
+    /// conversation that did not happen.
+    func retry(messageId: UUID) async {
+        guard !sending,
+              let idx = messages.firstIndex(where: { $0.id == messageId }),
+              messages[idx].role == .user else { return }
+        let text = messages[idx].text
+        messages.removeSubrange(idx...)
+        persistMessages()
+        await send(text)
     }
 
     /// Proactively generate "Today's brief" the first time the Coach opens, readiness + a training

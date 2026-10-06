@@ -25,7 +25,8 @@ enum CoachDump {
 
     /// Schema version, so a file can be read correctly after the shape changes. Bumped on any field change
     /// — a reader that guesses from the keys present will get a later version subtly wrong.
-    static let formatVersion = 1
+    /// 2: adds `errorText`, `isSending`, `failedMessageCount` and per-message `failure`.
+    static let formatVersion = 2
 
     /// Build the JSON. Returns nil only if encoding fails, which would mean a non-finite number reached a
     /// macro field and is itself worth knowing about.
@@ -36,6 +37,8 @@ enum CoachDump {
                      onDeviceSignals: Bool,
                      hasCustomPrompt: Bool,
                      customPromptMissesFoodProtocol: Bool,
+                     errorText: String? = nil,
+                     isSending: Bool = false,
                      generatedAt: Date = Date()) -> String? {
         let payload: [String: Any] = [
             "formatVersion": formatVersion,
@@ -51,6 +54,15 @@ enum CoachDump {
             // anything" is exactly the kind of report this file is meant to explain.
             "customPromptMissesFoodProtocol": customPromptMissesFoodProtocol,
             "messageCount": messages.count,
+            // THE OMISSION THAT MADE THE FIRST DUMP HARD TO READ. It showed five identical user turns and
+            // an empty assistant turn with no indication that anything had FAILED — the reason was in
+            // `errorText`, which was not carried. A transcript of failures that does not say they failed
+            // reads as the app silently ignoring the user.
+            "errorText": errorText ?? "",
+            // True when the dump was taken mid-request, which explains a trailing empty assistant turn
+            // rather than leaving it to look like a bug of its own.
+            "isSending": isSending,
+            "failedMessageCount": messages.filter { $0.failure != nil }.count,
             "messages": messages.map(dict(for:)),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload,
@@ -80,6 +92,8 @@ enum CoachDump {
         if !message.proposals.isEmpty {
             out["proposals"] = message.proposals.map(dict(for:))
         }
+        // Which turn failed and why, rather than one global error that cannot say which.
+        if let failure = message.failure { out["failure"] = failure }
         return out
     }
 
