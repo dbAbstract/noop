@@ -1058,16 +1058,21 @@ final class AICoachEngine: ObservableObject {
         var accumulated = ""
 
         do {
-            try await streamProvider(key: key, messages: wire) { delta in
+            try await streamProvider(key: key, messages: wire,
+                                     overridingSystemPrompt: Self.briefPrompt) { delta in
                 accumulated += delta
                 if let lastIdx = self.messages.indices.last,
                    self.messages[lastIdx].role == .assistant {
                     self.messages[lastIdx] = ChatMessage(
-                        id: placeholder.id, role: .assistant, text: prefix + accumulated
+                        // Same hide-while-streaming treatment the chat path gets, so a block the model
+                        // emits anyway never types itself out in front of the user.
+                        id: placeholder.id, role: .assistant,
+                        text: prefix + FoodActionParse.displayText(accumulated)
                     )
                 }
             }
-            let clean = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let clean = FoodActionParse.strippingAction(from: accumulated)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             if clean.isEmpty {
                 if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                     messages.remove(at: lastIdx)
@@ -1110,11 +1115,42 @@ final class AICoachEngine: ObservableObject {
     /// K5: The brief instruction shared by the interactive `startBriefIfNeeded()` (streamed into the
     /// chat) and the headless `generateBrief()` below (used by the scheduled morning-brief notification).
     /// Kept in one place so the two paths never drift.
+    /// What the brief asks for.
+    ///
+    /// REWRITTEN TO BE ACTUALLY BRIEF. The old version asked for three parts including "exactly what
+    /// training to do today and what to avoid" and "one specific thing to improve my charge", and got
+    /// precisely that: a prescribed six-exercise session and a wind-down routine, every morning, unasked.
+    /// A brief that has to be read is not a brief — and the training plan was the least wanted part,
+    /// because it is advice nobody requested about a session that may not be happening.
+    ///
+    /// So: what the numbers say, what it means for today's effort, and nothing else. Anything more is a
+    /// question the user can ask, and asking is one tap away.
     private static let briefInstruction = """
-    Based on the data above, give me TODAY'S coaching brief in three short parts: \
-    (1) my readiness in one line, citing charge, HRV and rest; \
-    (2) exactly what training to do today and what to avoid; \
-    (3) one specific thing to improve my charge. Be punchy and motivating.
+    Give me today's brief in at most THREE SHORT LINES, under 45 words total.
+    Line 1: readiness — the charge number and whether it is high, normal or low for me.
+    Line 2: what that means for effort today, in a clause. Not a session plan, not a list of exercises.
+    Line 3: ONLY if something in the data genuinely stands out (a bad night, a big effort debt, a trend) —
+    otherwise omit it entirely.
+    No headings, no numbered parts, no bullet lists, no sign-off. If a line is not worth reading, leave it
+    out. I will ask if I want more.
+    """
+
+    /// The brief's persona, deliberately NOT the full coach prompt.
+    ///
+    /// The coach prompt carries the food-logging protocol, so a brief generated under it emitted an action
+    /// block — `{"noop_food_action": {"actions": []}}` appeared verbatim at the end of a user's morning
+    /// brief, because the brief path never stripped it. Giving the brief its own prompt removes the reason
+    /// for the block to exist rather than only cleaning up after it; the strip is kept as a safety net.
+    ///
+    /// Same shape as `macroEstimatePrompt`: a narrow persona for a narrow job.
+    static let briefPrompt = """
+    You are a performance coach writing a one-glance morning brief from the wearer's own wearable data. \
+    Charge is the daily recovery/readiness score (0-100), effort is cardiovascular load, rest is sleep \
+    quality. A dash means NOT MEASURED — say so rather than treating it as zero.
+    BE SHORT. Three lines at most, under 45 words. Cite their actual numbers. No headings, no bullets, no \
+    markdown beyond **bold** for a figure, no sign-off, no encouragement padding.
+    You are NOT logging food and must NEVER output JSON, an action block, or anything machine-readable. \
+    You are not a doctor; do not diagnose.
     """
 
     /// K5: Generate today's coaching brief WITHOUT touching the visible chat transcript. Used by the
@@ -1171,8 +1207,14 @@ final class AICoachEngine: ObservableObject {
         let context = await buildFullContext()
         let wire: [(role: ChatMessage.Role, content: String)] =
             [(.user, context + "\n\n---\n\n" + Self.briefInstruction)]
-        guard let reply = try? await callProvider(key: key, messages: wire) else { return nil }
-        let clean = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let reply = try? await callProvider(key: key, messages: wire,
+                                                  overridingSystemPrompt: Self.briefPrompt)
+        else { return nil }
+        // Stripped as well as prevented. The persona above tells it not to emit an action block, but a
+        // model that does so anyway must not put raw JSON in front of the user — which is exactly what
+        // happened when this path had neither guard.
+        let clean = FoodActionParse.strippingAction(from: reply)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.isEmpty ? nil : clean
     }
 
@@ -1469,14 +1511,18 @@ final class AICoachEngine: ObservableObject {
     /// `AIProviderClient.stream` falls back to `send` + a single delta, so providers without
     /// streaming still work. K11: when an inline image is present, dispatches to
     /// `streamWithImage` instead (Gemini overrides it; others ignore the image).
+    /// `overridingSystemPrompt` mirrors `callProvider`'s parameter of the same name, so a narrow persona
+    /// works on the streamed path too. Without it the streamed brief had to run under the full coach
+    /// prompt — food-logging protocol included — which is why a brief ever emitted an action block.
     private func streamProvider(key: String,
                                 messages: [(role: ChatMessage.Role, content: String)],
                                 inlineImage: String? = nil,
+                                overridingSystemPrompt: String? = nil,
                                 onDelta: (String) -> Void) async throws {
         try await provider.client.streamWithImage(
             key: key,
             model: model,
-            systemPrompt: systemPrompt,
+            systemPrompt: overridingSystemPrompt ?? systemPrompt,
             messages: messages,
             inlineImage: inlineImage,
             session: session,

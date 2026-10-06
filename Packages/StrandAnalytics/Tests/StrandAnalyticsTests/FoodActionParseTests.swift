@@ -254,6 +254,23 @@ final class FoodActionParseTests: XCTestCase {
         }
     }
 
+    /// THE EXACT STRING THAT LEAKED INTO A USER'S MORNING BRIEF. An empty actions array is still an action
+    /// block, and it has to come out of the displayed text — it appeared verbatim at the end of a brief
+    /// because that path stripped nothing at all.
+    func testAnEmptyActionsBlockIsStrippedFromDisplayedText() {
+        let leaked = "3) One thing to boost charge: Lock a 60-min wind-down tonight.\n\n"
+                   + #"{"noop_food_action": {"actions": []}}"#
+        let shown = FoodActionParse.strippingAction(from: leaked)
+        XCTAssertFalse(shown.contains("noop_food_action"))
+        XCTAssertFalse(shown.contains("{"))
+        XCTAssertTrue(shown.hasSuffix("wind-down tonight."))
+    }
+
+    /// And it yields no proposals, so an empty array cannot produce a card either.
+    func testAnEmptyActionsBlockProposesNothing() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"actions": []}}"#), .unknownAction)
+    }
+
     // MARK: - The locator directly
 
     /// The sentinel object must be found even when an unrelated object comes FIRST — the case the
