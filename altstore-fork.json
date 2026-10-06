@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1030",
-          "buildVersion": "1030",
-          "date": "2026-10-03",
-          "localizedDescription": "Merge remote-tracking branch 'origin/fork' into fork",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1030.ipa",
-          "size": 16553267,
+          "version": "11.8.0.1031",
+          "buildVersion": "1031",
+          "date": "2026-10-04",
+          "localizedDescription": "Merge: sleep-centred diet day, and Coach stops repeating itself",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1031.ipa",
+          "size": 16560893,
           "minOSVersion": "17.0"
         }
       ]
