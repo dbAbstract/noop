@@ -180,6 +180,9 @@ public struct DeviceRegistryStore: Sendable {
         // source must take them too, or a deleted library leaves orphaned components behind that no
         // recipe references and nothing will ever clean up.
         "recipeComponent",
+        // v53. Reference data rather than the user's own entries, but still keyed by deviceId — and
+        // "delete all of this device's data" has to mean it, imported menus included.
+        "restaurantFood",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all

@@ -1327,6 +1327,45 @@ extension WhoopStore {
                 t.add(column: "measuredBaselineKcal", .double)
             }
         }
+        // Published nutrition from restaurant chains, as a SOURCE OF TRUTH the coach can cost a meal from.
+        //
+        // ONE TABLE WITH A `chain` COLUMN, not a table per chain. The feature that justifies the whole
+        // thing is cross-chain reference — eating at Hama with no Hama figures, but Kura has a comparable
+        // item — and that is one query here against a join across an unknown number of tables there. Chains
+        // are data, not structure.
+        //
+        // EVERY MACRO IS NULLABLE, and that is the point rather than laxity. Partial publication is the
+        // norm: one chain gives kcal and protein but no fibre, another gives fibre but no fat. With NOT
+        // NULL columns those become zeros, and a zero is a claim — it would have the app log a fat-free
+        // piece of fish and mean it. `PartialMacros` carries the same distinction in memory.
+        //
+        // Not `foodItem`. These are reference data the user has not chosen, often hundreds of rows per
+        // import, and putting them in the library would swamp the food picker and the coach's digest with
+        // items nobody has eaten. They become a `foodItem` only when one is actually logged.
+        migrator.registerMigration("v53-restaurant-food") { db in
+            try db.create(table: "restaurantFood", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                // Normalised for lookup (lowercased, trimmed); `chainLabel` keeps what to show.
+                t.column("chain", .text).notNull()
+                t.column("chainLabel", .text).notNull()
+                t.column("name", .text).notNull()
+                t.column("servingLabel", .text)
+                // Nullable throughout — see above.
+                t.column("kcal", .double)
+                t.column("protein", .double)
+                t.column("carbs", .double)
+                t.column("fat", .double)
+                t.column("fiber", .double)
+                // Where the row came from: "menu-pdf", "menu-text", "coach". Kept so a figure the user
+                // dictated is distinguishable from one read off a published menu, which matters when the
+                // two disagree.
+                t.column("source", .text)
+                t.column("importedAt", .integer).notNull()
+            }
+            try db.create(index: "idx_restaurantFood_device_chain", on: "restaurantFood",
+                          columns: ["deviceId", "chain"], options: [.ifNotExists])
+        }
         return migrator
     }
 }

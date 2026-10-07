@@ -359,6 +359,97 @@ final class MigrationTests: XCTestCase {
         XCTAssertNil(afterClear, "the Revert control depends on a nil surviving the upsert")
     }
 
+    // MARK: - v53: published restaurant nutrition
+
+    /// EVERY MACRO MUST BE NULLABLE. That is the design, not laxity: partial publication is the norm, and a
+    /// NOT NULL column would turn "fibre not published" into a claim of zero somewhere between the table
+    /// and the screen.
+    func testV53MacroColumnsAreAllNullable() async throws {
+        let store = try await WhoopStore.inMemory()
+        let cols = try await store.columnNamesForTest(table: "restaurantFood")
+        for macro in ["kcal", "protein", "carbs", "fat", "fiber"] {
+            XCTAssertTrue(cols.contains(macro), "missing \(macro)")
+        }
+        // Writing a row with every macro absent must succeed; under NOT NULL it would throw.
+        let row = RestaurantFoodRow(id: "r1", deviceId: "diet", chain: "kura sushi",
+                                    chainLabel: "Kura Sushi", name: "Salmon nigiri",
+                                    importedAt: 1_760_000_000)
+        _ = try await store.upsertRestaurantFoods([row])
+        let back = try await store.restaurantFoods(deviceId: "diet", chain: "kura sushi")
+        XCTAssertEqual(back.count, 1)
+        XCTAssertNil(back.first?.kcal)
+        XCTAssertNil(back.first?.fat)
+    }
+
+    func testV53PartialRowsRoundTripWithTheirGapsIntact() async throws {
+        let store = try await WhoopStore.inMemory()
+        // The real shape: kcal and protein published, fat and fibre not.
+        _ = try await store.upsertRestaurantFoods([
+            RestaurantFoodRow(id: "r2", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "Tamago", servingLabel: "1 piece", kcal: 60, protein: 3,
+                              importedAt: 1_760_000_000),
+        ])
+        let back = try await store.restaurantFoods(deviceId: "diet", chain: "kura sushi").first
+        XCTAssertEqual(back?.kcal ?? .nan, 60, accuracy: 0.001)
+        XCTAssertEqual(back?.protein ?? .nan, 3, accuracy: 0.001)
+        XCTAssertNil(back?.fat, "an unpublished value must not come back as zero")
+        XCTAssertNil(back?.fiber)
+    }
+
+    /// THE QUERY THE SINGLE-TABLE DESIGN EXISTS FOR: eating at a chain with no figures for a dish, while
+    /// another chain has a comparable one. Across tables-per-chain this would be a join over an unknown
+    /// number of tables.
+    func testV53FindsAComparableItemInAnotherChain() async throws {
+        let store = try await WhoopStore.inMemory()
+        _ = try await store.upsertRestaurantFoods([
+            RestaurantFoodRow(id: "k1", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "Salmon nigiri", kcal: 90, protein: 6, importedAt: 1),
+            RestaurantFoodRow(id: "h1", deviceId: "diet", chain: "hama sushi", chainLabel: "Hama Sushi",
+                              name: "Tamago nigiri", kcal: 70, importedAt: 1),
+        ])
+        let matches = try await store.restaurantFoodsMatching(deviceId: "diet", nameLike: "salmon")
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches.first?.chainLabel, "Kura Sushi")
+    }
+
+    /// A re-import is a new EDITION, not a diff: items get renamed, withdrawn and re-costed, and diffing
+    /// would leave withdrawn ones behind forever.
+    func testV53ReimportReplacesTheChainWholesale() async throws {
+        let store = try await WhoopStore.inMemory()
+        _ = try await store.replaceRestaurantMenu(deviceId: "diet", chain: "kura sushi", with: [
+            RestaurantFoodRow(id: "a", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "Withdrawn item", kcal: 100, importedAt: 1),
+        ])
+        _ = try await store.replaceRestaurantMenu(deviceId: "diet", chain: "kura sushi", with: [
+            RestaurantFoodRow(id: "b", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "Current item", kcal: 120, importedAt: 2),
+        ])
+        let rows = try await store.restaurantFoods(deviceId: "diet", chain: "kura sushi")
+        XCTAssertEqual(rows.map(\.name), ["Current item"])
+    }
+
+    /// Chain names are normalised ONCE, by a rule both the writer and every reader share — two rules would
+    /// let "Kura Sushi" and "kura  sushi" become separate chains.
+    func testV53ChainNormalisationIsSingleSpelled() {
+        XCTAssertEqual(RestaurantFoodRow.normalisedChain("  Kura   Sushi "), "kura sushi")
+        XCTAssertEqual(RestaurantFoodRow.normalisedChain("KURA SUSHI"), "kura sushi")
+    }
+
+    func testV53ListsChainsWithTheirCounts() async throws {
+        let store = try await WhoopStore.inMemory()
+        _ = try await store.upsertRestaurantFoods([
+            RestaurantFoodRow(id: "a", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "One", importedAt: 1),
+            RestaurantFoodRow(id: "b", deviceId: "diet", chain: "kura sushi", chainLabel: "Kura Sushi",
+                              name: "Two", importedAt: 1),
+            RestaurantFoodRow(id: "c", deviceId: "diet", chain: "hama sushi", chainLabel: "Hama Sushi",
+                              name: "Three", importedAt: 1),
+        ])
+        let chains = try await store.restaurantChains(deviceId: "diet")
+        XCTAssertEqual(chains.count, 2)
+        XCTAssertEqual(chains.first(where: { $0.chain == "kura sushi" })?.count, 2)
+    }
+
     func testV5AddsSyncedColumnToDecodedTables() async throws {
         let store = try await WhoopStore.inMemory()
         for table in ["hrSample", "rrInterval", "event", "battery",

@@ -53,7 +53,8 @@
     "v49-diet-goal",
     "v50-diet-v3",
     "v51-inline-recipe-ingredients",
-    "v52-measured-baseline"
+    "v52-measured-baseline",
+    "v53-restaurant-food"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android — the per-row upload flag belongs to an upload path that does not exist there — so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2717,6 +2718,107 @@
           "columns": [
             "deviceId",
             "recipeId"
+          ]
+        }
+      ]
+    },
+    "restaurantFood": {
+      "platform": "ios_only",
+      "reason": "v53 published restaurant nutrition, as a source of truth the coach costs meals from. ONE table with a chain column rather than one per chain: the point of the feature is cross-chain reference (no Hama figures, but Kura has a comparable item), which is one query here and a join across unknown tables otherwise. EVERY MACRO IS NULLABLE and that is the design — partial publication is the norm, and a NOT NULL column would turn 'fibre not published' into a claim of zero. Deliberately NOT foodItem: these are reference rows the user never chose, hundreds per import, and they would swamp the picker and the coach's digest; a row becomes a foodItem only when one is logged. iOS-only pending the Kotlin twin.",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null,
+          "android": {
+            "notNull": true
+          },
+          "divergence": "sqlite-text-pk-nullable"
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "chain",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "chainLabel",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "name",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "servingLabel",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "kcal",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "protein",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "carbs",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "fat",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "fiber",
+          "affinity": "REAL",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "source",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "importedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "idx_restaurantFood_device_chain",
+          "unique": false,
+          "columns": [
+            "deviceId",
+            "chain"
           ]
         }
       ]
