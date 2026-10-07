@@ -108,6 +108,43 @@ public extension View {
         #endif
     }
 
+    /// Liquid Glass finish for an in-content TOP BAR — a header the page scrolls underneath.
+    ///
+    /// Distinct from the search and button helpers in what it shapes: a bar spans the full width and is
+    /// pinned to the top safe area, so it takes a `.rect` container with no corner radius at the top and
+    /// a soft one below, and it must NOT be `.interactive()` — that modifier adds the press-response
+    /// animation a control wants, and a bar is not pressable.
+    ///
+    /// The pre-26 fallback is a material rather than nothing: the whole point is that content passing
+    /// beneath stays legible, and on a build without glass an unfilled bar would let text collide with
+    /// text. `.ultraThinMaterial` is the closest honest approximation — it blurs what is behind without
+    /// claiming to refract it.
+    @ViewBuilder
+    func nativeLiquidGlassBarChrome() -> some View {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            self
+                .frame(maxWidth: .infinity)
+                .glassEffect(.regular, in: .rect(cornerRadii: .init(bottomLeading: 20,
+                                                                    bottomTrailing: 20)))
+        } else {
+            self.noopBarMaterialChrome()
+        }
+        #else
+        self.noopBarMaterialChrome()
+        #endif
+    }
+
+    /// Blurred-material top bar, for builds without Liquid Glass.
+    @ViewBuilder
+    func noopBarMaterialChrome() -> some View {
+        self
+            .frame(maxWidth: .infinity)
+            .background(.ultraThinMaterial,
+                        in: UnevenRoundedRectangle(cornerRadii: .init(bottomLeading: 20,
+                                                                      bottomTrailing: 20)))
+    }
+
     /// Interactive circular `glassEffect` finish layer (e.g. Home profile photo over glass).
     /// No-op outside iOS 26 so macOS never imports the glass path.
     @ViewBuilder

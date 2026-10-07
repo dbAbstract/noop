@@ -2,6 +2,15 @@ import SwiftUI
 import MarkdownUI
 import StrandDesign
 
+/// Measured height of the floating glass header, so the transcript can inset by exactly as much as the
+/// bar covers. A preference rather than a constant because the row's two text lines follow Dynamic Type.
+private struct CoachHeaderHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// Coach, the one feature in NOOP that talks to the network.
 ///
 /// It is strictly opt-in and bring-your-own-key: the user pastes their own OpenAI
@@ -56,6 +65,16 @@ struct CoachView: View {
     /// (→ `CoachSuggestions`). Falls back to a stable generic set when there is no data. Recomputed
     /// on each body evaluation so a fresh sync immediately updates the chips.
     private var suggestions: [String] { coach.suggestions }
+
+    /// Whether the suggestion / follow-up chip rows are shown.
+    ///
+    /// Hardcoded off for now, deliberately rather than as a setting: this is an experiment about whether
+    /// the chips earn their space, and a toggle would turn that question into a preference nobody revisits.
+    /// Flip to `true` to restore them; nothing else changed.
+    private static let showsSuggestionChips = false
+
+    /// Measured height of the floating glass header, used as the transcript's top inset.
+    @State private var headerHeight: CGFloat = 56
 
     var body: some View {
         // NOT a ScreenScaffold, and that is the whole point of this layout.
@@ -422,20 +441,53 @@ struct CoachView: View {
             if coach.sending {
                 StatePill("Thinking", tone: .accent, pulsing: true)
             }
-            // #2243: the way through to what used to be stacked under this header.
+            // ONE control, not two. A gear and an ellipsis side by side is two doors to the same room —
+            // "Coach settings" and the connection actions are both configuration, and splitting them meant
+            // learning which lived where. Everything now hangs off a single menu.
+            coachMenu
+        }
+    }
+
+    /// Whether    /// Settings and connection, merged.
+    private var coachMenu: some View {
+        Menu {
             Button {
                 showSettings = true
             } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(StrandPalette.textSecondary)
+                Label("Coach settings", systemImage: "slider.horizontal.3")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(String(localized: "Coach settings"))
-            #if os(iOS)
-            connectionMenu
-            #endif
+            Divider()
+            ShareLink(item: coachDumpFile, preview: SharePreview(CoachDump.filename())) {
+                Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
+            }
+            .disabled(coach.messages.isEmpty)
+            Button {
+                toggleKeyEditor()
+            } label: {
+                Label("Update key", systemImage: "key.fill")
+            }
+            Divider()
+            Button(role: .destructive) {
+                showClearConfirm = true
+            } label: {
+                Label("Clear conversation", systemImage: "trash")
+            }
+            .disabled(coach.messages.isEmpty)
+            Button(role: .destructive) {
+                coach.disconnect()
+                keyDraft = ""
+            } label: {
+                Label("Disconnect", systemImage: "gearshape")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(StrandPalette.textSecondary)
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
         }
+        .nativeLiquidGlassButtonChrome(fallback: { EmptyView() })
+        .accessibilityLabel(String(localized: "Coach options"))
     }
 
     #if os(iOS)
@@ -506,14 +558,33 @@ struct CoachView: View {
 
     /// Header fixed, transcript scrolling, composer docked to the transcript's own scroll view.
     private var chatLayout: some View {
-        VStack(spacing: 0) {
-            connectedHeader
-                .padding(.horizontal, NoopMetrics.screenHPadding)
-                .padding(.top, 8)
-                .padding(.bottom, 10)
-
-            transcript
-        }
+        // THE HEADER FLOATS OVER THE TRANSCRIPT rather than sitting in a column above it, which is what
+        // Apple's Liquid Glass guidance for bars asks for: a glass bar is a LENS, so it has to have
+        // something behind it to refract. Stacked in a VStack it was an opaque strip with the page
+        // starting underneath, and glass over an empty background is just a grey rectangle — the same
+        // mistake as the composer's `.bar` fill, one edge up.
+        //
+        // Content scrolls BENEATH it and the top message dissolves into the blur on the way out.
+        // The height is measured rather than assumed: the row holds two lines of text whose size
+        // follows Dynamic Type, so a constant inset would clip at large sizes and gap at small ones.
+        transcript
+            .overlay(alignment: .top) {
+                connectedHeader
+                    .padding(.horizontal, NoopMetrics.screenHPadding)
+                    .padding(.vertical, 10)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(key: CoachHeaderHeightKey.self,
+                                                   value: geo.size.height)
+                        }
+                    }
+                    .nativeLiquidGlassBarChrome()
+            }
+            .onPreferenceChange(CoachHeaderHeightKey.self) { h in
+                // Guard against the zero first pass, which would otherwise flash the transcript up under
+                // the bar for a frame before settling.
+                if h > 0 { headerHeight = h }
+            }
         // On the VStack rather than inside it, so the keyboard lifts the composer AND shortens the
         // transcript together. Inside the scroll content, a growing field slides under the keyboard —
         // which was the original complaint.
@@ -526,26 +597,48 @@ struct CoachView: View {
                 // Chips sit WITH the composer rather than above the transcript: they are things to say, so
                 // they belong beside the place you say them, and scrolling the chat should not scroll them
                 // away mid-thought.
-                if showFollowUpChips { followUpChips } else { suggestionChips }
+                // Suppressed behind a flag while the screen is tried without them. A UI-layer block rather
+                // than ripping out `CoachSuggestions`: the generator is pure, tested and cheap, and
+                // deleting it to answer "do I want these?" would make the answer expensive to revisit.
+                if Self.showsSuggestionChips {
+                    if showFollowUpChips { followUpChips } else { suggestionChips }
+                }
                 composerBar
             }
             .padding(.horizontal, NoopMetrics.screenHPadding)
             .padding(.top, 8)
             .padding(.bottom, 6)
-            .background(.bar)
+            // NO background. `.bar` here was the grey box the composer appeared to sit inside: it tinted
+            // the whole inset region, and because the keyboard's top corners are rounded, the page showed
+            // through at the left and right of them while the band did not — which is what made the
+            // keyboard look like it carried a tray. The page background now runs unbroken from the
+            // transcript to the keyboard, which is the seamless look.
+            //
+            // Nothing bleeds through: a `safeAreaInset` is laid out OUTSIDE the scrollable region, so the
+            // transcript stops above this rather than scrolling beneath it.
         }
     }
 
     private var transcript: some View {
         Group {
             if coach.messages.isEmpty {
-                ScrollView { emptyTranscript.padding(NoopMetrics.screenHPadding) }
+                ScrollView {
+                    emptyTranscript
+                        .padding(NoopMetrics.screenHPadding)
+                        .padding(.top, headerHeight)
+                }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
                         // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
                         LazyVStack(alignment: .leading, spacing: 12) {
+                            // Clears the floating glass bar. Inside the scroll CONTENT rather than as a
+                            // safe-area inset, deliberately: an inset is laid out outside the scrollable
+                            // region, so the transcript would stop below the bar and there would be
+                            // nothing behind the glass to refract. `safeAreaPadding`/`contentMargins`
+                            // would say this more directly but are macOS 14+, and this file is shared.
+                            Color.clear.frame(height: headerHeight)
                             ForEach(coach.messages) { message in
                                 VStack(alignment: .leading, spacing: 8) {
                                     // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
@@ -615,6 +708,21 @@ struct CoachView: View {
                     .task {
                         await Task.yield()
                         scrollToEnd(proxy, animated: false)
+                    }
+                    // THE KEYBOARD MUST MOVE THE CHAT. Showing it grows the bottom safe-area inset, which
+                    // shortens the scroll view from below — SwiftUI keeps the scroll OFFSET, so the newest
+                    // message slides up out of sight behind the keyboard instead of staying put. Scrolling
+                    // to the end on focus is what every chat app does and what was missing here.
+                    //
+                    // A yield first, for the same reason as the typing indicator: the inset has not grown
+                    // yet in the update that flips focus, so scrolling immediately lands against the old,
+                    // taller viewport and stops short.
+                    .onChangeCompat(of: composerFocused) { focused in
+                        guard focused else { return }
+                        Task { @MainActor in
+                            await Task.yield()
+                            scrollToEnd(proxy)
+                        }
                     }
                     .onChangeCompat(of: coach.messages.count) { _ in
                         scrollToEnd(proxy)
