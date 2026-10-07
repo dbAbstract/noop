@@ -901,24 +901,31 @@ struct CoachView: View {
         .padding(.horizontal, NoopMetrics.screenHPadding)
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(.bar)
+        // NO panel behind the pill. `.bar` here was the outermost of three nested surfaces and is what made
+        // the composer read as a box containing an input rather than as an input. Nothing shows through: a
+        // `safeAreaInset` is laid out OUTSIDE the scrollable region, so the transcript stops above it
+        // rather than passing underneath.
     }
 
-    /// The input bar, a frosted overlay surface holding the field + Send, so the composer reads as a
-    /// distinct docked surface above the canvas rather than two floating controls.
+    /// ONE rounded surface holding the field and both buttons.
+    ///
+    /// It used to be three nested containers: a `.bar` panel behind the row, the field's own inset
+    /// background inside that, and a focus ring around the field — with the mic and send sitting outside
+    /// the field but inside the panel. Box in a box in a box, which is what reads as a container around the
+    /// input rather than as an input.
+    ///
+    /// Now the surface IS the composer: the field is transparent, the buttons live on the same pill, and
+    /// the focus ring moves to the outer edge so focus is still visible without adding a fourth outline.
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .bottom, spacing: 8) {
             TextField("Ask Coach about your data…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(StrandFont.body)
                 .foregroundStyle(StrandPalette.textPrimary)
                 .lineLimit(1...5)
                 .focused($composerFocused)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(StrandPalette.surfaceInset, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline, lineWidth: 1))
+                .padding(.leading, 14)
+                .padding(.vertical, 10)
                 .onSubmit { send(draft) }
                 .accessibilityLabel("Question")
 
@@ -950,10 +957,13 @@ struct CoachView: View {
             .disabled(coach.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send")
         }
-        .padding(8)
-        .background(NoopPanelSurface(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(StrandPalette.hairline, lineWidth: 1))
+        .padding(6)
+        .background(NoopPanelSurface(cornerRadius: 22))
+        // The focus ring lives HERE now, on the one surface, instead of on a second outline around the
+        // field inside it.
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline,
+                          lineWidth: 1))
     }
 
     // MARK: - K4: Voice input (iOS only)
