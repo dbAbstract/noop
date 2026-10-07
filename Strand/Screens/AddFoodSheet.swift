@@ -63,6 +63,15 @@ struct AddFoodSheet: View {
     /// what lets the engine widen its interval honestly rather than treating the figure as a label.
     @State private var isRoughGuess = false
 
+    /// Which half of the sheet is showing.
+    ///
+    /// It used to open straight onto the CREATE form with the saved-food list below it, so the first thing
+    /// you saw was a blank macro form — and whether you were logging something new or picking something old
+    /// was genuinely unclear. Picking is the common case by a wide margin, so it is the default and creating
+    /// is a deliberate step away from it.
+    enum Mode { case pick, create }
+    @State private var mode: Mode = .pick
+
     private var isCreating: Bool { selected == nil }
 
     /// The selected item as a recipe, if it is one. Having parts IS being a recipe — there is no flag.
@@ -118,15 +127,71 @@ struct AddFoodSheet: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
-                if isCreating { newItemSection } else { selectedSection }
-                if selectedRecipe != nil { recipeTweakSection }
-                if !library.isEmpty { librarySection }
-                portionSection
+                sheetTitle
+                switch mode {
+                case .pick:
+                    if selected != nil { selectedSection }
+                    if selectedRecipe != nil { recipeTweakSection }
+                    librarySection
+                    newFoodEntry
+                case .create:
+                    newItemSection
+                }
+                // Only once something is actually chosen or typed — a portion stepper above an empty form
+                // is a control for a quantity of nothing.
+                if selected != nil || mode == .create { portionSection }
                 actions
             }
             .padding(NoopMetrics.screenPadding)
+            // Space under the title, which sat hard against the status bar.
+            .padding(.top, 8)
         }
+        // Tap anywhere off a field to put the keyboard away. The macro fields are a numeric pad with no
+        // return key, so without this there is no way to dismiss it at all.
+        .contentShape(Rectangle())
+        .onTapGesture { dismissKeyboard() }
+        #if os(iOS)
+        .scrollDismissesKeyboard(.interactively)
+        #endif
         .frame(minWidth: 360, minHeight: 520)
+    }
+
+    private var sheetTitle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(mode == .pick ? "Log food" : "New food")
+                .font(StrandFont.title2)
+                .foregroundStyle(StrandPalette.textPrimary)
+            Text(mode == .pick
+                 ? "Pick something you have logged before, or add something new."
+                 : "Enter it once and it is yours to log in a tap next time.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// The way into creating, from the picking half.
+    private var newFoodEntry: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            NoopButton("Add something new", systemImage: "plus", kind: .secondary) {
+                dismissKeyboard()
+                selected = nil
+                mode = .create
+            }
+            if library.isEmpty {
+                Text("Nothing saved yet — add your first food and it will be here next time.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func dismissKeyboard() {
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        #endif
     }
 
     // MARK: - Library picker

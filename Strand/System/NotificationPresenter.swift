@@ -28,6 +28,10 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     /// reminder with an extra step in it, which is exactly the friction the nudge exists to remove.
     var onFoodReminderTapped: (() -> Void)?
 
+    /// Routes a tapped weigh-in nudge to the weight screen. A reminder that opens wherever you last were is
+    /// a reminder with an extra step in it.
+    var onWeighInReminderTapped: (() -> Void)?
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -47,6 +51,7 @@ final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
         switch response.notification.request.content.categoryIdentifier {
         case CoachBriefScheduler.notificationCategoryId: onCoachBriefTapped?()
         case FoodLogReminder.notificationCategoryId: onFoodReminderTapped?()
+        case WeighInReminder.notificationCategoryId: onWeighInReminderTapped?()
         default: break
         }
         completionHandler()

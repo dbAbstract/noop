@@ -36,6 +36,8 @@ final class NavRouter: ObservableObject {
         case coach
         /// The food log — where a reminder tap lands.
         case food
+        /// The weight screen — where the weigh-in nudge lands.
+        case weight
         case alarms
 
         var id: String { rawValue }
@@ -72,6 +74,8 @@ final class NavRouter: ObservableObject {
     func openCoach() { requestedDestination = .coach }
 
     func openFood() { requestedDestination = .food }
+    /// Where a weigh-in nudge lands.
+    func openWeight() { requestedDestination = .weight }
     /// Open the existing wake-alarm and wind-down settings from Sleep.
     func openAlarms() { requestedDestination = .alarms }
     /// Open the v5 Insights hub (the n-of-1 "what moves your Charge" surface).

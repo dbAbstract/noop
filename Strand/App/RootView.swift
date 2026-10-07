@@ -338,6 +338,9 @@ struct RootView: View {
             // routed request lands on Today where that card lives. One tap short of the screen itself,
             // and deliberately not a new sidebar item for a reminder that is a phone feature in practice.
             case .food: selection = .today
+            // Same reasoning: the weight screen is pushed from Today's weight card rather than owning a
+            // sidebar row, so a routed request lands where that card lives.
+            case .weight: selection = .today
             case .alarms: selection = .smartAlarm
             case nil: break
             }

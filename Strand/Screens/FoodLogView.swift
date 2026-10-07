@@ -269,7 +269,9 @@ struct FoodLogView: View {
                         Button {
                             showAddSheet = true
                         } label: {
-                            Label("Add food", systemImage: "plus.circle.fill")
+                            // "Log food", not "Add food": adding sounds like adding to a library, which is
+                            // the step this is NOT — it records a meal. The sheet's own title matches.
+                            Label("Log food", systemImage: "plus.circle.fill")
                         }
                         .buttonStyle(NoopButtonStyle(.primary))
                         Spacer()

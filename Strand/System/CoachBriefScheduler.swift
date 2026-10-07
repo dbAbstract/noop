@@ -157,6 +157,10 @@ enum CoachBriefScheduler {
     /// first successful generation.
     static var storedBrief: String? { UserDefaults.standard.string(forKey: K.storedBrief) }
 
+    /// The local day the brief last generated, so another nudge can stand down rather than compete with it.
+    /// Exposed read-only; `WeighInReminder` is the caller.
+    static var lastRunDay: String? { UserDefaults.standard.string(forKey: K.lastRun) }
+
     /// True when a generated brief hasn't yet been surfaced in the Coach transcript. Set right after a
     /// successful generation; cleared by `consumeStoredBrief()`.
     static var hasUnconsumedBrief: Bool { UserDefaults.standard.bool(forKey: K.hasUnconsumed) }

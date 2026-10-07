@@ -85,6 +85,7 @@ struct StrandiOSApp: App {
         _router = StateObject(wrappedValue: router)
         NotificationPresenter.shared.onCoachBriefTapped = { [weak router] in router?.openCoach() }
         NotificationPresenter.shared.onFoodReminderTapped = { [weak router] in router?.openFood() }
+        NotificationPresenter.shared.onWeighInReminderTapped = { [weak router] in router?.openWeight() }
         // Re-arm the food reminder's calendar trigger. Idempotent — `schedule()` returns immediately when
         // the reminder is off, and adding with the same identifier replaces rather than duplicates. It is
         // here to repair the one case that loses a pending request: a reinstall or a device restore, after
@@ -451,6 +452,32 @@ struct StrandiOSApp: App {
     /// last-known bpm on a Lock Screen reads as live and is not. `alert` lights the Lock Screen for this
     /// push — see `LiftLiveActivityController.update`.
     @MainActor
+    /// Nudge a weigh-in if one is owed, on the same foreground pass that resolves the morning brief.
+    ///
+    /// Every input is a measurement rather than a schedule: whether they have weighed, whether the strap saw
+    /// them wake, and how long ago. The decision itself is `WeighInReminder.shouldFire`, which is pure and
+    /// tested — this only gathers.
+    private func nudgeWeighInIfDue(model: AppModel) async {
+        guard WeighInReminder.isEnabled else { return }
+        // The DIET day, so a 01:00 check before bed is still yesterday and does not nag for a weigh-in on a
+        // day that has not begun.
+        let today = await model.repo.dietDayKey()
+        let hasWeighed = await model.repo.weightToday(day: today) != nil
+        let wake = await model.repo.detectedWakeMinuteOfDay()
+        let calendarToday = Repository.localDayKey(Date())
+        let nowMinutes = FoodEntries.minuteOfDay(Date())
+        guard WeighInReminder.shouldFire(
+            isEnabled: true,
+            hasWeighedToday: hasWeighed,
+            wokeToday: wake?.day == calendarToday,
+            minutesSinceWake: wake.map { nowMinutes - $0.minutes },
+            briefFiredToday: CoachBriefScheduler.lastRunDay == calendarToday,
+            lastFiredDay: WeighInReminder.lastFiredDay,
+            today: today,
+            delayMinutes: CoachBriefScheduler.wakeDelayMinutes) else { return }
+        WeighInReminder.fire(today: today)
+    }
+
     private func pushLiftActivity(alert: Bool = false) {
         let system = UnitSystem(rawValue: unitSystemRaw) ?? .metric
         guard let p = liftSession.presentation(system: system) else {

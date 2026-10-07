@@ -405,7 +405,19 @@ struct CoachView: View {
 
     private var connectedHeader: some View {
         HStack(spacing: 10) {
-            StatePill("\(coach.provider.displayName) · \(coach.model)", tone: .accent, showsDot: true)
+            // The screen says what it IS first, with the provider demoted to a subtitle. A pill reading
+            // "OpenAI · gpt-5" as the only heading tells you what is answering but not what the screen is
+            // for — and the model is a detail you check occasionally, not a title.
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Coach")
+                    .font(StrandFont.headline)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                Text("powered by \(coach.model)")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Coach, powered by \(coach.model)")
             Spacer()
             if coach.sending {
                 StatePill("Thinking", tone: .accent, pulsing: true)
@@ -568,7 +580,10 @@ struct CoachView: View {
                         // Restored after the full-screen restructure removed the card wrapper that used
                         // to supply it — bubbles were sitting flush against both edges.
                         .padding(.horizontal, NoopMetrics.screenHPadding)
-                        .padding(.vertical, 8)
+                        .padding(.top, 8)
+                        // Real space between the last bubble and the composer. Eight points read as the
+                        // two touching; a chat wants the message to finish before the input begins.
+                        .padding(.bottom, 24)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     // #697 parity: this screen builds its OWN ScrollView rather than going through
@@ -582,6 +597,14 @@ struct CoachView: View {
                     // No height cap. It fills whatever the header and the docked composer leave, which is
                     // what makes this read as a chat rather than as a card with a chat in it.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Tap the transcript to put the keyboard away. `.scrollDismissesKeyboard` covers the
+                    // drag gesture; this covers the tap, which is what people actually reach for when the
+                    // keyboard is covering what they want to read.
+                    .contentShape(Rectangle())
+                    .onTapGesture { composerFocused = false }
+                    #if os(iOS)
+                    .scrollDismissesKeyboard(.interactively)
+                    #endif
                     // On APPEAR as well as on change. A restored transcript changes neither the message
                     // count nor `sending`, so without this, opening Coach sat on the oldest message — the
                     // one part of the conversation nobody wants to read first.
@@ -958,9 +981,9 @@ struct CoachView: View {
             .accessibilityLabel("Send")
         }
         .padding(6)
-        .background(NoopPanelSurface(cornerRadius: 22))
-        // The focus ring lives HERE now, on the one surface, instead of on a second outline around the
-        // field inside it.
+        // NO fill. The composer sits on the screen's own background with only an outline, which is what
+        // makes it read as part of the page rather than as a tray laid on top of it. A panel — even a
+        // subtle one — is a second surface, and two surfaces is the thing that looked boxed-in.
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
             .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline,
                           lineWidth: 1))
