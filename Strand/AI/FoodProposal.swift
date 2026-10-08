@@ -31,6 +31,17 @@ struct FoodProposal: Identifiable, Equatable {
         case edit(item: FoodItem, name: String?, macros: MacroTotals)
         /// Add a food to the library and log NOTHING — "save it so I can log it against yesterday myself".
         case save(name: String, servingLabel: String, macros: MacroTotals)
+        /// Record a COOK and optionally eat part of it now. `portion` is a fraction of the whole cook.
+        ///
+        /// `recipe` rides along when the cook is a making of a saved recipe, so the card can show this
+        /// cook's figures BESIDE the recipe's — the model computed these totals itself, and a delta the
+        /// user can see is what makes bad arithmetic refusable before it is confirmed.
+        case cook(name: String, recipe: FoodItem?, macros: MacroTotals, note: String?, portion: Double)
+        /// Eat a fraction of a cook already recorded. `portion` is resolved — "the rest" has already
+        /// become a number by the time it reaches here, read from the remainder as it stands NOW.
+        case logBatch(cook: FoodCook, portion: Double)
+        /// The rest of a cook was binned.
+        case closeBatch(cook: FoodCook)
         /// Record a weigh-in.
         case weight(kg: Double)
         /// The model re-emitted an action this conversation has ALREADY applied.
@@ -90,6 +101,11 @@ struct FoodProposal: Identifiable, Equatable {
         case .save(let name, _, _): return "save:\(name.lowercased())"
         case .edit(let item, _, _): return "edit:\(item.id.uuidString)"
         case .weight: return "weight:\(dayKey)"
+        // Keyed on the COOK plus the day, not on the portion: a model repeating itself jitters figures,
+        // and two proposals to eat from the same pot on the same day are the same proposal.
+        case .cook(let name, _, _, _, _): return "cook:\(name.lowercased()):\(dayKey)"
+        case .logBatch(let cook, _): return "logBatch:\(cook.id.uuidString):\(dayKey)"
+        case .closeBatch(let cook): return "closeBatch:\(cook.id.uuidString)"
         // Nothing was written, so there is nothing to duplicate.
         case .unresolved, .implausibleWeight, .duplicate: return nil
         }
@@ -111,10 +127,17 @@ struct FoodProposal: Identifiable, Equatable {
             return NutritionMath.scaled(item.macros, portion: portion)
         case .create(_, _, let macros, let portion):
             return NutritionMath.scaled(macros, portion: portion)
+        // The cook's macros are the WHOLE pot, so the portion is a fraction of them — the same scaling,
+        // with a different meaning for the multiplier. A cook with portion 0 adds nothing, which the
+        // arithmetic gives for free.
+        case .cook(_, _, let macros, _, let portion):
+            return portion > 0 ? NutritionMath.scaled(macros, portion: portion) : nil
+        case .logBatch(let cook, let portion):
+            return NutritionMath.scaled(cook.whole, portion: portion)
         // None of these add to a day. An edit changes a definition, a save only fills the library, a
         // weigh-in is not food — showing "this adds N kcal" on any of them would answer a question the
         // card is not asking.
-        case .edit, .save, .weight, .unresolved, .implausibleWeight, .duplicate:
+        case .edit, .save, .weight, .unresolved, .implausibleWeight, .duplicate, .closeBatch:
             return nil
         }
     }
@@ -127,6 +150,8 @@ struct FoodProposal: Identifiable, Equatable {
         case .edit(let item, let name, _): return name ?? item.name
         case .weight(let kg), .implausibleWeight(let kg, _):
             return String(format: "%.1f kg", locale: AppLanguage.activeLocale, kg)
+        case .cook(let name, _, _, _, _): return name
+        case .logBatch(let cook, _), .closeBatch(let cook): return cook.name
         case .duplicate(let name): return name
         case .unresolved: return String(localized: "Unrecognised food")
         }
@@ -201,6 +226,7 @@ extension FoodProposal {
                         recipeIds: Set<UUID>,
                         defaultServingLabel: String,
                         lastKnownWeightKg: Double?,
+                        cooks: [FoodCook] = [],
                         now: Date = Date(),
                         todayKey: String? = nil) -> FoodProposal? {
         // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
@@ -216,6 +242,22 @@ extension FoodProposal {
             guard let entry = FoodLibraryDigest.resolve(handle: handle, among: entries),
                   let uuid = UUID(uuidString: entry.id) else { return nil }
             return library.first { $0.id == uuid }
+        }
+
+        /// A cook by its handle, demanding a UNIQUE prefix match exactly as the library resolver does.
+        ///
+        /// Ambiguity returns nil rather than "the first", for the same reason it does there: a near-miss
+        /// resolving to the wrong pot logs the wrong meal, and a refusal is recoverable — the user sees
+        /// no card and says it again.
+        func cook(for handle: String, among cooks: [FoodCook]) -> FoodCook? {
+            let needle = handle.replacingOccurrences(of: "-", with: "")
+                .trimmingCharacters(in: .whitespaces).lowercased()
+            guard !needle.isEmpty else { return nil }
+            let matches = cooks.filter {
+                FoodLibraryDigest.handle(for: $0.id.uuidString).hasPrefix(needle)
+                    || needle.hasPrefix(FoodLibraryDigest.handle(for: $0.id.uuidString))
+            }
+            return matches.count == 1 ? matches.first : nil
         }
 
         func proposal(_ kind: Kind) -> FoodProposal {
@@ -244,6 +286,35 @@ extension FoodProposal {
                 return proposal(.unresolved(handle: handle))
             }
             return proposal(.edit(item: found, name: name, macros: macros))
+
+        case .cook(let name, let recipeHandle, let macros, let note, let portion):
+            // The recipe is OPTIONAL and an unresolvable one does not sink the cook: the figures came
+            // from the model either way, and the recipe only buys a baseline to show them against. A
+            // standalone cook is the case that matters most — the dish made once and never saved.
+            let recipe = recipeHandle.flatMap { item(for: $0) }
+            return proposal(.cook(name: name, recipe: recipe, macros: macros, note: note,
+                                  portion: portion))
+
+        case .logBatch(let handle, let portion):
+            guard let cook = cook(for: handle, among: cooks) else {
+                return proposal(.unresolved(handle: handle))
+            }
+            // "THE REST" IS RESOLVED HERE, from the remainder as it stands now. The parser deliberately
+            // left it nil: a fraction fixed when the model spoke would overdraw the pot by whatever was
+            // logged in between.
+            let resolved = portion ?? BatchRemainder.restPortion(loggedPortions: cook.loggedPortions)
+            // Nothing left to eat is not an action. Rendered as a note rather than a confirm, because a
+            // button that logs 0% of a pot is a button that does nothing.
+            guard resolved > BatchRemainder.finishedEpsilon else {
+                return proposal(.unresolved(handle: handle))
+            }
+            return proposal(.logBatch(cook: cook, portion: resolved))
+
+        case .closeBatch(let handle):
+            guard let cook = cook(for: handle, among: cooks) else {
+                return proposal(.unresolved(handle: handle))
+            }
+            return proposal(.closeBatch(cook: cook))
 
         case .weight(let kg):
             if let last = lastKnownWeightKg, last > 0, abs(kg - last) > maxWeightJumpKg {
@@ -279,6 +350,26 @@ extension Repository {
             // `lastUsedAt` so the picker's recents stay meaningful, matching a pick in the Add food sheet.
             await logFood(item: item, portion: portion, day: day, at: date,
                           mealType: proposal.meal, saveToLibrary: true)
+            return true
+
+        case .cook(let name, let recipe, let macros, let note, let portion):
+            // The cook is recorded whether or not anything is eaten from it now. "I made a pot, haven't
+            // touched it" is a real thing to say, and the record is what makes the leftover findable
+            // tomorrow — which is the entire failure this feature exists to fix.
+            let cook = FoodCook(id: UUID(), recipeId: recipe?.id, name: name, note: note,
+                                cookedOn: day,
+                                whole: macros, createdAt: date, closedAt: nil, loggedPortions: [])
+            guard await saveCook(cook) else { return false }
+            guard portion > 0 else { return true }
+            return await logCookPortion(cook, portion: portion, day: day, at: date,
+                                        mealType: proposal.meal)
+
+        case .logBatch(let cook, let portion):
+            return await logCookPortion(cook, portion: portion, day: day, at: date,
+                                        mealType: proposal.meal)
+
+        case .closeBatch(let cook):
+            await setCookClosed(cook.id, closed: true, at: date)
             return true
 
         case .create(let name, let serving, let macros, let portion):

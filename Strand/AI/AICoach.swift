@@ -336,13 +336,34 @@ final class AICoachEngine: ObservableObject {
     {"action": "save",   "name": "...", "servingLabel": "...", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
     {"action": "edit",   "itemId": "<id>", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
     {"action": "weight", "kg": 72.4, "day": "today"}
+    {"action": "cook",   "name": "...", "recipeId": "<optional id from SAVED FOODS>", "kcal": 0, \
+    "protein": 0, "carbs": 0, "fat": 0, "note": "what was different this time", "portion": 0.6, "day": "today"}
+    {"action": "log_batch",   "batchId": "<key from OPEN COOKS>", "portion": 0.4}
+    {"action": "close_batch", "batchId": "<key from OPEN COOKS>"}
+
+    COOKING A DISH, AS OPPOSED TO EATING A FOOD. When they have MADE something in a quantity they will eat \
+    over more than one sitting — a pot, a tray, a batch — use `cook`, not `create`. Its macros are the \
+    WHOLE thing, and `portion` is the FRACTION of it eaten now: 0.6 means they ate 60% of what they made. \
+    This is what makes the leftovers findable later; a `create` logs one meal and leaves the rest of the \
+    pot with no record at all. `portion` may be 0 — "I made a curry, haven't eaten it yet" is a real thing \
+    to say. A single plated meal they ate all of is NOT a cook; that is `create`.
+    `recipeId` points at a saved recipe when this is a making OF one. The recipe itself never changes: if \
+    this cook differed, put the difference in `note` and let the macros reflect it. That is the point — a \
+    recipe is a template, and a cook that used 400 g of chicken instead of 500 g is still that recipe.
+    OPEN COOKS above lists what is still in the fridge, with what is left of each. Use `log_batch` to eat \
+    more of one. For "I finished it" / "I had the rest", send "portion": null — the app reads the actual \
+    remainder at the moment they confirm, which is more accurate than any fraction you could work out. Use \
+    `close_batch` only when they say the rest was thrown away.
 
     WHAT YOU CAN SEE about their diet, when those blocks are present above: their saved foods, their \
-    recipes and what each is made of, EVERYTHING THEY HAVE EATEN TODAY grouped by meal, where the day \
-    stands against their budget, their full macro targets, and their weight trend. Use it. Refer to meals \
-    they have already logged rather than asking what they have had, do not propose logging something that \
-    is already there, and answer "am I losing weight" from the trend line — including its caveat: if that \
-    range includes zero, say it cannot be told from no change yet rather than calling it a loss.
+    recipes and what each is made of, EVERYTHING THEY HAVE EATEN IN THE LAST SEVEN DAYS (each food listed \
+    once, with the occurrences referencing it by key), what is still in the fridge from past cooks, where \
+    the day stands against their budget, their full macro targets, and their weight trend. Use it. Refer \
+    to meals they have already logged rather than asking what they have had, do not propose logging \
+    something that is already there, and answer "am I losing weight" from the trend line — including its \
+    caveat: if that range includes zero, say it cannot be told from no change yet rather than calling it a \
+    loss. Because you can see a WEEK, you can answer "what did I have on Tuesday" and "how much karahi is \
+    left" directly — do not ask them to remind you of something that is listed above.
 
     ESTIMATE THE MACROS YOURSELF. You know roughly what food contains — use that. "Two scrambled eggs on \
     sourdough", "a flat white", "chicken katsu curry from Wasabi" are all things you can price to within \
@@ -1274,6 +1295,9 @@ final class AICoachEngine: ObservableObject {
         // The diet day, so "I just had an apple" at 00:15 lands on the day being lived rather than opening
         // a fresh budget fifteen minutes old.
         let dietToday = await repo.dietDayKey()
+        // The pots still in the fridge, so a `log_batch` handle resolves and "the rest" can be read from
+        // the CURRENT remainder rather than from whatever the model assumed when it spoke.
+        let cooks = await repo.openCooks()
         // Everything this conversation has already WRITTEN. Models repeat their own previous structured
         // output — mention an apple after logging a banana and the reply carries both — so the check is
         // against what was applied rather than against what was merely proposed. A proposal the user
@@ -1291,6 +1315,7 @@ final class AICoachEngine: ObservableObject {
                                                       // created by either route reads identically in the log.
                                                       defaultServingLabel: String(localized: "1 serving"),
                                                       lastKnownWeightKg: lastWeight,
+                                                      cooks: cooks,
                                                       todayKey: dietToday) else { return nil }
             guard let key = resolved.dedupeKey, applied.contains(key) else { return resolved }
             return FoodProposal(kind: .duplicate(of: resolved.displayName),
@@ -1360,17 +1385,49 @@ final class AICoachEngine: ObservableObject {
         // it would be told the day is empty and then add to yesterday's total.
         let today = await repo.dietDayKey()
         let entries = await repo.foodEntries(day: today)
-        let groups = MealGrouping.grouped(entries, meal: { $0.displayMeal },
-                                          macros: { $0.effectiveMacros })
-        blocks.append(FoodLibraryDigest.eatenBlock(
-            day: String(localized: "today"),
-            groups: groups.map { group in
-                (meal: group.meal.rawValue.uppercased(),
-                 items: group.items.map {
-                     (name: $0.nameSnapshot, portion: $0.portion, macros: $0.effectiveMacros)
-                 },
-                 total: group.total)
+
+        // A WEEK, NOT A DAY. The coach used to be handed today and nothing else, which is why a user who
+        // ate 60% of a karahi last night and asked about the leftover got a model that had never heard of
+        // it — the entry was on disk the whole time and simply never sent. That was a bug, not a missing
+        // feature.
+        //
+        // Keyed rather than listed: see `FoodWeekDigest`. The saving is that repetition gets cheap, not
+        // that the model can skim keys and look up details on demand — there is no lookup inside a
+        // request, and every token here is read and billed on every turn.
+        let weekStart = Repository.localDayKey(
+            Calendar.current.date(byAdding: .day, value: -(FoodWeekDigest.days - 1),
+                                  to: Date()) ?? Date())
+        let weekEntries = await repo.foodEntries(from: weekStart, to: today)
+        let todayEpochDay = Repository.epochDay(dayKey: today) ?? Repository.epochDay(Date())
+        blocks.append(FoodWeekDigest.block(
+            entries: weekEntries.map { entry in
+                WeekEntryDigest(
+                    daysAgo: todayEpochDay - (Repository.epochDay(entry.loggedAt)),
+                    itemId: entry.itemId?.uuidString,
+                    batchId: entry.batchId?.uuidString,
+                    name: entry.nameSnapshot,
+                    portion: entry.portion,
+                    macros: entry.effectiveMacros,
+                    meal: entry.mealType?.rawValue)
+            },
+            savedFoodIds: Set(library.map { $0.id.uuidString })))
+
+        // WHAT IS STILL IN THE FRIDGE. Separate from the week above because it answers a different
+        // question: the week says what was eaten, this says what can still BE eaten without cooking.
+        // Carries the REMAINING macros rather than the whole cook's, since that is the figure a decision
+        // gets made against.
+        let openCooks = await repo.openCooks()
+        if !openCooks.isEmpty {
+            blocks.append(FoodWeekDigest.openCooksBlock(openCooks.map { cook in
+                OpenCookDigest(
+                    batchId: cook.id.uuidString,
+                    name: cook.name,
+                    note: cook.note,
+                    daysAgo: todayEpochDay - (Repository.epochDay(dayKey: cook.cookedOn) ?? todayEpochDay),
+                    remainingFraction: cook.remainingFraction,
+                    remainingMacros: cook.remainingMacros)
             }))
+        }
 
         // Where the day stands, and the full macro targets rather than protein alone.
         let totals = FoodEntries.total(entries)

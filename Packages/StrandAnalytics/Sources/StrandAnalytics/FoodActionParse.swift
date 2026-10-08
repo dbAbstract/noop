@@ -54,6 +54,24 @@ public enum FoodAction: Equatable, Sendable {
     /// distinct intent — the user's own words. Folding it into `create` with a portion of zero would mean
     /// a card that says it will log something and then does not.
     case save(name: String, servingLabel: String, macros: MacroTotals)
+    /// Record a COOK: one making of a dish, with the macros of the whole thing, and optionally eat part
+    /// of it straight away.
+    ///
+    /// `portion` is a fraction of the cook, so 0.6 is 60% of the pot. Zero is legal here and means "I made
+    /// this but have not eaten any yet" — unlike every other action, where a zero portion would be a card
+    /// promising to log something and then not.
+    ///
+    /// `recipeId` names the saved recipe this is a making OF, when there is one. It is optional because
+    /// the case that matters most has none: a dish cooked once, never saved, with leftovers.
+    case cook(name: String, recipeId: String?, macros: MacroTotals, note: String?, portion: Double)
+    /// Eat a fraction of a cook already recorded.
+    ///
+    /// A portion of nil means "the rest", resolved by the CALLER from the remainder as it stands when the
+    /// user confirms — not here. Resolving at parse time would let a portion logged in between overdraw
+    /// the pot by the overlap.
+    case logBatch(batchId: String, portion: Double?)
+    /// The rest of a cook was binned.
+    case closeBatch(batchId: String)
     /// Record a weigh-in. The one action here that is not about food, included because the user's ask was
     /// to tell the coach things and have it sort them out, and a weight is the other number this feature
     /// runs on.
@@ -246,7 +264,49 @@ public enum FoodActionParse {
     static func single(from body: [String: Any]) -> Result<FoodAction, Failure> {
         let verb = (body["action"] as? String)?
             .trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        // "the rest" arrives as an explicit null or the string "rest"; both mean "resolve it later".
+        let wantsRest = body["portion"] is NSNull
+            || (body["portion"] as? String)?.lowercased().contains("rest") == true
         let portion = body["portion"] == nil ? 1 : MacroEstimateParse.number(body, "portion")
+
+        // A COOK may be recorded with nothing eaten yet, so its portion floor is 0 rather than the
+        // greater-than-zero every other verb needs. Checked before the shared guard, which would
+        // otherwise reject "I made a pot, haven't touched it" as a bad portion.
+        if verb == "cook" {
+            guard let name = nonEmpty(body["name"]) else { return .failure(.missingName) }
+            guard portion.isFinite, portion >= 0, portion <= maxPortion else {
+                return .failure(.badPortion)
+            }
+            switch macros(body) {
+            case .failure(let f): return .failure(f)
+            case .success(let m):
+                return .success(.cook(name: name,
+                                      recipeId: nonEmpty(body["recipeId"])
+                                          ?? nonEmpty(body["recipe_id"]),
+                                      macros: m,
+                                      note: nonEmpty(body["note"]),
+                                      portion: portion))
+            }
+        }
+
+        if verb == "log_batch" || verb == "logbatch" {
+            guard let id = nonEmpty(body["batchId"]) ?? nonEmpty(body["batch_id"]) else {
+                return .failure(.missingItemId)
+            }
+            if wantsRest { return .success(.logBatch(batchId: id, portion: nil)) }
+            guard portion.isFinite, portion > 0, portion <= maxPortion else {
+                return .failure(.badPortion)
+            }
+            return .success(.logBatch(batchId: id, portion: portion))
+        }
+
+        if verb == "close_batch" || verb == "closebatch" {
+            guard let id = nonEmpty(body["batchId"]) ?? nonEmpty(body["batch_id"]) else {
+                return .failure(.missingItemId)
+            }
+            return .success(.closeBatch(batchId: id))
+        }
+
         guard portion.isFinite, portion > 0, portion <= maxPortion else { return .failure(.badPortion) }
 
         switch verb {

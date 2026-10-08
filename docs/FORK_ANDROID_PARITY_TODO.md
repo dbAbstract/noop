@@ -496,6 +496,35 @@ control gated on an end-of-transcript sentinel.
 
 ---
 
+## v54 cooks and leftovers (schema + two pure twins owed)
+
+**`v54-food-batch` Room migration.** `foodBatch` with the column order pinned in
+`FoodBatchStoreTests.testMigrationCreatesTheBatchTableWithPinnedColumnOrder`, plus `foodEntry.batchId`
+added LAST — SQLite's `ALTER TABLE` can only append, so Room's `CREATE TABLE` must declare it in that
+position even though it reads better beside `itemId`. Register `foodBatch` in Android's device-scoped
+delete set too.
+
+**`BatchRemainder`** — pure twin owed. The contract is that the remainder is **derived**, never stored:
+`1 − Σ portions of the entries pointing at the cook`. A Kotlin port that adds a `remaining` column has not
+implemented the same thing, and will drift from the entries the first time one is edited or deleted. The
+Swift store has a test asserting no such column exists; write its twin. Also twin: overage reported
+separately from the clamp, the 1% finished epsilon, and the 7-day leftover window.
+
+**`FoodWeekDigest`** — pure twin owed, with an oracle test over a spread of weeks. Two properties carry
+the contract: the block is **deterministic** for a given set of entries regardless of input order (one-off
+foods key off a sorted name set), and occurrences are grouped by day rather than listed one per line. The
+second is not cosmetic — one line per occurrence costs about as much as restating the food outright, which
+makes the whole keyed scheme pointless, and that was the first Swift implementation.
+
+**`FoodActionParse`** gains `cook` / `log_batch` / `close_batch`. Note two asymmetries worth twinning
+exactly: `cook` accepts `portion: 0` where every other verb requires greater than zero, and `log_batch`
+accepts `portion: null` meaning "the rest", which the CALLER resolves from the current remainder — never
+the parser.
+
+The rest is Apple-only UI: the cook/leftover proposal cards and the open-cooks section.
+
+---
+
 ## Suggested order
 
 1. Pure analytics twins with oracle tests — cheapest, and everything else depends on their numbers.

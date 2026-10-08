@@ -108,6 +108,22 @@ struct FoodProposalCard: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// "60% of the cook · 40% left after this".
+    ///
+    /// States what REMAINS as well as what is eaten, because the remainder is the thing the user will be
+    /// asked about tomorrow and a card that showed only the portion would make them work it out.
+    private func cookPortionLine(portion: Double, remainingAfter: Double) -> String {
+        let eaten = percentText(portion)
+        guard remainingAfter > BatchRemainder.finishedEpsilon else {
+            return String(localized: "\(eaten) of the cook · finishes it")
+        }
+        return String(localized: "\(eaten) of the cook · \(percentText(remainingAfter)) left after this")
+    }
+
+    private func percentText(_ fraction: Double) -> String {
+        "\(Int((max(0, min(1, fraction)) * 100).rounded()))%"
+    }
+
     private var icon: String {
         switch proposal.kind {
         case .log: return "plus.circle"
@@ -116,6 +132,9 @@ struct FoodProposalCard: View {
         case .edit: return "pencil"
         case .weight: return "scalemass"
         case .duplicate: return "doc.on.doc"
+        case .cook: return "flame"
+        case .logBatch: return "takeoutbag.and.cup.and.straw"
+        case .closeBatch: return "trash"
         case .unresolved, .implausibleWeight: return "questionmark.circle"
         }
     }
@@ -130,6 +149,9 @@ struct FoodProposalCard: View {
         case .unresolved: return String(localized: "COULDN'T MATCH")
         case .implausibleWeight: return String(localized: "CHECK THE UNITS")
         case .duplicate: return String(localized: "ALREADY LOGGED")
+        case .cook: return String(localized: "COOKED")
+        case .logBatch: return String(localized: "LEFTOVERS")
+        case .closeBatch: return String(localized: "BINNED")
         }
     }
 
@@ -163,6 +185,54 @@ struct FoodProposalCard: View {
                 Text(portionLine(servingLabel: serving, portion: portion))
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
+            case .cook(_, let recipe, let macros, let note, let portion):
+                // THE WHOLE COOK FIRST, because that is the thing being recorded; the portion is what is
+                // being eaten OF it. Stating only the portion would leave the leftover unexplained
+                // tomorrow.
+                Text("Whole cook: \(macroLine(macros))")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                if let recipe {
+                    // THE BASELINE, SIDE BY SIDE. The model computed this cook's totals itself, and a
+                    // figure with nothing to compare it against cannot be sanity-checked at a glance.
+                    // Shown as the delta it is, so an arithmetic slip reads as one.
+                    Text("Your \(recipe.name) recipe: \(macroLine(recipe.macros))")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                if let note, !note.isEmpty {
+                    Text("This cook: \(note)")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+                if portion > 0 {
+                    Text(cookPortionLine(portion: portion, remainingAfter: 1 - portion))
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                } else {
+                    Text("Nothing logged yet — the leftovers will be here when you eat it.")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+
+            case .logBatch(let cook, let portion):
+                let after = BatchRemainder.remainingFraction(
+                    loggedPortions: cook.loggedPortions + [portion])
+                Text(cookPortionLine(portion: portion, remainingAfter: after))
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                if let note = cook.note, !note.isEmpty {
+                    Text("That cook: \(note)")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                }
+
+            case .closeBatch(let cook):
+                Text("The remaining \(percentText(cook.remainingFraction)) won't be logged. Nothing already eaten changes.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
             case .edit(let item, _, let macros):
                 // Before AND after. A macro correction with no before-figure is impossible to
                 // sanity-check, and this card is the only place the user gets to check it.

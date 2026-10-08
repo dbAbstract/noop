@@ -122,10 +122,16 @@ struct FoodEntry: Identifiable, Equatable, Codable {
     /// Which meal this was, when it is known. nil means unknown rather than "no meal" — see
     /// `MealGrouping` for why an unknown time is not inferred into one.
     var mealType: MealType?
+    /// The cook this portion came out of, if any.
+    ///
+    /// Non-nil reinterprets `portion` as a FRACTION OF THAT COOK — 0.6 is 60% of the pot, not 0.6
+    /// servings — and `macrosSnapshot` as the WHOLE cook's macros, so `effectiveMacros` needs no special
+    /// case: scaling the whole by the fraction is already the right arithmetic.
+    var batchId: UUID?
 
     init(id: UUID = UUID(), macroSource: String? = nil, itemId: UUID?, nameSnapshot: String,
          macrosSnapshot: MacroTotals, portion: Double, loggedAt: Date = Date(),
-         mealType: MealType? = nil) {
+         mealType: MealType? = nil, batchId: UUID? = nil) {
         self.id = id
         self.macroSource = macroSource
         self.itemId = itemId
@@ -134,6 +140,7 @@ struct FoodEntry: Identifiable, Equatable, Codable {
         self.portion = portion
         self.loggedAt = loggedAt
         self.mealType = mealType
+        self.batchId = batchId
     }
 
     /// What this entry actually contributes to the day — the snapshot scaled by the portion.
@@ -341,7 +348,11 @@ private extension FoodItem {
     }
 }
 
-private extension FoodEntry {
+// Internal rather than private: `Repository.foodEntries(from:to:)` and the cook reads in
+// `Strand/Data/FoodBatchStore.swift` need the same bridge, and a second copy of it is how the row and the
+// model drift apart. Left-private, the call resolved to `Decodable.init(from:)` instead and failed with a
+// label error that says nothing about the real cause.
+extension FoodEntry {
     init(row: FoodEntryRow) {
         self.init(id: UUID(uuidString: row.id) ?? UUID(),
                   macroSource: row.macroSource,
@@ -351,7 +362,8 @@ private extension FoodEntry {
                                               fat: row.fat, fiber: row.fiber),
                   portion: row.portion,
                   loggedAt: Date(timeIntervalSince1970: TimeInterval(row.loggedAt)),
-                  mealType: row.mealType.flatMap(MealType.init(rawValue:)))
+                  mealType: row.mealType.flatMap(MealType.init(rawValue:)),
+                  batchId: row.batchId.flatMap(UUID.init(uuidString:)))
     }
 
     func row(day: String) -> FoodEntryRow {
@@ -360,7 +372,7 @@ private extension FoodEntry {
                      kcal: macrosSnapshot.kcal, protein: macrosSnapshot.protein,
                      carbs: macrosSnapshot.carbs, fat: macrosSnapshot.fat, fiber: macrosSnapshot.fiber,
                      loggedAt: Int(loggedAt.timeIntervalSince1970), mealType: mealType?.rawValue,
-                     macroSource: macroSource)
+                     macroSource: macroSource, batchId: batchId?.uuidString)
     }
 }
 
@@ -486,7 +498,10 @@ extension Repository {
     /// drive `fat_g` to 0; skipping the write would strand yesterday's figure in the table and the chart
     /// would keep showing food that is no longer logged.
     @discardableResult
-    private func rebankFoodTotals(entries: [FoodEntry], day dayKey: String) async -> MacroTotals {
+    /// Internal rather than private: `logCookPortion` writes an entry by the same route and must rebank
+    /// the day identically. A cook's portion contributes to the day exactly as any other entry does, and
+    /// a second banking path is how two readouts of one day start to disagree.
+    func rebankFoodTotals(entries: [FoodEntry], day dayKey: String) async -> MacroTotals {
         let totals = FoodEntries.total(entries)
         if let store = await storeHandle() {
             let points = [

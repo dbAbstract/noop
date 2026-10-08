@@ -122,6 +122,27 @@ enum CoachDump {
             out["servingLabel"] = serving
             out["portion"] = portion
             out["macros"] = dict(for: macros)
+        // The WHOLE cook plus the fraction, both, because either alone is unreadable: the macros do not
+        // say how much was eaten and the fraction does not say of what.
+        case .cook(_, let recipe, let macros, let note, let portion):
+            out["portion"] = portion
+            out["wholeCookMacros"] = dict(for: macros)
+            if let note { out["note"] = note }
+            if let recipe {
+                out["recipeId"] = recipe.id.uuidString
+                // The baseline this cook deviated from, so a disagreement in the figures is readable as
+                // the deviation it was rather than as an error.
+                out["recipeMacros"] = dict(for: recipe.macros)
+            }
+        case .logBatch(let cook, let portion):
+            out["batchId"] = cook.id.uuidString
+            out["portion"] = portion
+            out["wholeCookMacros"] = dict(for: cook.whole)
+            out["remainingAfter"] = BatchRemainder.remainingFraction(
+                loggedPortions: cook.loggedPortions + [portion])
+        case .closeBatch(let cook):
+            out["batchId"] = cook.id.uuidString
+            out["remainingWhenBinned"] = cook.remainingFraction
         case .save(_, let serving, let macros):
             out["servingLabel"] = serving
             out["macros"] = dict(for: macros)
@@ -158,6 +179,9 @@ enum CoachDump {
         case .unresolved: return "unresolved"
         case .implausibleWeight: return "implausibleWeight"
         case .duplicate: return "duplicate"
+        case .cook: return "cook"
+        case .logBatch: return "logBatch"
+        case .closeBatch: return "closeBatch"
         }
     }
 
