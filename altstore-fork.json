@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1039",
-          "buildVersion": "1039",
-          "date": "2026-10-07",
-          "localizedDescription": "Merge remote-tracking branch 'origin/fork' into fork",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1039.ipa",
-          "size": 16593461,
+          "version": "11.8.0.1040",
+          "buildVersion": "1040",
+          "date": "2026-10-08",
+          "localizedDescription": "Coach: seamless composer, keyboard scroll, glass top bar, chips off",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1040.ipa",
+          "size": 16597207,
           "minOSVersion": "17.0"
         }
       ]
