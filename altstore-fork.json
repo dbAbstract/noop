@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1040",
-          "buildVersion": "1040",
+          "version": "11.8.0.1041",
+          "buildVersion": "1041",
           "date": "2026-10-08",
-          "localizedDescription": "Coach: seamless composer, keyboard scroll, glass top bar, chips off",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1040.ipa",
-          "size": 16597207,
+          "localizedDescription": "Coach: opaque top bar, glass composer, flat replies, time dividers",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1041.ipa",
+          "size": 16598760,
           "minOSVersion": "17.0"
         }
       ]
