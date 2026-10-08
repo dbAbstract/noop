@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0",
-          "buildVersion": "1043",
+          "version": "11.8.0.1044",
+          "buildVersion": "1044",
           "date": "2026-10-08",
-          "localizedDescription": "Coach: fix the typing lag, and make the chat chrome readable",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1043.ipa",
-          "size": 16665532,
+          "localizedDescription": "ci: stop the fork publish step conflicting with itself",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1044.ipa",
+          "size": 16665537,
           "minOSVersion": "17.0"
         }
       ]
