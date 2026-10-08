@@ -54,7 +54,8 @@
     "v50-diet-v3",
     "v51-inline-recipe-ingredients",
     "v52-measured-baseline",
-    "v53-restaurant-food"
+    "v53-restaurant-food",
+    "v54-food-batch"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android — the per-row upload flag belongs to an upload path that does not exist there — so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2504,6 +2505,12 @@
           "affinity": "TEXT",
           "notNull": false,
           "default": null
+        },
+        {
+          "name": "batchId",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
         }
       ],
       "primaryKey": [
@@ -2819,6 +2826,107 @@
           "columns": [
             "deviceId",
             "chain"
+          ]
+        }
+      ]
+    },
+    "foodBatch": {
+      "platform": "ios_only",
+      "reason": "v54 a COOK: one making of a dish, eaten down over several sittings. A recipe composes to ONE SERVING and a one-off log carries no identity, so a pot of something had nowhere to live and \"I ate 60% last night, the rest today\" was two unrelated guesses. The macros here describe the WHOLE cook and foodEntry.portion becomes a fraction of it. NO remaining COLUMN, deliberately: what is left is derived by summing the portions of the entries pointing here (BatchRemainder), because a stored fraction is a second answer to a question the entries already answer and the two disagree the moment an entry is edited or deleted. recipeId is NULLABLE because a cook need not have a saved recipe behind it, which is the case that fixed the original failure.",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null,
+          "android": {
+            "notNull": true
+          },
+          "divergence": "sqlite-text-pk-nullable"
+        },
+        {
+          "name": "deviceId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "recipeId",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "name",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "note",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "cookedOn",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "kcal",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "protein",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "carbs",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fat",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "fiber",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "createdAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "closedAt",
+          "affinity": "INTEGER",
+          "notNull": false,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": [
+        {
+          "name": "idx_foodBatch_device_day",
+          "unique": false,
+          "columns": [
+            "deviceId",
+            "cookedOn"
           ]
         }
       ]

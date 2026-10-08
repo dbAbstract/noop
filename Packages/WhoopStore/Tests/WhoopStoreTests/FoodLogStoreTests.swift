@@ -33,9 +33,13 @@ final class FoodLogStoreTests: XCTestCase {
         let entryIdx = try await store.indexNamesForTest(table: "foodEntry")
         XCTAssertEqual(itemCols, ["id", "deviceId", "name", "servingLabel", "kcal", "protein", "carbs",
                                   "fat", "fiber", "createdAt", "lastUsedTs", "macroSource"])
+        // `batchId` is LAST because v54 added it with ALTER TABLE, which can only append. Room's
+        // CREATE TABLE has to declare it in this position too — the entity field order is the schema
+        // contract, and a Kotlin twin that puts it beside `itemId` where it reads better produces a
+        // different table.
         XCTAssertEqual(entryCols, ["id", "deviceId", "day", "itemId", "nameSnapshot", "portion", "kcal",
                                    "protein", "carbs", "fat", "fiber", "loggedAt", "mealType",
-                                   "macroSource"])
+                                   "macroSource", "batchId"])
         XCTAssertEqual(itemPk, ["id"])
         XCTAssertEqual(entryPk, ["id"])
         XCTAssertTrue(itemIdx.contains("idx_foodItem_device_used"))

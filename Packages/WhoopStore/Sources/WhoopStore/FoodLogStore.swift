@@ -104,10 +104,20 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
     /// well as on the item because the snapshot outlives library edits, and "this was once a guess" is
     /// exactly the kind of fact a log should not quietly lose.
     public var macroSource: String?
+    /// The cook this portion was drawn from, if any (v54).
+    ///
+    /// Non-nil turns `portion` into a FRACTION OF THAT COOK rather than a count of the item's servings —
+    /// 0.6 is 60% of the pot, not 0.6 servings. The two readings never collide because a batch-linked
+    /// entry carries no `itemId` serving to count.
+    ///
+    /// This column is also what the cook's remainder is derived from, so deleting an entry gives food
+    /// back to the fridge rather than leaving a stored fraction to go stale.
+    public var batchId: String?
 
     public init(id: String, deviceId: String, day: String, itemId: String?, nameSnapshot: String,
                 portion: Double, kcal: Double, protein: Double, carbs: Double, fat: Double,
-                fiber: Double, loggedAt: Int, mealType: String? = nil, macroSource: String? = nil) {
+                fiber: Double, loggedAt: Int, mealType: String? = nil, macroSource: String? = nil,
+                batchId: String? = nil) {
         self.id = id
         self.deviceId = deviceId
         self.day = day
@@ -122,6 +132,7 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
         self.loggedAt = loggedAt
         self.mealType = mealType
         self.macroSource = macroSource
+        self.batchId = batchId
     }
 
     static func decode(_ row: Row) -> FoodEntryRow {
@@ -139,7 +150,8 @@ public struct FoodEntryRow: Equatable, Codable, Sendable {
             fiber: row["fiber"],
             loggedAt: row["loggedAt"],
             mealType: row["mealType"],
-            macroSource: row["macroSource"]
+            macroSource: row["macroSource"],
+            batchId: row["batchId"]
         )
     }
 }
@@ -212,8 +224,8 @@ extension WhoopStore {
                 try db.execute(sql: """
                     INSERT INTO foodEntry
                         (id, deviceId, day, itemId, nameSnapshot, portion,
-                         kcal, protein, carbs, fat, fiber, loggedAt, mealType, macroSource)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         kcal, protein, carbs, fat, fiber, loggedAt, mealType, macroSource, batchId)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         day = excluded.day,
                         itemId = excluded.itemId,
@@ -226,10 +238,11 @@ extension WhoopStore {
                         fiber = excluded.fiber,
                         loggedAt = excluded.loggedAt,
                         mealType = excluded.mealType,
-                        macroSource = excluded.macroSource
+                        macroSource = excluded.macroSource,
+                        batchId = excluded.batchId
                     """, arguments: [r.id, r.deviceId, r.day, r.itemId, r.nameSnapshot, r.portion,
                                      r.kcal, r.protein, r.carbs, r.fat, r.fiber, r.loggedAt, r.mealType,
-                                     r.macroSource])
+                                     r.macroSource, r.batchId])
             }
             return rows.count
         }
@@ -241,6 +254,33 @@ extension WhoopStore {
             try Row.fetchAll(db, sql: """
                 SELECT * FROM foodEntry WHERE deviceId = ? AND day = ? ORDER BY loggedAt ASC
                 """, arguments: [deviceId, day]).map(FoodEntryRow.decode)
+        }
+    }
+
+    /// Entries across a RANGE of local days, oldest first.
+    ///
+    /// One query rather than a loop of `foodEntries(day:)`, because the coach's week needs seven days on
+    /// every turn and seven round trips to answer one question is seven chances to be interrupted
+    /// mid-read. Inclusive at both ends; the caller supplies day keys, which sort lexicographically
+    /// because `yyyy-MM-dd` is designed to.
+    public func foodEntries(deviceId: String, from: String, to: String) async throws -> [FoodEntryRow] {
+        try syncRead { db in
+            try Row.fetchAll(db, sql: """
+                SELECT * FROM foodEntry WHERE deviceId = ? AND day >= ? AND day <= ?
+                ORDER BY day ASC, loggedAt ASC
+                """, arguments: [deviceId, from, to]).map(FoodEntryRow.decode)
+        }
+    }
+
+    /// Every portion logged against one cook, in log order.
+    ///
+    /// The input to `BatchRemainder`. Deliberately NOT a `SUM(portion)` in SQL: the overage check needs
+    /// the individual portions to say "logged 0.6 and 0.6", and a sum that already collapsed them cannot.
+    public func batchPortions(deviceId: String, batchId: String) async throws -> [Double] {
+        try syncRead { db in
+            try Double.fetchAll(db, sql: """
+                SELECT portion FROM foodEntry WHERE deviceId = ? AND batchId = ? ORDER BY loggedAt ASC
+                """, arguments: [deviceId, batchId])
         }
     }
 

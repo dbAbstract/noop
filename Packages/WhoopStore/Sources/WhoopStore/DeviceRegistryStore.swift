@@ -183,6 +183,11 @@ public struct DeviceRegistryStore: Sendable {
         // v53. Reference data rather than the user's own entries, but still keyed by deviceId — and
         // "delete all of this device's data" has to mean it, imported menus included.
         "restaurantFood",
+        // v54-food-batch: a cook is deviceId-keyed like the entries drawn from it. Leaving it off would
+        // strand a pot's macros after its own logs were deleted — and because what remains of a cook is
+        // DERIVED from those logs, an orphaned row would come back reading "100% left" of food that no
+        // longer has a record of ever being eaten.
+        "foodBatch",
     ]
 
     /// Permanently delete every recorded sample/derived row belonging to one device, across all

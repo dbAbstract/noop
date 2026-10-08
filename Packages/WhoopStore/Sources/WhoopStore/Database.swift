@@ -1366,6 +1366,48 @@ extension WhoopStore {
             try db.create(index: "idx_restaurantFood_device_chain", on: "restaurantFood",
                           columns: ["deviceId", "chain"], options: [.ifNotExists])
         }
+        // FORK-LOCAL (diet). A COOK: one making of a dish, eaten down over several sittings.
+        //
+        // A recipe composes to ONE SERVING and a one-off log carries no identity, so until now a pot of
+        // something had nowhere to live and "I ate 60% last night, the rest today" was two unrelated
+        // guesses. The macros here describe the WHOLE cook; `foodEntry.portion` becomes a fraction of it.
+        //
+        // NO `remaining` COLUMN, deliberately. What is left is derived by summing the portions of the
+        // entries pointing here (`BatchRemainder`), because a stored fraction is a second answer to a
+        // question the entries already answer and the two disagree the moment an entry is edited or
+        // deleted — the pot would still claim 40% after the 60% log was removed.
+        migrator.registerMigration("v54-food-batch") { db in
+            try db.create(table: "foodBatch", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("deviceId", .text).notNull()
+                // NULL = a standalone cook with no saved recipe behind it, which is the case that fixes
+                // the original failure: the karahi was never saved, and requiring a recipe would have
+                // meant the leftover still had nowhere to go. No foreign key, as elsewhere here.
+                t.column("recipeId", .text)
+                t.column("name", .text).notNull()
+                // What was different about THIS cook — "400g chicken instead of the usual 500". The
+                // deviation lives on the instance so the recipe never has to be wrong.
+                t.column("note", .text)
+                t.column("cookedOn", .text).notNull()      // local day key, yyyy-MM-dd
+                // The WHOLE cook, not a serving.
+                t.column("kcal", .double).notNull()
+                t.column("protein", .double).notNull()
+                t.column("carbs", .double).notNull()
+                t.column("fat", .double).notNull()
+                t.column("fiber", .double).notNull()
+                t.column("createdAt", .integer).notNull()
+                // Set when the rest was binned. Distinct from a zero remainder: one is a statement about
+                // the food, the other an inference from the logs.
+                t.column("closedAt", .integer)
+            }
+            try db.create(index: "idx_foodBatch_device_day", on: "foodBatch",
+                          columns: ["deviceId", "cookedOn"], options: [.ifNotExists])
+            // Which cook an entry drew from, if any. Additive and nullable: every existing row is an
+            // ordinary log and stays one.
+            try db.alter(table: "foodEntry") { t in
+                t.add(column: "batchId", .text)
+            }
+        }
         return migrator
     }
 }
