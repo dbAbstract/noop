@@ -3,6 +3,47 @@ import MarkdownUI
 import StrandDesign
 import StrandAnalytics
 
+/// The assistant's reply, wrapped so SwiftUI can SKIP re-rendering it.
+///
+/// This is the fix for the typing lag, and the cause is worth stating because it is invisible from the
+/// screen. `draft` is `@State` on `CoachView`, so every keystroke invalidates that view's whole body —
+/// including the transcript, including every visible `Markdown(...)`, each of which re-parses its source
+/// on construction. Typing a sentence into a long conversation therefore re-parsed every reply on screen
+/// once per character, and the cost grew with the transcript: returning to the tab restores a full
+/// transcript scrolled to the end, which is exactly when the delay was worst and why a relaunch "fixed"
+/// it.
+///
+/// `Equatable` + `.equatable()` makes SwiftUI compare the text and skip `body` entirely when it has not
+/// changed, so a keystroke no longer reaches the parser at all. The comparison is one string compare
+/// against work that is orders of magnitude larger.
+///
+/// Note this must wrap the Markdown ALONE. Pulling the context menu or the padding inside would capture
+/// the message and the closures, and a closure is never equal to another closure — the view would compare
+/// unequal every time and the skip would silently stop happening.
+private struct CoachMarkdown: View, Equatable {
+    let text: String
+
+    var body: some View {
+        Markdown(text)
+            .markdownTheme(.strand)
+    }
+
+    static func == (lhs: CoachMarkdown, rhs: CoachMarkdown) -> Bool {
+        lhs.text == rhs.text
+    }
+}
+
+/// The transcript end's position within the scroll view, published every frame of a scroll.
+///
+/// A position rather than a boolean, because the test it feeds — "is the end within a screen of here" —
+/// needs the viewport height, which is known at the overlay and not inside the lazy content.
+private struct CoachEndSentinelKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 /// Coach, the one feature in NOOP that talks to the network.
 ///
 /// It is strictly opt-in and bring-your-own-key: the user pastes their own OpenAI
@@ -45,7 +86,23 @@ struct CoachView: View {
     @State private var showSettings = false
     /// Whether the newest message is on screen, reported by the transcript's end sentinel. Starts true so
     /// the control is absent on a fresh open, which always lands at the end anyway.
-    @State private var isAtEnd = true
+    /// The exported conversation file, rebuilt when the conversation changes — NOT when the view redraws.
+    ///
+    /// Held in state precisely so that `ShareLink`, which needs a concrete URL at construction, cannot
+    /// pull a fresh serialisation through on every body evaluation. See `writeCoachDump`.
+    @State private var dumpURL: URL?
+
+    /// The end sentinel's position in the transcript's coordinate space, updated on every scroll frame.
+    @State private var sentinelY: CGFloat = 0
+    /// Name for the transcript's coordinate space, so the sentinel reports a position relative to the
+    /// scroll view rather than to the screen.
+    private static let transcriptSpace = "coach.transcript"
+
+    /// Corner radius of the composer surface.
+    ///
+    /// A constant rather than a capsule: see `composer`. 20 is close to the capsule radius of a
+    /// single-line field, so a one-line composer looks unchanged and a four-line one stops ballooning.
+    private static let composerRadius: CGFloat = 20
 
     // K4: on-device voice input for the composer (iOS only). macOS gets a no-op stub via
     // `#if os(iOS)` guards — the shared file keeps compiling for both targets.
@@ -93,13 +150,15 @@ struct CoachView: View {
                 }
             }
         }
-        .background(alignment: .top) {
-            ZStack(alignment: .top) {
-                StrandPalette.surfaceBase
-                liquidScaffoldSky()
-            }
-            .ignoresSafeArea()
-        }
+        // FLAT, no sky. The gradient is what made an opaque top bar impossible to get right: it is 240 pt
+        // tall and top-anchored, covering exactly the region a bar occupies, so any flat fill painted
+        // there sat visibly wrong against it. I left the bar unfilled to dodge that and the result was a
+        // bar you could read the transcript through — worse than a slight mismatch would have been.
+        //
+        // Dropping the gradient makes the match an identity instead of an approximation, and a flat dark
+        // page is what a chat screen wants anyway: the content here is text, and a gradient behind text
+        // is decoration competing with the thing being read.
+        .background(StrandPalette.surfaceBase.ignoresSafeArea())
         // macOS only. On iOS these actions live in `connectionMenu` instead, because this bar is hidden for
         // a primary tab root and VISIBLE in the pillar sheet, so leaving them here would render nothing
         // on the Coach tab and a duplicate of the menu in the sheet. One control per platform, reachable
@@ -120,7 +179,7 @@ struct CoachView: View {
                 // Available in RELEASE builds too, deliberately: a diagnostic only the dev build can take
                 // is never there when something actually goes wrong on the install being used.
                 ToolbarItem {
-                    ShareLink(item: coachDumpFile,
+                    ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
                               preview: SharePreview(CoachDump.filename())) {
                         Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
                     }
@@ -187,6 +246,9 @@ struct CoachView: View {
                 generateBrief: { await coach.generateBrief() },
                 detectedWake: { await repo.detectedWakeMinuteOfDay() })
             await coach.startBriefIfNeeded()
+            // Seed the export once the restored transcript is in place, so the first use of the menu
+            // shares the conversation rather than an empty placeholder.
+            dumpURL = writeCoachDump()
         }
         // #1862: a question handed over by the Today launcher sheet. Cleared BEFORE sending so a view
         // rebuild mid-flight cannot send it twice, and gated on `isConfigured` so an unconfigured handoff
@@ -201,6 +263,17 @@ struct CoachView: View {
         // K15: persist the composer draft so it survives an app relaunch.
         .onChangeCompat(of: draft) { newValue in
             UserDefaults.standard.set(newValue, forKey: Self.draftKey)
+        }
+        // Rebuild the export when the CONVERSATION changes, which is a handful of times per session,
+        // rather than letting `ShareLink` pull a fresh one on every redraw — which meant once per
+        // keystroke, serialising and writing the whole transcript to disk each time.
+        .onChangeCompat(of: coach.messages.count) { _ in
+            dumpURL = writeCoachDump()
+        }
+        .onChangeCompat(of: coach.sending) { isSending in
+            // Also on reply completion, so an exported file includes the turn that just landed and any
+            // actions it proposed — the count alone does not change when a streamed reply fills in.
+            if !isSending { dumpURL = writeCoachDump() }
         }
         // K14: haptic feedback when a reply arrives (sending goes true → false).
         .onChangeCompat(of: coach.sending) { isSending in
@@ -450,7 +523,8 @@ struct CoachView: View {
                 Label("Coach settings", systemImage: "slider.horizontal.3")
             }
             Divider()
-            ShareLink(item: coachDumpFile, preview: SharePreview(CoachDump.filename())) {
+            ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
+                      preview: SharePreview(CoachDump.filename())) {
                 Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
             }
             .disabled(coach.messages.isEmpty)
@@ -528,7 +602,8 @@ struct CoachView: View {
             // Here as well as in the macOS toolbar, because on THIS platform the toolbar route is
             // withdrawn (see the doc above) — so a ShareLink placed there rendered nowhere on iPhone,
             // which is exactly where the diagnostic is wanted.
-            ShareLink(item: coachDumpFile, preview: SharePreview(CoachDump.filename())) {
+            ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
+                      preview: SharePreview(CoachDump.filename())) {
                 Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
             }
             .disabled(coach.messages.isEmpty)
@@ -580,6 +655,10 @@ struct CoachView: View {
                 .padding(.horizontal, NoopMetrics.screenHPadding)
                 .padding(.top, 4)
                 .padding(.bottom, 10)
+                // OPAQUE, and reaching up through the status bar. Unfilled, it was invisible chrome over a
+                // scrolling transcript: the title sat on top of moving body text and neither could be
+                // read. The fill matches the page exactly because the page is now one flat colour.
+                .background(StrandPalette.surfaceBase.ignoresSafeArea(edges: .top))
         }
         // On the inset chain rather than inside the content, so the keyboard lifts the composer AND
         // shortens the transcript together. Inside the scroll content, a growing field slides under the keyboard —
@@ -624,7 +703,10 @@ struct CoachView: View {
                     ScrollView {
                         // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
                         // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
-                        LazyVStack(alignment: .leading, spacing: 12) {
+                        // 20, not 12. A reply and the next question were close enough to read as one
+                        // block of text; the gap is what separates who is speaking now that the
+                        // assistant's side has no card to do it.
+                        LazyVStack(alignment: .leading, spacing: 20) {
                             ForEach(Array(coach.messages.enumerated()), id: \.element.id) { index, message in
                                 VStack(alignment: .leading, spacing: 8) {
                                     // A coach conversation runs the length of a day, so two adjacent
@@ -664,17 +746,18 @@ struct CoachView: View {
                             if coach.sending {
                                 typingIndicator.id("typing")
                             }
-                            // END SENTINEL. Whether the newest message is on screen is answered by a
-                            // probe at the bottom of the content reporting its OWN visibility, not by
-                            // comparing a scroll offset against a content height — the rows are
-                            // variable-height and lazily built, so there is no content height to compare
-                            // against, and no viewport height either without wrapping the whole screen in
-                            // a GeometryReader. A `LazyVStack` builds a row when it nears the fold and
-                            // tears it down when it leaves, so appear/disappear IS the visibility test.
-                            Color.clear
-                                .frame(height: 1)
-                                .onAppear { isAtEnd = true }
-                                .onDisappear { isAtEnd = false }
+                            // END SENTINEL, reporting its POSITION continuously rather than its
+                            // lifecycle. `onAppear`/`onDisappear` fire when a lazy row is built and torn
+                            // down, which during a fling happens in bursts and often not until the scroll
+                            // settles — so the button appeared and disappeared a beat late and felt
+                            // broken while the finger was still moving. A geometry preference updates on
+                            // every frame of the scroll, including the deceleration.
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: CoachEndSentinelKey.self,
+                                    value: geo.frame(in: .named(Self.transcriptSpace)).minY)
+                            }
+                            .frame(height: 1)
                         }
                         // Restored after the full-screen restructure removed the card wrapper that used
                         // to supply it — bubbles were sitting flush against both edges.
@@ -693,29 +776,50 @@ struct CoachView: View {
                     #if os(iOS)
                     .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                     #endif
+                    .coordinateSpace(name: Self.transcriptSpace)
                     // The jump-to-newest control, shown only when the newest message is NOT on screen.
                     // Always-visible would be a button that does nothing most of the time; this is a
                     // long transcript where the proposal cards awaiting a tap are always at the bottom.
+                    //
+                    // The overlay's own GeometryReader supplies the VIEWPORT height, which is the figure
+                    // the sentinel's position has to be compared against and the one a `LazyVStack`
+                    // cannot give from inside.
                     .overlay(alignment: .bottom) {
-                        if !isAtEnd {
-                            Button {
-                                scrollToEnd(proxy)
-                            } label: {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(StrandPalette.textPrimary)
-                                    .frame(width: 34, height: 34)
-                                    .contentShape(Circle())
+                        GeometryReader { geo in
+                            // A tolerance, not an equality: the sentinel sits a point or two past the
+                            // fold at rest, and a strict test would pin the button on permanently.
+                            let atEnd = sentinelY < geo.size.height + 120
+                            VStack {
+                                Spacer(minLength: 0)
+                                if !atEnd {
+                                    Button {
+                                        scrollToEnd(proxy)
+                                    } label: {
+                                        Image(systemName: "arrow.down")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(StrandPalette.textPrimary)
+                                            .frame(width: 34, height: 34)
+                                            .contentShape(Circle())
+                                    }
+                                    .nativeLiquidGlassButtonChrome(fallback: {
+                                        Circle().fill(StrandPalette.surfaceRaised)
+                                    })
+                                    .padding(.bottom, 10)
+                                    .transition(.scale.combined(with: .opacity))
+                                    .accessibilityLabel(String(localized: "Jump to newest"))
+                                }
                             }
-                            .nativeLiquidGlassButtonChrome(fallback: {
-                                Circle().fill(StrandPalette.surfaceRaised)
-                            })
-                            .padding(.bottom, 10)
-                            .transition(.scale.combined(with: .opacity))
-                            .accessibilityLabel(String(localized: "Jump to newest"))
+                            .frame(maxWidth: .infinity)
+                            // The animation lives on the BUTTON, not on the scroll view. Applied to the
+                            // scroll view it attached an implicit animation to that whole subtree, so
+                            // every change inside the transcript had to go through it.
+                            .animation(.snappy(duration: 0.18), value: atEnd)
                         }
                     }
-                    .animation(.snappy(duration: 0.18), value: isAtEnd)
+                    .onPreferenceChange(CoachEndSentinelKey.self) { y in
+                        sentinelY = y
+                    }
+
                     // No height cap. It fills whatever the header and the docked composer leave, which is
                     // what makes this read as a chat rather than as a card with a chat in it.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -858,10 +962,16 @@ struct CoachView: View {
             //
             // K8: context menu (long-press / right-click) with Copy, Share, and Save actions.
             HStack {
-                Markdown(message.text)
-                    .markdownTheme(.strand)
+                CoachMarkdown(text: message.text)
+                    .equatable()
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    // Padding with NO background, which looks like a no-op and is not. The context menu
+                    // draws its long-press highlight around this view's bounds, and with the bounds flush
+                    // to the glyphs the rounded highlight clipped the corner characters. The card used to
+                    // supply this inset; removing the card removed it too.
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
                     .frame(maxWidth: 620, alignment: .leading)
                     // K8: Copy / Share / Save context menu on assistant replies.
                     .contextMenu {
@@ -1153,11 +1263,18 @@ struct CoachView: View {
             .accessibilityLabel("Send")
         }
         .padding(6)
-        .nativeLiquidGlassSearchChrome()
-        // The focus ring sits OVER the glass rather than replacing it: glass says "this is a surface",
-        // the ring says "this one is taking your typing", and those are different facts. Unfocused it
-        // draws a hairline, so the pill keeps a defined edge against a dark page.
-        .overlay(Capsule()
+        // A ROUNDED RECTANGLE, not a capsule. A capsule's corner radius is half its height, so a composer
+        // that grows to four lines becomes a stadium with the text marooned in the middle of two huge
+        // arcs. A fixed radius keeps the same shape at every height.
+        //
+        // And an OPAQUE FILL rather than glass. Glass takes its tone from what is behind it, which on a
+        // flat dark page is barely a surface at all — the composer read as text floating on the page.
+        // `surfaceRaised` is the token for "a layer above the page", which is what this is.
+        .background(StrandPalette.surfaceRaised,
+                    in: RoundedRectangle(cornerRadius: Self.composerRadius, style: .continuous))
+        // The ring says which surface is taking the typing; unfocused it draws a hairline so the
+        // composer keeps a defined edge.
+        .overlay(RoundedRectangle(cornerRadius: Self.composerRadius, style: .continuous)
             .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline,
                           lineWidth: 1))
     }
@@ -1311,7 +1428,22 @@ struct CoachView: View {
     /// The dump, written to a temporary file so `ShareLink` offers it as a FILE rather than pasting a wall
     /// of JSON into a message. Rebuilt on access: the proposals it carries live only in memory, so a cached
     /// URL would hand over a snapshot from before the thing the user is trying to report.
-    private var coachDumpFile: URL {
+    /// Write the conversation to a temporary file and return its URL.
+    ///
+    /// A FUNCTION, not a computed property, and the difference was a serious performance bug. As
+    /// `coachDumpFile` it was read by the `ShareLink` in the header menu — which is in the view body — so
+    /// every body evaluation serialised the ENTIRE transcript to JSON and wrote it to disk. Body
+    /// evaluations happen on every keystroke, because `draft` is `@State` here. Typing a sentence into a
+    /// long conversation wrote the whole conversation to disk once per character, on the main thread.
+    ///
+    /// That is the bulk of the sluggishness, and it explains the two things that looked mysterious: it
+    /// got worse as the conversation grew, and a relaunch "fixed" it because the transcript came back
+    /// shorter than it had been.
+    ///
+    /// `ShareLink` now takes the URL produced once when the menu is built, rather than a property it
+    /// re-reads. The file is still written eagerly — `ShareLink` needs a real URL at construction — but
+    /// only when the menu actually appears.
+    private func writeCoachDump() -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(CoachDump.filename())
         let json = CoachDump.json(messages: coach.messages,
                                   provider: coach.provider.rawValue,
