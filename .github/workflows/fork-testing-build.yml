@@ -396,6 +396,21 @@ jobs:
           SUBJECT="$(git log -1 --pretty=%s)"
           rm -rf srccheck
 
+          # REBASE BEFORE EDITING, NOT AFTER. This used to edit, commit, then `pull --rebase`, which
+          # conflicts whenever the branch moved on while the build ran: both the local and the remote
+          # commit rewrite `.apps[0].versions`, the same few lines, so git cannot merge them and the
+          # publish fails even though the IPA built and uploaded perfectly.
+          #
+          # That is not a rare race. It happens any time a commit is pushed during a ~16-minute build —
+          # the next run then checks out a base whose JSON is two builds stale, and replaying its edit
+          # onto the newer one collides. It cost build 1043, which had to be published by hand.
+          #
+          # Taking the remote state FIRST means the edit is always computed against the current file and
+          # there is nothing to merge: the result is a fast-forward of one commit onto a known parent.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+
           jq --arg v "$SHORT" --arg b "$BUILD" --arg d "$(date -u +%Y-%m-%d)" --arg desc "$SUBJECT" \
              --arg url "$URL" --argjson size "$SIZE" --arg bundle "$BUNDLE" \
              '.apps[0].bundleIdentifier = $bundle
@@ -409,14 +424,19 @@ jobs:
             echo "source already describes $SHORT ($BUILD) — nothing to commit"
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add altstore-fork.json
           git commit -m "chore: point fork source at build ${BUILD}"
-          # Rebase rather than force: a merge landing while this job ran is a real commit, and this step
-          # publishing a JSON edit is never worth discarding it.
-          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+          # One retry, for the genuinely narrow race this still has: a push landing between the pull
+          # above and the push below. Re-taking the remote and re-applying is safe because the edit is
+          # idempotent — it REPLACES the versions array rather than appending to it, so running it twice
+          # produces the same file. Still a rebase rather than a force: a commit that landed while this
+          # job ran is real work, and publishing a JSON edit never justifies discarding it.
+          if ! git push origin "HEAD:${GITHUB_REF_NAME}"; then
+            echo "branch moved under us — rebasing onto it and retrying once"
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
           echo "✓ source now points at $SHORT ($BUILD)"
 
   # Fork-only housekeeping: the disposable `noop-staging` branch exists ONLY to feed this build. Once every
