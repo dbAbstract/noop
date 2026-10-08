@@ -51,6 +51,7 @@ struct CoachSettingsView: View {
                                .accessibilityLabel("Close coach settings")
                        }) {
             modelBar
+            contextBar
             consentBar
             // v5: a SECOND opt-in, only meaningful once data access is on, folds a summary of the
             // new on-device signals (your strongest patterns + Lab Book) into the coach context.
@@ -104,6 +105,50 @@ struct CoachSettingsView: View {
                 .pickerStyle(.menu)
                 .accessibilityLabel("Model")
             }
+        }
+    }
+
+    /// How much context every turn is carrying, and the way to shed it.
+    ///
+    /// MOVED HERE FROM UNDER THE COMPOSER, where it was the wrong figure in the wrong place. There it
+    /// included the half-typed draft, so it changed on every keystroke, and it sat beside a text field at
+    /// the moment the user was composing a sentence rather than deciding what to spend. Measured with an
+    /// EMPTY draft it is the standing cost — system prompt, data context and the whole retained history —
+    /// which is a property of the conversation rather than of the thing being typed.
+    ///
+    /// Beside the model because that is what gives the number a unit. A context worth watching on a small
+    /// local model is unremarkable on gpt-5, and the picker directly above is where that gets changed.
+    /// Clear conversation, the action this figure argues for, is one tap away in the chat's own menu.
+    ///
+    /// An ESTIMATE, stated as one: the ~4 chars/token heuristic, not a tokenizer. Rendering "~2,806"
+    /// rather than "2,806" is the whole of the honesty here — the figure is good enough to decide by and
+    /// not good enough to quote.
+    @ViewBuilder
+    private var contextBar: some View {
+        if let tokens = coach.estimatedTokens(forDraft: "") {
+            NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "speedometer")
+                            .foregroundStyle(StrandPalette.textTertiary)
+                            .accessibilityHidden(true)
+                        Text("Context carried")
+                            .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                        Spacer(minLength: 8)
+                        Text("~\(tokens) tokens")
+                            .font(StrandFont.bodyNumber)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                    }
+                    Text(tokens > 8000
+                         ? "Every reply re-sends this. It may exceed a small model's context window — clearing the conversation in the chat's ⋯ menu resets it."
+                         : "Roughly what each reply re-sends: the instructions, your data summary and the conversation so far.")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(tokens > 8000 ? StrandPalette.strain066 : StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Context carried, about \(tokens) tokens")
         }
     }
 

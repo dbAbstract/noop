@@ -61,6 +61,15 @@ public enum StrandFont {
     /// Footnote 11. Scales with Dynamic Type.
     public static let footnote = Font.system(.footnote, design: .rounded, weight: .regular)
 
+    /// Caption 2 at regular weight — the smallest face in the system. Scales with Dynamic Type.
+    ///
+    /// For a subtitle that must not compete with the thing it sits under: the Coach header's
+    /// "powered by gpt-5", which names a detail you check occasionally rather than read. `overline` is
+    /// the only other caption2 token and is semibold with tracking, which makes a line LOUDER, not
+    /// quieter — it is for ALL-CAPS section labels, and using it here would say the opposite of what the
+    /// size is choosing to say.
+    public static let micro = Font.system(.caption2, design: .rounded, weight: .regular)
+
     /// Overline 11 / Bold, +1.4 tracking (apply `.tracking(1.4)` at use site;
     /// `overlineText(_:)` does it for you). Sparing ALL-CAPS labels. Scales with Dynamic Type.
     ///

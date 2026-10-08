@@ -1,15 +1,7 @@
 import SwiftUI
 import MarkdownUI
 import StrandDesign
-
-/// Measured height of the floating glass header, so the transcript can inset by exactly as much as the
-/// bar covers. A preference rather than a constant because the row's two text lines follow Dynamic Type.
-private struct CoachHeaderHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
+import StrandAnalytics
 
 /// Coach, the one feature in NOOP that talks to the network.
 ///
@@ -51,6 +43,9 @@ struct CoachView: View {
     /// #2243: the coach settings, presented as a sheet. See `CoachSettingsView` for why a sheet
     /// rather than a push.
     @State private var showSettings = false
+    /// Whether the newest message is on screen, reported by the transcript's end sentinel. Starts true so
+    /// the control is absent on a fresh open, which always lands at the end anyway.
+    @State private var isAtEnd = true
 
     // K4: on-device voice input for the composer (iOS only). macOS gets a no-op stub via
     // `#if os(iOS)` guards — the shared file keeps compiling for both targets.
@@ -73,8 +68,6 @@ struct CoachView: View {
     /// Flip to `true` to restore them; nothing else changed.
     private static let showsSuggestionChips = false
 
-    /// Measured height of the floating glass header, used as the transcript's top inset.
-    @State private var headerHeight: CGFloat = 56
 
     var body: some View {
         // NOT a ScreenScaffold, and that is the whole point of this layout.
@@ -432,7 +425,7 @@ struct CoachView: View {
                     .font(StrandFont.headline)
                     .foregroundStyle(StrandPalette.textPrimary)
                 Text("powered by \(coach.model)")
-                    .font(StrandFont.caption)
+                    .font(StrandFont.micro)
                     .foregroundStyle(StrandPalette.textTertiary)
             }
             .accessibilityElement(children: .combine)
@@ -448,7 +441,7 @@ struct CoachView: View {
         }
     }
 
-    /// Whether    /// Settings and connection, merged.
+    /// Settings and connection, merged.
     private var coachMenu: some View {
         Menu {
             Button {
@@ -483,10 +476,18 @@ struct CoachView: View {
             Image(systemName: "ellipsis")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(StrandPalette.textSecondary)
-                .frame(width: 30, height: 30)
+                .frame(width: 32, height: 32)
                 .contentShape(Circle())
         }
-        .nativeLiquidGlassButtonChrome(fallback: { EmptyView() })
+        // The one glass element on this bar. A Liquid Glass CONTROL over an opaque bar is what the
+        // platform asks for and what ChatGPT does; glass on the bar itself was the mistake, because a
+        // lens needs something behind it and a bar has the page stopped at its edge.
+        //
+        // The fallback draws a circle rather than nothing: below iOS 26 a bare ellipsis on the page has
+        // no target edge, and the tap area stops being visible.
+        .nativeLiquidGlassButtonChrome(fallback: {
+            Circle().fill(StrandPalette.surfaceRaised)
+        })
         .accessibilityLabel(String(localized: "Coach options"))
     }
 
@@ -558,35 +559,30 @@ struct CoachView: View {
 
     /// Header fixed, transcript scrolling, composer docked to the transcript's own scroll view.
     private var chatLayout: some View {
-        // THE HEADER FLOATS OVER THE TRANSCRIPT rather than sitting in a column above it, which is what
-        // Apple's Liquid Glass guidance for bars asks for: a glass bar is a LENS, so it has to have
-        // something behind it to refract. Stacked in a VStack it was an opaque strip with the page
-        // starting underneath, and glass over an empty background is just a grey rectangle — the same
-        // mistake as the composer's `.bar` fill, one edge up.
+        // THE BAR IS A SAFE-AREA INSET WITH NO BACKGROUND OF ITS OWN, and both halves of that are the fix.
         //
-        // Content scrolls BENEATH it and the top message dissolves into the blur on the way out.
-        // The height is measured rather than assumed: the row holds two lines of text whose size
-        // follows Dynamic Type, so a constant inset would clip at large sizes and gap at small ones.
+        // An inset is laid out OUTSIDE the scrollable region, so the transcript stops at the bar's edge
+        // and no text can pass behind it — which is the whole of what "opaque" has to mean here.
+        //
+        // And it is unfilled because that is EXACT rather than approximate. The page behind is
+        // `surfaceBase` under `liquidScaffoldSky()`, a 240 pt top-anchored gradient covering precisely the
+        // region a top bar occupies, so any flat colour painted here would sit visibly wrong against the
+        // sky either side of it. Letting the page show through makes the match an identity.
+        //
+        // The previous attempt did the opposite on both counts — a translucent glass bar overlaid on the
+        // scroll, shaped `.rect(bottomLeading: 20, bottomTrailing: 20)`. Square at the top, round at the
+        // bottom, inset from the edges by the glass effect's own shape, with the transcript sliding
+        // visibly behind it: a floating polygon rather than a bar. Glass belongs on the CONTROL in it,
+        // which is where it is now.
         transcript
-            .overlay(alignment: .top) {
-                connectedHeader
-                    .padding(.horizontal, NoopMetrics.screenHPadding)
-                    .padding(.vertical, 10)
-                    .background {
-                        GeometryReader { geo in
-                            Color.clear.preference(key: CoachHeaderHeightKey.self,
-                                                   value: geo.size.height)
-                        }
-                    }
-                    .nativeLiquidGlassBarChrome()
-            }
-            .onPreferenceChange(CoachHeaderHeightKey.self) { h in
-                // Guard against the zero first pass, which would otherwise flash the transcript up under
-                // the bar for a frame before settling.
-                if h > 0 { headerHeight = h }
-            }
-        // On the VStack rather than inside it, so the keyboard lifts the composer AND shortens the
-        // transcript together. Inside the scroll content, a growing field slides under the keyboard —
+        .safeAreaInset(edge: .top, spacing: 0) {
+            connectedHeader
+                .padding(.horizontal, NoopMetrics.screenHPadding)
+                .padding(.top, 4)
+                .padding(.bottom, 10)
+        }
+        // On the inset chain rather than inside the content, so the keyboard lifts the composer AND
+        // shortens the transcript together. Inside the scroll content, a growing field slides under the keyboard —
         // which was the original complaint.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
@@ -622,25 +618,24 @@ struct CoachView: View {
     private var transcript: some View {
         Group {
             if coach.messages.isEmpty {
-                ScrollView {
-                    emptyTranscript
-                        .padding(NoopMetrics.screenHPadding)
-                        .padding(.top, headerHeight)
-                }
+                ScrollView { emptyTranscript.padding(NoopMetrics.screenHPadding) }
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
                         // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
                         LazyVStack(alignment: .leading, spacing: 12) {
-                            // Clears the floating glass bar. Inside the scroll CONTENT rather than as a
-                            // safe-area inset, deliberately: an inset is laid out outside the scrollable
-                            // region, so the transcript would stop below the bar and there would be
-                            // nothing behind the glass to refract. `safeAreaPadding`/`contentMargins`
-                            // would say this more directly but are macOS 14+, and this file is shared.
-                            Color.clear.frame(height: headerHeight)
-                            ForEach(coach.messages) { message in
+                            ForEach(Array(coach.messages.enumerated()), id: \.element.id) { index, message in
                                 VStack(alignment: .leading, spacing: 8) {
+                                    // A coach conversation runs the length of a day, so two adjacent
+                                    // bubbles can be six hours apart with nothing on screen to say so.
+                                    // The threshold lives in `ChatTimeSeparator`, tested, because "is
+                                    // this a pause or a break" is the entire design of the feature.
+                                    if ChatTimeSeparator.needsSeparator(
+                                        previousSentAt: index > 0 ? coach.messages[index - 1].sentAt : nil,
+                                        sentAt: message.sentAt) {
+                                        timeSeparator(message.sentAt)
+                                    }
                                     // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
                                     // `send` appends it so deltas have somewhere to land. Drawn, it is an
                                     // empty bubble sitting above "Coach is thinking…", which is two things
@@ -669,6 +664,17 @@ struct CoachView: View {
                             if coach.sending {
                                 typingIndicator.id("typing")
                             }
+                            // END SENTINEL. Whether the newest message is on screen is answered by a
+                            // probe at the bottom of the content reporting its OWN visibility, not by
+                            // comparing a scroll offset against a content height — the rows are
+                            // variable-height and lazily built, so there is no content height to compare
+                            // against, and no viewport height either without wrapping the whole screen in
+                            // a GeometryReader. A `LazyVStack` builds a row when it nears the fold and
+                            // tears it down when it leaves, so appear/disappear IS the visibility test.
+                            Color.clear
+                                .frame(height: 1)
+                                .onAppear { isAtEnd = true }
+                                .onDisappear { isAtEnd = false }
                         }
                         // Restored after the full-screen restructure removed the card wrapper that used
                         // to supply it — bubbles were sitting flush against both edges.
@@ -687,6 +693,29 @@ struct CoachView: View {
                     #if os(iOS)
                     .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                     #endif
+                    // The jump-to-newest control, shown only when the newest message is NOT on screen.
+                    // Always-visible would be a button that does nothing most of the time; this is a
+                    // long transcript where the proposal cards awaiting a tap are always at the bottom.
+                    .overlay(alignment: .bottom) {
+                        if !isAtEnd {
+                            Button {
+                                scrollToEnd(proxy)
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(StrandPalette.textPrimary)
+                                    .frame(width: 34, height: 34)
+                                    .contentShape(Circle())
+                            }
+                            .nativeLiquidGlassButtonChrome(fallback: {
+                                Circle().fill(StrandPalette.surfaceRaised)
+                            })
+                            .padding(.bottom, 10)
+                            .transition(.scale.combined(with: .opacity))
+                            .accessibilityLabel(String(localized: "Jump to newest"))
+                        }
+                    }
+                    .animation(.snappy(duration: 0.18), value: isAtEnd)
                     // No height cap. It fills whatever the header and the docked composer leave, which is
                     // what makes this read as a chat rather than as a card with a chat in it.
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -810,19 +839,30 @@ struct CoachView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel("You said: \(message.text)")
         case .assistant:
-            // LLM replies arrive as Markdown (bold, lists, headings, tables),             // rendered with the chat-bubble-sized Strand theme. User bubbles stay
-            // verbatim `Text` so typed `*`/`#` never turn into surprise formatting.
-            // The reply sits on a frosted Charge-tinted surface, a card, not a flat box.
+            // LLM replies arrive as Markdown (bold, lists, headings, tables), rendered with the
+            // chat-bubble-sized Strand theme. User bubbles stay verbatim `Text` so typed `*`/`#` never
+            // turn into surprise formatting.
+            //
+            // NO SURFACE BEHIND THE REPLY. The assistant's text is the bulk of this screen and it used to
+            // sit on a frosted card, which cost it horizontal room, boxed long answers into a column
+            // inside a column, and spent the app's strongest visual signal on the one thing that is
+            // always present. Flat on the page, it reads as prose.
+            //
+            // Authorship survives the change because the USER's bubble keeps its fill: one side tinted
+            // and the other bare is all the distinction a two-party transcript needs, and it is the
+            // arrangement every chat app converges on.
+            //
+            // The LOG / NEW FOOD proposal cards keep their surface, and that contrast now MEANS
+            // something — a card is where there is a decision to make, rather than decoration prose
+            // happened to be wearing too.
+            //
             // K8: context menu (long-press / right-click) with Copy, Share, and Save actions.
             HStack {
                 Markdown(message.text)
                     .markdownTheme(.strand)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 11)
-                    .frostedCardSurface(tint: StrandPalette.chargeColor, cornerRadius: 16)
-                    .frame(maxWidth: 560, alignment: .leading)
+                    .frame(maxWidth: 620, alignment: .leading)
                     // K8: Copy / Share / Save context menu on assistant replies.
                     .contextMenu {
                         Button {
@@ -844,11 +884,48 @@ struct CoachView: View {
                             Label("Save to Journal", systemImage: "square.and.pencil")
                         }
                     }
-                Spacer(minLength: 48)
+                // Narrower than the user side's 48: with no fill there is no shape to break up, so the
+                // text may use nearly the full column, which is the point of removing the card.
+                Spacer(minLength: 8)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Coach said: \(message.text)")
         }
+    }
+
+    /// A centred date/time divider between turns separated by a real gap.
+    ///
+    /// Spells the day out only when it is not today: "10:54" alone is unambiguous within a day and the
+    /// word "Today" in front of every divider in a one-day conversation is noise. Yesterday is named;
+    /// anything older carries its date, because by the third day back a weekday name is no easier to
+    /// place than the date itself.
+    private func timeSeparator(_ sentAt: Int) -> some View {
+        let date = Date(timeIntervalSince1970: TimeInterval(sentAt))
+        let bucket = ChatTimeSeparator.dayBucket(
+            messageEpochDay: Self.localEpochDay(date),
+            todayEpochDay: Self.localEpochDay(Date()))
+        let time = date.formatted(date: .omitted, time: .shortened)
+        let text: String
+        switch bucket {
+        case .today:     text = time
+        case .yesterday: text = String(localized: "Yesterday") + " " + time
+        case .earlier:   text = date.formatted(date: .abbreviated, time: .omitted) + " " + time
+        }
+        return HStack {
+            Spacer(minLength: 0)
+            Text(text)
+                .font(StrandFont.micro)
+                .foregroundStyle(StrandPalette.textTertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .accessibilityLabel(text)
+    }
+
+    /// Local days since 1970, matching the app's day-key convention.
+    static func localEpochDay(_ date: Date) -> Int {
+        let start = Calendar.current.startOfDay(for: date)
+        return Int((start.timeIntervalSince1970 / 86_400).rounded(.down))
     }
 
     private var typingIndicator: some View {
@@ -997,45 +1074,21 @@ struct CoachView: View {
         }
     }
 
-    /// K12: A subtle token estimate shown below the composer when the draft is non-empty.
-    /// Uses the ~4 chars/token heuristic — an estimate only, not an exact tokenizer count.
-    private func tokenEstimateBar(_ tokens: Int) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: "speedometer")
-                .font(.system(size: 10))
-                .foregroundStyle(StrandPalette.textTertiary)
-            Text("~\(tokens) tokens")
-                .font(StrandFont.captionNumber)
-                .foregroundStyle(StrandPalette.textTertiary)
-            if tokens > 8000 {
-                Text("· may exceed small context windows")
-                    .font(StrandFont.captionNumber)
-                    .foregroundStyle(StrandPalette.textTertiary)
-            }
-        }
-        .padding(.top, 2)
-    }
-
-    /// The docked composer surface: the input row, plus the token estimate directly under it.
+    /// The docked composer surface.
     ///
-    /// The token bar travels WITH the composer rather than staying in the column, because it describes the
-    /// draft — left behind it would annotate a field that is no longer beside it.
+    /// The token estimate used to live directly under the field and now lives in Coach settings. Under the
+    /// composer it mixed a fixed cost — system prompt, data context, history — with a per-keystroke one,
+    /// so it twitched while typing and never answered a question the user was in a position to act on
+    /// mid-sentence. Beside the model, with an empty draft, it reads as what you are carrying and whether
+    /// to clear the conversation, which is a decision with somewhere to go.
     private var composerBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            composer
-            // K12: show a rough token estimate when the draft is non-empty.
-            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               let tokens = coach.estimatedTokens(forDraft: draft) {
-                tokenEstimateBar(tokens)
-            }
-        }
-        .padding(.horizontal, NoopMetrics.screenHPadding)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        // NO panel behind the pill. `.bar` here was the outermost of three nested surfaces and is what made
-        // the composer read as a box containing an input rather than as an input. Nothing shows through: a
-        // `safeAreaInset` is laid out OUTSIDE the scrollable region, so the transcript stops above it
-        // rather than passing underneath.
+        composer
+            .padding(.horizontal, NoopMetrics.screenHPadding)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+            // Still no panel behind the pill — that was the grey tray. The OCCLUSION now lives on the
+            // pill itself (see `composer`), which is the right place for it: a tray hides things by
+            // covering the full width, and the full width is exactly what made it look like a box.
     }
 
     /// ONE rounded surface holding the field and both buttons.
@@ -1047,6 +1100,16 @@ struct CoachView: View {
     ///
     /// Now the surface IS the composer: the field is transparent, the buttons live on the same pill, and
     /// the focus ring moves to the outer edge so focus is still visible without adding a fourth outline.
+    ///
+    /// AND THE PILL IS GLASS, which is what stops transcript content reading through it. It previously
+    /// had an outline and no fill, on the reasoning that a `safeAreaInset` lies outside the scrollable
+    /// region so nothing COULD show through. That is true of the settled layout and worthless as a
+    /// guarantee — content was visible behind it anyway, most clearly while the keyboard animates away.
+    /// Occlusion should not be an inference from layout.
+    ///
+    /// Glass rather than a flat fill specifically because it needs no colour match: it blurs whatever is
+    /// behind it and takes its tone from the page, where a painted fill would have to agree with a
+    /// background this screen does not control.
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Ask Coach about your data…", text: $draft, axis: .vertical)
@@ -1079,20 +1142,22 @@ struct CoachView: View {
                             .font(.system(size: 15, weight: .semibold))
                     }
                 }
-                .frame(width: 44, height: 38)
+                // A CIRCLE, not a rounded square. Inside a capsule the square's corners fought the pill's
+                // curve and the send read as a separate control that had been parked there.
+                .frame(width: 38, height: 38)
                 .foregroundStyle(StrandPalette.goldDeepText)
-                .background(StrandPalette.accent,
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(StrandPalette.accent, in: Circle())
             }
             .buttonStyle(.plain)
             .disabled(coach.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send")
         }
         .padding(6)
-        // NO fill. The composer sits on the screen's own background with only an outline, which is what
-        // makes it read as part of the page rather than as a tray laid on top of it. A panel — even a
-        // subtle one — is a second surface, and two surfaces is the thing that looked boxed-in.
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .nativeLiquidGlassSearchChrome()
+        // The focus ring sits OVER the glass rather than replacing it: glass says "this is a surface",
+        // the ring says "this one is taking your typing", and those are different facts. Unfocused it
+        // draws a hairline, so the pill keeps a defined edge against a dark page.
+        .overlay(Capsule()
             .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline,
                           lineWidth: 1))
     }

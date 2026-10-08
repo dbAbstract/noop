@@ -475,6 +475,27 @@ Worth fixing while in the area, but pre-existing on both platforms:
 
 ---
 
+## Coach chat screen (Apple-only UI, one pure twin owed)
+
+`ChatTimeSeparator` (`Packages/StrandAnalytics`) is a **pure twin owed to Kotlin**: it decides whether a
+time divider belongs between two chat turns and which day bucket a turn falls in. The contract is the
+15-minute threshold plus three edge rules — the first message always divides, an equal or negative gap
+never does, and a future day buckets as today. Twin it with an oracle test over a spread of gaps rather
+than by eye; the "two dividers never appear in a row" property is the one a careless port breaks.
+
+`ChatMessage.sentAt` is a **behaviour change, not a schema one**. The `coachMessage.createdAt` column
+already existed on both platforms; what changed is that Swift stopped overwriting it with `Date()` on
+every save, so a transcript keeps its real history instead of collapsing to the latest instant. Check
+whether the Kotlin persistence does the same re-stamp — if it does, it has the same bug, and the divider
+feature cannot work there until it is fixed.
+
+The rest is Apple-only presentation and needs no twin unless Android's coach screen is reworked to match:
+an opaque unfilled top bar as a safe-area inset, a Liquid Glass menu button, a glass composer pill,
+assistant replies rendered flat rather than on a card, a circular send button, and a jump-to-newest
+control gated on an end-of-transcript sentinel.
+
+---
+
 ## Suggested order
 
 1. Pure analytics twins with oracle tests — cheapest, and everything else depends on their numbers.

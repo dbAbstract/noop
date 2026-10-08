@@ -48,14 +48,25 @@ struct ChatMessage: Identifiable, Equatable {
     /// has no option but to copy their text and paste it again — which is exactly what happened, five
     /// times, and each retry re-sent the whole accumulated history.
     var failure: String?
+    /// When this turn was composed, epoch seconds.
+    ///
+    /// STAMPED ONCE, AT CREATION, and that is the whole point of storing it rather than reading the clock
+    /// where it is used. `persistMessages` replaces every row on each completed turn, and it used to write
+    /// `Date()` into all of them — so an hour-old brief was re-dated to now every time anything was sent,
+    /// and the transcript's history flattened to a single instant with each save.
+    ///
+    /// The `coachMessage.createdAt` column already existed and already held this; nothing migrates. What
+    /// changes is that the value now survives the next write.
+    var sentAt: Int
 
     init(id: UUID = UUID(), role: Role, text: String, proposals: [FoodProposal] = [],
-         failure: String? = nil) {
+         failure: String? = nil, sentAt: Int = Int(Date().timeIntervalSince1970)) {
         self.id = id
         self.role = role
         self.text = text
         self.proposals = proposals
         self.failure = failure
+        self.sentAt = sentAt
     }
 }
 
@@ -807,7 +818,7 @@ final class AICoachEngine: ObservableObject {
             .sorted { $0.orderIndex < $1.orderIndex }
             .map { ChatMessage(id: UUID(uuidString: $0.id) ?? UUID(),
                                 role: ChatMessage.Role(rawValue: $0.role) ?? .user,
-                                text: $0.text) }
+                                text: $0.text, sentAt: $0.createdAt) }
         conversationDay = lastDay
     }
 
@@ -821,8 +832,11 @@ final class AICoachEngine: ObservableObject {
         Task {
             guard let store = await repo.storeHandle() else { return }
             let rows = snapshot.enumerated().map { index, m in
+                // `m.sentAt`, NOT `Date()`. Re-stamping on every save re-dated the whole transcript to
+                // the moment of the latest turn, which both lost the history and made the chat's time
+                // dividers claim every message arrived at once.
                 CoachMessageRow(id: m.id.uuidString, role: m.role.rawValue, text: m.text,
-                                 provider: providerId, createdAt: Int(Date().timeIntervalSince1970),
+                                 provider: providerId, createdAt: m.sentAt,
                                  orderIndex: index)
             }
             try? await store.replaceCoachMessages(rows)
