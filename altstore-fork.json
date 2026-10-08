@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "11.8.0.1042",
-          "buildVersion": "1042",
+          "version": "11.8.0",
+          "buildVersion": "1043",
           "date": "2026-10-08",
-          "localizedDescription": "Coach can cook: record a pot, eat it down, find the leftovers",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1042.ipa",
-          "size": 16658573,
+          "localizedDescription": "Coach: fix the typing lag, and make the chat chrome readable",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v11.8.0-1043.ipa",
+          "size": 16665532,
           "minOSVersion": "17.0"
         }
       ]
