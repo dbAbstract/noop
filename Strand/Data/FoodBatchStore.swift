@@ -12,7 +12,7 @@ import WhoopStore
 // none of them has a setter for it.
 
 /// One cook, with what is left of it already worked out.
-struct FoodCook: Identifiable, Equatable {
+struct FoodCook: Identifiable, Equatable, Sendable {
     let id: UUID
     /// The saved recipe this is a making of, or nil for a standalone cook.
     var recipeId: UUID?

@@ -17,10 +17,10 @@ import StrandAnalytics
 // header of `FoodActionParse` for why that boundary is the whole design.
 
 /// A proposal, resolved and ready to render.
-struct FoodProposal: Identifiable, Equatable {
+struct FoodProposal: Identifiable, Equatable, Sendable {
 
     /// What the card will do.
-    enum Kind: Equatable {
+    enum Kind: Equatable, Sendable {
         /// Log a food already in the library.
         case log(item: FoodItem, portion: Double)
         /// Create a food and log it. Saving to the library is the USER's choice at the card — the
@@ -63,7 +63,7 @@ struct FoodProposal: Identifiable, Equatable {
 
     /// Where the card is in its life. Guards against the obvious double-tap: a card that has already
     /// written must not be able to write again, and the transcript is scrollable so it stays on screen.
-    enum State: Equatable { case pending, applied, dismissed }
+    enum State: Equatable, Sendable { case pending, applied, dismissed }
 
     let id: UUID
     let kind: Kind

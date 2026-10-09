@@ -74,7 +74,7 @@ enum FoodLogStore {
 // MARK: - Models
 
 /// A reusable food in the user's library. `macros` are PER SERVING; a log scales them by its portion.
-struct FoodItem: Identifiable, Equatable, Codable {
+struct FoodItem: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     /// nil when the user stated these macros; `FoodMacroSource.aiEstimate` when a model proposed them and
     /// the user accepted. An estimate that reads as a label figure is the failure this prevents.
@@ -169,7 +169,7 @@ enum FoodMacroSource {
 /// Deliberately NOT `StrandAnalytics.Meal`, which carries a fifth `unassigned` case for display. nil here
 /// already means unassigned, so making it storable too would give two spellings of one state — and every
 /// reader would then have to handle both or be subtly wrong about one.
-enum MealType: String, Codable, CaseIterable, Equatable {
+enum MealType: String, Codable, CaseIterable, Equatable, Sendable {
     case breakfast, lunch, dinner, snack
 
     /// How this renders. nil maps to `.unassigned`, which is the whole reason that case exists.

@@ -23,8 +23,8 @@ public let aiCoachPrivacyNote =
 // MARK: - Chat model
 
 /// One turn in the coaching conversation.
-struct ChatMessage: Identifiable, Equatable {
-    enum Role: String { case user, assistant }
+struct ChatMessage: Identifiable, Equatable, Sendable {
+    enum Role: String, Sendable { case user, assistant }
     let id: UUID
     let role: Role
     let text: String
@@ -964,10 +964,15 @@ final class AICoachEngine: ObservableObject {
         let placeholder = ChatMessage(role: .assistant, text: "")
         appendMessage(placeholder)
         var accumulated = ""
+        var lastStreamUpdate = ContinuousClock.now
 
         do {
             try await streamProvider(key: key, messages: wire, inlineImage: imageBase64) { delta in
                 accumulated += delta
+                // Coalesce token bursts; finalization below always publishes the complete reply.
+                let now = ContinuousClock.now
+                guard lastStreamUpdate.duration(to: now) >= .milliseconds(80) else { return }
+                lastStreamUpdate = now
                 // Replace the last message's text with the accumulated stream so far. Routed through
                 // `displayText` so a proposal block is hidden WHILE IT ARRIVES — otherwise the user
                 // watches raw JSON type itself across the screen at the exact moment the feature works.
@@ -1085,11 +1090,16 @@ final class AICoachEngine: ObservableObject {
         let placeholder = ChatMessage(role: .assistant, text: prefix)
         appendMessage(placeholder)
         var accumulated = ""
+        var lastStreamUpdate = ContinuousClock.now
 
         do {
             try await streamProvider(key: key, messages: wire,
                                      overridingSystemPrompt: Self.briefPrompt) { delta in
                 accumulated += delta
+                // Coalesce token bursts; finalization below always publishes the complete reply.
+                let now = ContinuousClock.now
+                guard lastStreamUpdate.duration(to: now) >= .milliseconds(80) else { return }
+                lastStreamUpdate = now
                 if let lastIdx = self.messages.indices.last,
                    self.messages[lastIdx].role == .assistant {
                     self.messages[lastIdx] = ChatMessage(

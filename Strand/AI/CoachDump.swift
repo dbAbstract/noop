@@ -1,4 +1,6 @@
 import Foundation
+import CoreTransferable
+import UniformTypeIdentifiers
 import StrandAnalytics
 
 // MARK: - The conversation, as a file you can hand to someone
@@ -197,5 +199,62 @@ enum CoachDump {
             out[key] = value
         }
         return out
+    }
+}
+
+/// A cheap value snapshot. Encoding and disk I/O happen only when the share service requests a file.
+struct CoachConversationExport: Transferable {
+    let messages: [ChatMessage]
+    let provider: String
+    let model: String
+    let dataConsent: Bool
+    let onDeviceSignals: Bool
+    let hasCustomPrompt: Bool
+    let customPromptMissesFoodProtocol: Bool
+    let errorText: String?
+    let isSending: Bool
+    let generatedAt: Date
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .json) { snapshot in
+            SentTransferredFile(try await snapshot.file())
+        }
+    }
+
+    func file() async throws -> URL {
+        try await CoachDumpWriter.shared.write(self)
+    }
+}
+
+/// A separate actor keeps serialization and filesystem work off the UI actor.
+private actor CoachDumpWriter {
+    static let shared = CoachDumpWriter()
+
+    func write(_ snapshot: CoachConversationExport) throws -> URL {
+        // Separate exports never overwrite a file a share service is still reading.
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(CoachDump.filename(snapshot.generatedAt))
+        let json = CoachDump.json(messages: snapshot.messages, provider: snapshot.provider,
+            model: snapshot.model, dataConsent: snapshot.dataConsent,
+            onDeviceSignals: snapshot.onDeviceSignals, hasCustomPrompt: snapshot.hasCustomPrompt,
+            customPromptMissesFoodProtocol: snapshot.customPromptMissesFoodProtocol,
+            errorText: snapshot.errorText, isSending: snapshot.isSending,
+            generatedAt: snapshot.generatedAt)
+        try (json ?? "{\"error\":\"could not encode the conversation\"}")
+            .write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+}
+
+extension AICoachEngine {
+    /// Capture the live proposal states without creating a cached file during view updates.
+    func conversationExport() -> CoachConversationExport {
+        CoachConversationExport(messages: messages, provider: provider.rawValue, model: model,
+            dataConsent: dataConsent, onDeviceSignals: includeOnDeviceSignals,
+            hasCustomPrompt: hasCustomSystemPrompt,
+            customPromptMissesFoodProtocol: customPromptMissesFoodProtocol,
+            errorText: errorText, isSending: sending, generatedAt: Date())
     }
 }

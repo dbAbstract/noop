@@ -3,43 +3,25 @@ import MarkdownUI
 import StrandDesign
 import StrandAnalytics
 
-/// The assistant's reply, wrapped so SwiftUI can SKIP re-rendering it.
-///
-/// This is the fix for the typing lag, and the cause is worth stating because it is invisible from the
-/// screen. `draft` is `@State` on `CoachView`, so every keystroke invalidates that view's whole body —
-/// including the transcript, including every visible `Markdown(...)`, each of which re-parses its source
-/// on construction. Typing a sentence into a long conversation therefore re-parsed every reply on screen
-/// once per character, and the cost grew with the transcript: returning to the tab restores a full
-/// transcript scrolled to the end, which is exactly when the delay was worst and why a relaunch "fixed"
-/// it.
-///
-/// `Equatable` + `.equatable()` makes SwiftUI compare the text and skip `body` entirely when it has not
-/// changed, so a keystroke no longer reaches the parser at all. The comparison is one string compare
-/// against work that is orders of magnitude larger.
-///
-/// Note this must wrap the Markdown ALONE. Pulling the context menu or the padding inside would capture
-/// the message and the closures, and a closure is never equal to another closure — the view would compare
-/// unequal every time and the skip would silently stop happening.
+/// Skip parsing unchanged replies when streaming or repository updates redraw the transcript.
 private struct CoachMarkdown: View, Equatable {
     let text: String
+    let messageId: UUID
 
     var body: some View {
-        Markdown(text)
+        Markdown(CoachMarkdownCache.shared.content(for: text, messageId: messageId))
             .markdownTheme(.strand)
     }
 
     static func == (lhs: CoachMarkdown, rhs: CoachMarkdown) -> Bool {
-        lhs.text == rhs.text
+        lhs.text == rhs.text && lhs.messageId == rhs.messageId
     }
 }
 
-/// The transcript end's position within the scroll view, published every frame of a scroll.
-///
-/// A position rather than a boolean, because the test it feeds — "is the end within a screen of here" —
-/// needs the viewport height, which is known at the overlay and not inside the lazy content.
+/// Reduce scroll geometry to the one fact the UI needs before publishing a preference.
 private struct CoachEndSentinelKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    static var defaultValue = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
         value = nextValue()
     }
 }
@@ -61,11 +43,7 @@ struct CoachView: View {
     /// in the notes field, so it appears alongside other journal entries in Insights.
     @EnvironmentObject var repo: Repository
 
-    /// Draft text in the composer (the question being typed).
-    /// K15: the composer draft is persisted to UserDefaults so it survives an app relaunch.
-    /// Restored on first appear, saved on every change. Keyed identically to the Android twin.
-    private static let draftKey = "coach.composerDraft"
-    @State private var draft: String = UserDefaults.standard.string(forKey: "coach.composerDraft") ?? ""
+    @State private var composerReset = 0
     /// Pending key text in the setup card (never persisted here, handed to `setKey`).
     @State private var keyDraft: String = ""
     /// The replacement key, typed into the editor a rejection or Update key opens. Separate from
@@ -78,38 +56,19 @@ struct CoachView: View {
     @State private var customModel: Bool = false
     /// The id typed in the "Custom…" field.
     @State private var customModelDraft: String = ""
-    @FocusState private var composerFocused: Bool
+    @State private var composerFocused = false
 
     /// K2: confirmation gate for the destructive "Clear conversation" toolbar action.
     @State private var showClearConfirm = false
     /// #2243: the coach settings, presented as a sheet. See `CoachSettingsView` for why a sheet
     /// rather than a push.
     @State private var showSettings = false
-    /// Whether the newest message is on screen, reported by the transcript's end sentinel. Starts true so
-    /// the control is absent on a fresh open, which always lands at the end anyway.
-    /// The exported conversation file, rebuilt when the conversation changes — NOT when the view redraws.
-    ///
-    /// Held in state precisely so that `ShareLink`, which needs a concrete URL at construction, cannot
-    /// pull a fresh serialisation through on every body evaluation. See `writeCoachDump`.
-    @State private var dumpURL: URL?
-
-    /// The end sentinel's position in the transcript's coordinate space, updated on every scroll frame.
-    @State private var sentinelY: CGFloat = 0
+    /// Changes only when the transcript crosses the jump-button visibility threshold.
+    @State private var isAtEnd = true
+    @State private var didScrollToInitialMessage = false
     /// Name for the transcript's coordinate space, so the sentinel reports a position relative to the
     /// scroll view rather than to the screen.
     private static let transcriptSpace = "coach.transcript"
-
-    /// Corner radius of the composer surface.
-    ///
-    /// A constant rather than a capsule: see `composer`. 20 is close to the capsule radius of a
-    /// single-line field, so a one-line composer looks unchanged and a four-line one stops ballooning.
-    private static let composerRadius: CGFloat = 20
-
-    // K4: on-device voice input for the composer (iOS only). macOS gets a no-op stub via
-    // `#if os(iOS)` guards — the shared file keeps compiling for both targets.
-    #if os(iOS)
-    @StateObject private var voiceInput = CoachVoiceInput()
-    #endif
 
     /// Sentinel tag for the "Custom…" entry in the model Picker.
     private let customModelTag = "__custom__"
@@ -180,7 +139,7 @@ struct CoachView: View {
                 // Available in RELEASE builds too, deliberately: a diagnostic only the dev build can take
                 // is never there when something actually goes wrong on the install being used.
                 ToolbarItem {
-                    ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
+                    ShareLink(item: coach.conversationExport(),
                               preview: SharePreview(CoachDump.filename())) {
                         Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
                     }
@@ -247,9 +206,6 @@ struct CoachView: View {
                 generateBrief: { await coach.generateBrief() },
                 detectedWake: { await repo.detectedWakeMinuteOfDay() })
             await coach.startBriefIfNeeded()
-            // Seed the export once the restored transcript is in place, so the first use of the menu
-            // shares the conversation rather than an empty placeholder.
-            dumpURL = writeCoachDump()
         }
         .task(id: repo.refreshSeq) {
             await coach.retireStaleConversationIfNeeded()
@@ -267,21 +223,6 @@ struct CoachView: View {
             coach.pendingPrompt = nil
             guard coach.isConfigured else { return }
             await coach.send(prompt)
-        }
-        // K15: persist the composer draft so it survives an app relaunch.
-        .onChangeCompat(of: draft) { newValue in
-            UserDefaults.standard.set(newValue, forKey: Self.draftKey)
-        }
-        // Rebuild the export when the CONVERSATION changes, which is a handful of times per session,
-        // rather than letting `ShareLink` pull a fresh one on every redraw — which meant once per
-        // keystroke, serialising and writing the whole transcript to disk each time.
-        .onChangeCompat(of: coach.messages.count) { _ in
-            dumpURL = writeCoachDump()
-        }
-        .onChangeCompat(of: coach.sending) { isSending in
-            // Also on reply completion, so an exported file includes the turn that just landed and any
-            // actions it proposed — the count alone does not change when a streamed reply fills in.
-            if !isSending { dumpURL = writeCoachDump() }
         }
         // K14: haptic feedback when a reply arrives (sending goes true → false).
         .onChangeCompat(of: coach.sending) { isSending in
@@ -531,7 +472,7 @@ struct CoachView: View {
                 Label("Coach settings", systemImage: "slider.horizontal.3")
             }
             Divider()
-            ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
+            ShareLink(item: coach.conversationExport(),
                       preview: SharePreview(CoachDump.filename())) {
                 Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
             }
@@ -610,7 +551,7 @@ struct CoachView: View {
             // Here as well as in the macOS toolbar, because on THIS platform the toolbar route is
             // withdrawn (see the doc above) — so a ShareLink placed there rendered nowhere on iPhone,
             // which is exactly where the diagnostic is wanted.
-            ShareLink(item: dumpURL ?? FileManager.default.temporaryDirectory,
+            ShareLink(item: coach.conversationExport(),
                       preview: SharePreview(CoachDump.filename())) {
                 Label("Export conversation", systemImage: "square.and.arrow.up.on.square")
             }
@@ -642,21 +583,7 @@ struct CoachView: View {
 
     /// Header fixed, transcript scrolling, composer docked to the transcript's own scroll view.
     private var chatLayout: some View {
-        // THE BAR IS A SAFE-AREA INSET WITH NO BACKGROUND OF ITS OWN, and both halves of that are the fix.
-        //
-        // An inset is laid out OUTSIDE the scrollable region, so the transcript stops at the bar's edge
-        // and no text can pass behind it — which is the whole of what "opaque" has to mean here.
-        //
-        // And it is unfilled because that is EXACT rather than approximate. The page behind is
-        // `surfaceBase` under `liquidScaffoldSky()`, a 240 pt top-anchored gradient covering precisely the
-        // region a top bar occupies, so any flat colour painted here would sit visibly wrong against the
-        // sky either side of it. Letting the page show through makes the match an identity.
-        //
-        // The previous attempt did the opposite on both counts — a translucent glass bar overlaid on the
-        // scroll, shaped `.rect(bottomLeading: 20, bottomTrailing: 20)`. Square at the top, round at the
-        // bottom, inset from the edges by the glass effect's own shape, with the transcript sliding
-        // visibly behind it: a floating polygon rather than a bar. Glass belongs on the CONTROL in it,
-        // which is where it is now.
+        // Insets keep the fixed chrome outside the transcript's scrollable area.
         transcript
         .safeAreaInset(edge: .top, spacing: 0) {
             connectedHeader
@@ -707,174 +634,172 @@ struct CoachView: View {
             if coach.messages.isEmpty {
                 ScrollView { emptyTranscript.padding(NoopMetrics.screenHPadding) }
             } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
-                        // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
-                        // 20, not 12. A reply and the next question were close enough to read as one
-                        // block of text; the gap is what separates who is speaking now that the
-                        // assistant's side has no card to do it.
-                        LazyVStack(alignment: .leading, spacing: 20) {
-                            ForEach(Array(coach.messages.enumerated()), id: \.element.id) { index, message in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    // A coach conversation runs the length of a day, so two adjacent
-                                    // bubbles can be six hours apart with nothing on screen to say so.
-                                    // The threshold lives in `ChatTimeSeparator`, tested, because "is
-                                    // this a pause or a break" is the entire design of the feature.
-                                    if ChatTimeSeparator.needsSeparator(
-                                        previousSentAt: index > 0 ? coach.messages[index - 1].sentAt : nil,
-                                        sentAt: message.sentAt) {
-                                        timeSeparator(message.sentAt)
+                GeometryReader { viewport in
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            // Lazy so off-screen bubbles aren't all resident/laid-out at once; with the
+                            // `maxStoredMessages` cap the transcript is already bounded, this keeps render cost flat.
+                            // 20, not 12. A reply and the next question were close enough to read as one
+                            // block of text; the gap is what separates who is speaking now that the
+                            // assistant's side has no card to do it.
+                            LazyVStack(alignment: .leading, spacing: 20) {
+                                ForEach(Array(coach.messages.enumerated()), id: \.element.id) { index, message in
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        // A coach conversation runs the length of a day, so two adjacent
+                                        // bubbles can be six hours apart with nothing on screen to say so.
+                                        // The threshold lives in `ChatTimeSeparator`, tested, because "is
+                                        // this a pause or a break" is the entire design of the feature.
+                                        if ChatTimeSeparator.needsSeparator(
+                                            previousSentAt: index > 0 ? coach.messages[index - 1].sentAt : nil,
+                                            sentAt: message.sentAt) {
+                                            timeSeparator(message.sentAt)
+                                        }
+                                        // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
+                                        // `send` appends it so deltas have somewhere to land. Drawn, it is an
+                                        // empty bubble sitting above "Coach is thinking…", which is two things
+                                        // on screen for one state. The typing indicator IS its visual.
+                                        //
+                                        // Also catches a reply that is nothing but an action block mid-stream:
+                                        // `displayText` hides the JSON, so the bubble would be empty for real.
+                                        if !isEmptyPlaceholder(message) {
+                                            bubble(message)
+                                        }
+                                        // The proposal card rides UNDER its own turn rather than inside the
+                                        // bubble: it is not prose, it is not selectable, and it must not be
+                                        // swept up by the bubble's Copy/Share context menu.
+                                        // One card per proposed action, each confirmed independently — a
+                                        // described meal of three things should not be all-or-nothing.
+                                        ForEach(message.proposals) { proposal in
+                                            FoodProposalCard(proposal: proposal, messageId: message.id)
+                                                .frame(maxWidth: 560, alignment: .leading)
+                                        }
+                                        if let failure = message.failure {
+                                            retryRow(message: message, reason: failure)
+                                        }
                                     }
-                                    // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
-                                    // `send` appends it so deltas have somewhere to land. Drawn, it is an
-                                    // empty bubble sitting above "Coach is thinking…", which is two things
-                                    // on screen for one state. The typing indicator IS its visual.
-                                    //
-                                    // Also catches a reply that is nothing but an action block mid-stream:
-                                    // `displayText` hides the JSON, so the bubble would be empty for real.
-                                    if !isEmptyPlaceholder(message) {
-                                        bubble(message)
-                                    }
-                                    // The proposal card rides UNDER its own turn rather than inside the
-                                    // bubble: it is not prose, it is not selectable, and it must not be
-                                    // swept up by the bubble's Copy/Share context menu.
-                                    // One card per proposed action, each confirmed independently — a
-                                    // described meal of three things should not be all-or-nothing.
-                                    ForEach(message.proposals) { proposal in
-                                        FoodProposalCard(proposal: proposal, messageId: message.id)
-                                            .frame(maxWidth: 560, alignment: .leading)
-                                    }
-                                    if let failure = message.failure {
-                                        retryRow(message: message, reason: failure)
+                                    .id(message.id)
+                                }
+                                if coach.sending {
+                                    typingIndicator.id("typing")
+                                }
+                                // Observe the jump threshold during deceleration without publishing each scroll position.
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: CoachEndSentinelKey.self,
+                                        value: geo.frame(in: .named(Self.transcriptSpace)).minY < viewport.size.height + 120)
+                                }
+                                .frame(height: 1)
+                            }
+                            // Restored after the full-screen restructure removed the card wrapper that used
+                            // to supply it — bubbles were sitting flush against both edges.
+                            .padding(.horizontal, NoopMetrics.screenHPadding)
+                            .padding(.top, 8)
+                            // Real space between the last bubble and the composer. Eight points read as the
+                            // two touching; a chat wants the message to finish before the input begins.
+                            .padding(.bottom, 24)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        // #697 parity: this screen builds its OWN ScrollView rather than going through
+                        // ScreenScaffold, so it never inherited the scaffold's horizontal-bounce suppression and
+                        // could still rubber-band left-right on a purely vertical scroll. Same modifier, same
+                        // guard. `.basedOnSize` permits horizontal bounce only when content genuinely overflows
+                        // the width, so nothing that is meant to scroll sideways is affected. (#1532 follow-up)
+                        #if os(iOS)
+                        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                        #endif
+                        .coordinateSpace(name: Self.transcriptSpace)
+                        // The jump-to-newest control, shown only when the newest message is NOT on screen.
+                        // Always-visible would be a button that does nothing most of the time; this is a
+                        // long transcript where the proposal cards awaiting a tap are always at the bottom.
+                        //
+                        // The outer geometry reader supplies the viewport used by the sentinel.
+                        .overlay(alignment: .bottom) {
+                            GeometryReader { _ in
+                                // A tolerance, not an equality: the sentinel sits a point or two past the
+                                // fold at rest, and a strict test would pin the button on permanently.
+                                let atEnd = isAtEnd
+                                VStack {
+                                    Spacer(minLength: 0)
+                                    if !atEnd {
+                                        Button {
+                                            scrollToEnd(proxy)
+                                        } label: {
+                                            Image(systemName: "arrow.down")
+                                                .font(.system(size: 15, weight: .semibold))
+                                                .foregroundStyle(StrandPalette.textPrimary)
+                                                .frame(width: 34, height: 34)
+                                                .contentShape(Circle())
+                                        }
+                                        .nativeLiquidGlassButtonChrome(fallback: {
+                                            Circle().fill(StrandPalette.surfaceRaised)
+                                        })
+                                        .padding(.bottom, 10)
+                                        .transition(.scale.combined(with: .opacity))
+                                        .accessibilityLabel(String(localized: "Jump to newest"))
                                     }
                                 }
-                                .id(message.id)
+                                .frame(maxWidth: .infinity)
+                                // The animation lives on the BUTTON, not on the scroll view. Applied to the
+                                // scroll view it attached an implicit animation to that whole subtree, so
+                                // every change inside the transcript had to go through it.
+                                .animation(.snappy(duration: 0.18), value: atEnd)
                             }
-                            if coach.sending {
-                                typingIndicator.id("typing")
-                            }
-                            // END SENTINEL, reporting its POSITION continuously rather than its
-                            // lifecycle. `onAppear`/`onDisappear` fire when a lazy row is built and torn
-                            // down, which during a fling happens in bursts and often not until the scroll
-                            // settles — so the button appeared and disappeared a beat late and felt
-                            // broken while the finger was still moving. A geometry preference updates on
-                            // every frame of the scroll, including the deceleration.
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: CoachEndSentinelKey.self,
-                                    value: geo.frame(in: .named(Self.transcriptSpace)).minY)
-                            }
-                            .frame(height: 1)
                         }
-                        // Restored after the full-screen restructure removed the card wrapper that used
-                        // to supply it — bubbles were sitting flush against both edges.
-                        .padding(.horizontal, NoopMetrics.screenHPadding)
-                        .padding(.top, 8)
-                        // Real space between the last bubble and the composer. Eight points read as the
-                        // two touching; a chat wants the message to finish before the input begins.
-                        .padding(.bottom, 24)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    // #697 parity: this screen builds its OWN ScrollView rather than going through
-                    // ScreenScaffold, so it never inherited the scaffold's horizontal-bounce suppression and
-                    // could still rubber-band left-right on a purely vertical scroll. Same modifier, same
-                    // guard. `.basedOnSize` permits horizontal bounce only when content genuinely overflows
-                    // the width, so nothing that is meant to scroll sideways is affected. (#1532 follow-up)
-                    #if os(iOS)
-                    .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                    #endif
-                    .coordinateSpace(name: Self.transcriptSpace)
-                    // The jump-to-newest control, shown only when the newest message is NOT on screen.
-                    // Always-visible would be a button that does nothing most of the time; this is a
-                    // long transcript where the proposal cards awaiting a tap are always at the bottom.
-                    //
-                    // The overlay's own GeometryReader supplies the VIEWPORT height, which is the figure
-                    // the sentinel's position has to be compared against and the one a `LazyVStack`
-                    // cannot give from inside.
-                    .overlay(alignment: .bottom) {
-                        GeometryReader { geo in
-                            // A tolerance, not an equality: the sentinel sits a point or two past the
-                            // fold at rest, and a strict test would pin the button on permanently.
-                            let atEnd = sentinelY < geo.size.height + 120
-                            VStack {
-                                Spacer(minLength: 0)
-                                if !atEnd {
-                                    Button {
-                                        scrollToEnd(proxy)
-                                    } label: {
-                                        Image(systemName: "arrow.down")
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundStyle(StrandPalette.textPrimary)
-                                            .frame(width: 34, height: 34)
-                                            .contentShape(Circle())
-                                    }
-                                    .nativeLiquidGlassButtonChrome(fallback: {
-                                        Circle().fill(StrandPalette.surfaceRaised)
-                                    })
-                                    .padding(.bottom, 10)
-                                    .transition(.scale.combined(with: .opacity))
-                                    .accessibilityLabel(String(localized: "Jump to newest"))
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            // The animation lives on the BUTTON, not on the scroll view. Applied to the
-                            // scroll view it attached an implicit animation to that whole subtree, so
-                            // every change inside the transcript had to go through it.
-                            .animation(.snappy(duration: 0.18), value: atEnd)
+                        .onPreferenceChange(CoachEndSentinelKey.self) { atEnd in
+                            if isAtEnd != atEnd { isAtEnd = atEnd }
                         }
-                    }
-                    .onPreferenceChange(CoachEndSentinelKey.self) { y in
-                        sentinelY = y
-                    }
 
-                    // No height cap. It fills whatever the header and the docked composer leave, which is
-                    // what makes this read as a chat rather than as a card with a chat in it.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Tap the transcript to put the keyboard away. `.scrollDismissesKeyboard` covers the
-                    // drag gesture; this covers the tap, which is what people actually reach for when the
-                    // keyboard is covering what they want to read.
-                    .contentShape(Rectangle())
-                    .onTapGesture { composerFocused = false }
-                    #if os(iOS)
-                    .scrollDismissesKeyboard(.interactively)
-                    #endif
-                    // On APPEAR as well as on change. A restored transcript changes neither the message
-                    // count nor `sending`, so without this, opening Coach sat on the oldest message — the
-                    // one part of the conversation nobody wants to read first.
-                    //
-                    // In a `task` rather than `onAppear`: the transcript is a `LazyVStack`, so the last row
-                    // may not exist yet when `onAppear` fires and `scrollTo` would address nothing. One
-                    // yield puts this after the first layout pass.
-                    .task {
-                        await Task.yield()
-                        scrollToEnd(proxy, animated: false)
-                    }
-                    // THE KEYBOARD MUST MOVE THE CHAT. Showing it grows the bottom safe-area inset, which
-                    // shortens the scroll view from below — SwiftUI keeps the scroll OFFSET, so the newest
-                    // message slides up out of sight behind the keyboard instead of staying put. Scrolling
-                    // to the end on focus is what every chat app does and what was missing here.
-                    //
-                    // A yield first, for the same reason as the typing indicator: the inset has not grown
-                    // yet in the update that flips focus, so scrolling immediately lands against the old,
-                    // taller viewport and stops short.
-                    .onChangeCompat(of: composerFocused) { focused in
-                        guard focused else { return }
-                        Task { @MainActor in
+                        // No height cap. It fills whatever the header and the docked composer leave, which is
+                        // what makes this read as a chat rather than as a card with a chat in it.
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // Tap the transcript to put the keyboard away. `.scrollDismissesKeyboard` covers the
+                        // drag gesture; this covers the tap, which is what people actually reach for when the
+                        // keyboard is covering what they want to read.
+                        .contentShape(Rectangle())
+                        .onTapGesture { composerFocused = false }
+                        #if os(iOS)
+                        .scrollDismissesKeyboard(.interactively)
+                        #endif
+                        // On APPEAR as well as on change. A restored transcript changes neither the message
+                        // count nor `sending`, so without this, opening Coach sat on the oldest message — the
+                        // one part of the conversation nobody wants to read first.
+                        //
+                        // In a `task` rather than `onAppear`: the transcript is a `LazyVStack`, so the last row
+                        // may not exist yet when `onAppear` fires and `scrollTo` would address nothing. One
+                        // yield puts this after the first layout pass.
+                        .task {
+                            guard !didScrollToInitialMessage else { return }
                             await Task.yield()
+                            guard !Task.isCancelled else { return }
+                            scrollToEnd(proxy, animated: false)
+                            didScrollToInitialMessage = true
+                        }
+                        // THE KEYBOARD MUST MOVE THE CHAT. Showing it grows the bottom safe-area inset, which
+                        // shortens the scroll view from below — SwiftUI keeps the scroll OFFSET, so the newest
+                        // message slides up out of sight behind the keyboard instead of staying put. Scrolling
+                        // to the end on focus is what every chat app does and what was missing here.
+                        //
+                        // A yield first, for the same reason as the typing indicator: the inset has not grown
+                        // yet in the update that flips focus, so scrolling immediately lands against the old,
+                        // taller viewport and stops short.
+                        .onChangeCompat(of: composerFocused) { focused in
+                            guard focused else { return }
+                            Task { @MainActor in
+                                await Task.yield()
+                                scrollToEnd(proxy)
+                            }
+                        }
+                        .onChangeCompat(of: coach.messages.count) { _ in
                             scrollToEnd(proxy)
                         }
-                    }
-                    .onChangeCompat(of: coach.messages.count) { _ in
-                        scrollToEnd(proxy)
-                    }
-                    // A yield first: the typing indicator is inserted in the same update that flips
-                    // `sending`, so scrolling immediately targets a row that does not exist yet and lands
-                    // short — leaving "thinking" under the keyboard, which is what the user saw.
-                    .onChangeCompat(of: coach.sending) { _ in
-                        Task { @MainActor in
-                            await Task.yield()
-                            scrollToEnd(proxy)
+                        // A yield first: the typing indicator is inserted in the same update that flips
+                        // `sending`, so scrolling immediately targets a row that does not exist yet and lands
+                        // short — leaving "thinking" under the keyboard, which is what the user saw.
+                        .onChangeCompat(of: coach.sending) { _ in
+                            Task { @MainActor in
+                                await Task.yield()
+                                scrollToEnd(proxy)
+                            }
                         }
                     }
                 }
@@ -970,7 +895,7 @@ struct CoachView: View {
             //
             // K8: context menu (long-press / right-click) with Copy, Share, and Save actions.
             HStack {
-                CoachMarkdown(text: message.text)
+                CoachMarkdown(text: message.text, messageId: message.id)
                     .equatable()
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1192,15 +1117,10 @@ struct CoachView: View {
         }
     }
 
-    /// The docked composer surface.
-    ///
-    /// The token estimate used to live directly under the field and now lives in Coach settings. Under the
-    /// composer it mixed a fixed cost — system prompt, data context, history — with a per-keystroke one,
-    /// so it twitched while typing and never answered a question the user was in a position to act on
-    /// mid-sentence. Beside the model, with an empty draft, it reads as what you are carrying and whether
-    /// to clear the conversation, which is a decision with somewhere to go.
+    /// The composer owns its typing state; this wrapper supplies only its placement.
     private var composerBar: some View {
-        composer
+        CoachComposer(sending: coach.sending, focused: $composerFocused,
+                      reset: composerReset, onSend: send)
             .padding(.horizontal, NoopMetrics.screenHPadding)
             .padding(.top, 8)
             .padding(.bottom, 8)
@@ -1216,153 +1136,6 @@ struct CoachView: View {
     /// the field but inside the panel. Box in a box in a box, which is what reads as a container around the
     /// input rather than as an input.
     ///
-    /// Now the surface IS the composer: the field is transparent, the buttons live on the same pill, and
-    /// the focus ring moves to the outer edge so focus is still visible without adding a fourth outline.
-    ///
-    /// AND THE PILL IS GLASS, which is what stops transcript content reading through it. It previously
-    /// had an outline and no fill, on the reasoning that a `safeAreaInset` lies outside the scrollable
-    /// region so nothing COULD show through. That is true of the settled layout and worthless as a
-    /// guarantee — content was visible behind it anyway, most clearly while the keyboard animates away.
-    /// Occlusion should not be an inference from layout.
-    ///
-    /// Glass rather than a flat fill specifically because it needs no colour match: it blurs whatever is
-    /// behind it and takes its tone from the page, where a painted fill would have to agree with a
-    /// background this screen does not control.
-    private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Ask Coach about your data…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(StrandFont.body)
-                .foregroundStyle(StrandPalette.textPrimary)
-                .lineLimit(1...5)
-                .focused($composerFocused)
-                .padding(.leading, 14)
-                .padding(.vertical, 10)
-                .onSubmit { send(draft) }
-                .accessibilityLabel("Question")
-
-            // K4: on-device voice input (iOS only). macOS compiles this section out entirely.
-            #if os(iOS)
-            micButton
-            #endif
-
-            // Docked icon-only send affordance: a crisp accent-filled square sized to the
-            // composer row (not the full 48pt control height), so it routes through the same
-            // token fill/label colours as the button system without overpowering the field.
-            Button {
-                send(draft)
-            } label: {
-                Group {
-                    if coach.sending {
-                        ProgressView().controlSize(.small).tint(StrandPalette.goldDeepText)
-                    } else {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 15, weight: .semibold))
-                    }
-                }
-                // A CIRCLE, not a rounded square. Inside a capsule the square's corners fought the pill's
-                // curve and the send read as a separate control that had been parked there.
-                .frame(width: 38, height: 38)
-                .foregroundStyle(StrandPalette.goldDeepText)
-                .background(StrandPalette.accent, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(coach.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send")
-        }
-        .padding(6)
-        // A ROUNDED RECTANGLE, not a capsule. A capsule's corner radius is half its height, so a composer
-        // that grows to four lines becomes a stadium with the text marooned in the middle of two huge
-        // arcs. A fixed radius keeps the same shape at every height.
-        //
-        // And an OPAQUE FILL rather than glass. Glass takes its tone from what is behind it, which on a
-        // flat dark page is barely a surface at all — the composer read as text floating on the page.
-        // `surfaceRaised` is the token for "a layer above the page", which is what this is.
-        .background(StrandPalette.surfaceRaised,
-                    in: RoundedRectangle(cornerRadius: Self.composerRadius, style: .continuous))
-        // The ring says which surface is taking the typing; unfocused it draws a hairline so the
-        // composer keeps a defined edge.
-        .overlay(RoundedRectangle(cornerRadius: Self.composerRadius, style: .continuous)
-            .strokeBorder(composerFocused ? StrandPalette.focusRing : StrandPalette.hairline,
-                          lineWidth: 1))
-    }
-
-    // MARK: - K4: Voice input (iOS only)
-
-    #if os(iOS)
-    /// Mic button: starts/stops on-device speech recognition. Disabled when the locale lacks
-    /// on-device support or permission is denied; tapping when permission is not yet determined
-    /// triggers the system prompt.
-    private var micButton: some View {
-        Button {
-            toggleVoice()
-        } label: {
-            Group {
-                if voiceInput.isRecording {
-                    Image(systemName: "stop.circle.fill")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(StrandPalette.statusCritical)
-                } else {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(canUseVoice ? StrandPalette.textSecondary : StrandPalette.textTertiary)
-                }
-            }
-            .frame(width: 36, height: 38)
-            .background(StrandPalette.surfaceInset,
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(StrandPalette.hairline, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .disabled(!micButtonEnabled)
-        .help(voiceInput.statusMessage ?? "Ask out loud")
-        .accessibilityLabel(voiceInput.isRecording ? "Stop voice input" : "Voice input")
-        .accessibilityHint(voiceInput.statusMessage ?? "Transcribes your question on-device")
-        .task {
-            // Pre-check on appear so the button reflects the right state without a tap.
-            if voiceInput.authorization == .notDetermined {
-                voiceInput.requestAuthorization { _ in }
-            }
-        }
-    }
-
-    /// Whether the mic button is tappable: not while sending, and only if voice is either
-    /// already usable or permission hasn't been asked yet (first tap triggers the prompt).
-    private var canUseVoice: Bool { voiceInput.canUseVoice }
-    private var micButtonEnabled: Bool {
-        !coach.sending && (canUseVoice || voiceInput.authorization == .notDetermined)
-    }
-
-    private func toggleVoice() {
-        if voiceInput.isRecording {
-            voiceInput.stopTranscribing { finalText in
-                let trimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    // Append to the draft (not replace) so a user can speak into existing text.
-                    draft = draft.isEmpty ? trimmed : "\(draft) \(trimmed)"
-                }
-            }
-        } else {
-            // First tap with undetermined permission triggers the system prompt; if granted,
-            // start transcribing immediately on the next tap. If already authorized, start now.
-            if voiceInput.authorization == .notDetermined {
-                voiceInput.requestAuthorization { state in
-                    if state == .authorized {
-                        voiceInput.startTranscribing { partial in
-                            draft = partial
-                        }
-                    }
-                }
-            } else {
-                voiceInput.startTranscribing { partial in
-                    draft = partial
-                }
-            }
-        }
-    }
-    #endif
-
     private var privacyFootnote: some View {
         Label {
             Text(coach.provider == .custom
@@ -1400,7 +1173,7 @@ struct CoachView: View {
     private func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !coach.sending else { return }
-        draft = ""
+        composerReset &+= 1
         composerFocused = false
         Task { await coach.send(trimmed) }
     }
@@ -1429,46 +1202,7 @@ struct CoachView: View {
         }
     }
 
-    /// Jump the transcript to its newest turn.
-    ///
-    /// `animated: false` for the first pass — animating a jump the user did not ask for reads as the screen
-    /// scrolling away from them, and on open there is nothing to animate FROM.
-    /// The dump, written to a temporary file so `ShareLink` offers it as a FILE rather than pasting a wall
-    /// of JSON into a message. Rebuilt on access: the proposals it carries live only in memory, so a cached
-    /// URL would hand over a snapshot from before the thing the user is trying to report.
-    /// Write the conversation to a temporary file and return its URL.
-    ///
-    /// A FUNCTION, not a computed property, and the difference was a serious performance bug. As
-    /// `coachDumpFile` it was read by the `ShareLink` in the header menu — which is in the view body — so
-    /// every body evaluation serialised the ENTIRE transcript to JSON and wrote it to disk. Body
-    /// evaluations happen on every keystroke, because `draft` is `@State` here. Typing a sentence into a
-    /// long conversation wrote the whole conversation to disk once per character, on the main thread.
-    ///
-    /// That is the bulk of the sluggishness, and it explains the two things that looked mysterious: it
-    /// got worse as the conversation grew, and a relaunch "fixed" it because the transcript came back
-    /// shorter than it had been.
-    ///
-    /// `ShareLink` now takes the URL produced once when the menu is built, rather than a property it
-    /// re-reads. The file is still written eagerly — `ShareLink` needs a real URL at construction — but
-    /// only when the menu actually appears.
-    private func writeCoachDump() -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(CoachDump.filename())
-        let json = CoachDump.json(messages: coach.messages,
-                                  provider: coach.provider.rawValue,
-                                  model: coach.model,
-                                  dataConsent: coach.dataConsent,
-                                  onDeviceSignals: coach.includeOnDeviceSignals,
-                                  hasCustomPrompt: coach.hasCustomSystemPrompt,
-                                  customPromptMissesFoodProtocol: coach.customPromptMissesFoodProtocol,
-                                  errorText: coach.errorText,
-                                  isSending: coach.sending)
-        // A failed encode still produces a file, carrying the reason. An empty share sheet would say
-        // nothing, and the reason — a non-finite number reaching a macro field — is itself the bug.
-        try? (json ?? "{\"error\":\"could not encode the conversation\"}")
-            .write(to: url, atomically: true, encoding: .utf8)
-        return url
-    }
-
+    /// Jump the transcript to its newest turn; opening uses an unanimated jump.
     private func scrollToEnd(_ proxy: ScrollViewProxy, animated: Bool = true) {
         let jump = {
             if coach.sending {

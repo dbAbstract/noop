@@ -557,6 +557,19 @@ Coach food history now retains each row's stored `day` for occurrences and daily
 is the time an entry was confirmed and can be today for a meal backfilled to yesterday; deriving the
 meal's day from it incorrectly moved backfills into today's Coach context. Android owes that distinction.
 
+## Coach interaction performance (Apple-only)
+
+The Apple composer owns draft and voice state, with coalesced preference writes and immediate flushes
+on send, disappearance and backgrounding. The transcript observes a Boolean jump-button threshold
+rather than updating screen state with each scroll position. Conversation export now uses a deferred
+`FileRepresentation` and an immutable Sendable snapshot; a separate actor encodes and writes the file
+when sharing requests it. This removes eager UI-thread export work and stale proposal states in cached
+exports. No stored values, algorithms or schemas changed; Android owes no data twin for this UI work.
+
+Parsed Coach Markdown is retained in a bounded cache across lazy-row recreation and tab transitions.
+Initial transcript scrolling runs once per screen lifetime. Streamed UI updates are coalesced to 80 ms;
+the complete final response is always published. These are Apple rendering changes, with no data twin.
+
 ## Stable food-history references
 
 History-only Coach references now use canonical FNV-1a over UTF-16 code units of normalized name,
