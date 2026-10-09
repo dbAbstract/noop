@@ -96,8 +96,7 @@ final class FoodWeekDigestTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
-    /// One-off keys come from a SORTED name set, so adding a new food cannot renumber the others and
-    /// change the prompt for days that did not change.
+    /// Adding an alphabetically earlier food must not change an existing reference.
     func testOneOffKeysDependOnTheSetNotTheOrder() {
         let apple = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Apple",
                                     portion: 1, macros: m(80), meal: "snack")
@@ -106,8 +105,9 @@ final class FoodWeekDigestTests: XCTestCase {
         let forward = FoodWeekDigest.keys(for: [apple, zucchini])
         let backward = FoodWeekDigest.keys(for: [zucchini, apple])
         XCTAssertEqual(forward, backward)
-        XCTAssertEqual(forward["name:apple"], "o1")
-        XCTAssertEqual(forward["name:zucchini"], "o2")
+        let original = FoodWeekDigest.keys(for: [zucchini])
+        XCTAssertEqual(FoodWeekDigest.key(for: zucchini, in: original),
+                       FoodWeekDigest.key(for: zucchini, in: forward))
     }
 
     /// Case and spacing differences are the same food, or the week sprouts phantom duplicates.
@@ -175,7 +175,7 @@ final class FoodWeekDigestTests: XCTestCase {
         let historicalMeal = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Karahi",
             portion: 0.6, macros: m(1260, 87, 72, 57))
         let references = FoodWeekDigest.foodReferences(entries: [historicalMeal])
-        let cook = try XCTUnwrap(references["o1"])
+        let cook = try XCTUnwrap(references.values.first)
         XCTAssertEqual(cook.macros.kcal, 2100, accuracy: 0.000001)
         XCTAssertEqual(cook.macros.protein, 145, accuracy: 0.000001)
     }
@@ -184,13 +184,34 @@ final class FoodWeekDigestTests: XCTestCase {
         XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [karahi(daysAgo: 1, portion: 0.6)]).isEmpty)
     }
 
-    func testConflictingHistorySnapshotsAreNotLoggableByOneKey() {
+    func testDifferentMacrosWithTheSameNameHaveDistinctLoggableReferences() {
         let a = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Curry",
             portion: 1, macros: m(500))
         let b = WeekEntryDigest(daysAgo: 2, itemId: nil, batchId: nil, name: "Curry",
             portion: 1, macros: m(900))
-        XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [a, b]).isEmpty)
-        XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [b, a]).isEmpty)
+        let references = FoodWeekDigest.foodReferences(entries: [a, b])
+        XCTAssertEqual(references.count, 2)
+        XCTAssertEqual(Set(references.values.map { $0.macros.kcal }), [500, 900])
+        XCTAssertEqual(references, FoodWeekDigest.foodReferences(entries: [b, a]))
+        XCTAssertEqual(FoodWeekDigest.block(entries: [a, b]), FoodWeekDigest.block(entries: [b, a]))
+    }
+
+    func testOldNumberedHistoryKeysAreNeverAliasesForANewFood() {
+        let food = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Butter",
+            portion: 1, macros: m(74, 0, 0, 8))
+        let references = FoodWeekDigest.foodReferences(entries: [food])
+        XCTAssertNil(references["o4"])
+        XCTAssertEqual(references.count, 1)
+        XCTAssertEqual(references.keys.first?.count, 17)
+    }
+
+    func testPortionScalingDoesNotChangeAHistoryReference() {
+        let a = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Karahi",
+            portion: 0.6, macros: m(1260, 87, 72, 57))
+        let b = WeekEntryDigest(daysAgo: 0, itemId: nil, batchId: nil, name: "karahi  ",
+            portion: 0.25, macros: m(525, 36.25, 30, 23.75))
+        XCTAssertEqual(FoodWeekDigest.keys(for: [a]).values.first, FoodWeekDigest.keys(for: [b]).values.first)
+        XCTAssertEqual(FoodWeekDigest.foodReferences(entries: [a, b]).count, 1)
     }
 
     // MARK: - Open cooks

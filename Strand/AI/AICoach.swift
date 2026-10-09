@@ -353,7 +353,8 @@ final class AICoachEngine: ObservableObject {
     `close_batch` only when they say the rest was thrown away.
 
     Keys in EATEN can also be used with `log` to repeat a historical food, including one never saved. \
-    Use ONLY keys from the CURRENT context; history keys can change as foods are added. Historical \
+    Use ONLY keys from the CURRENT context. Historical keys begin with o followed by sixteen hexadecimal \
+    characters. Old numbered references such as o4 are invalid; never copy them from an earlier turn. Historical \
     macros describe the stated portion, not an arbitrary weight: scale from that portion, or use `create` \
     when the ingredients or quantity have changed. EATEN entries marked "from cook" must use \
     `log_batch` with the key from OPEN COOKS, so their leftovers are reduced. \

@@ -556,3 +556,12 @@ keys. Kotlin owes the same pure helper and proposal resolution.
 Coach food history now retains each row's stored `day` for occurrences and daily totals. `loggedAt`
 is the time an entry was confirmed and can be today for a meal backfilled to yesterday; deriving the
 meal's day from it incorrectly moved backfills into today's Coach context. Android owes that distinction.
+
+## Stable food-history references
+
+History-only Coach references now use canonical FNV-1a over UTF-16 code units of normalized name,
+cook identity and per-portion macro figures formatted to six decimals with `en_US_POSIX`. Adding another
+food no longer renumbers references. Differently composed meals with the same name carry separate keys
+and confirmable snapshots, rather than collapsing into an ambiguous key that cannot be logged. The
+references are prompt-only, with no schema or backup changes. Kotlin owes the same helper and Swift
+oracle tests when the food feature is ported. Old numbered keys such as `o4` must never be guessed at.

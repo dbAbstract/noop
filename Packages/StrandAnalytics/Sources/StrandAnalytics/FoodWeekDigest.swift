@@ -18,8 +18,8 @@ import Foundation
 //
 // DETERMINISM IS A REQUIREMENT, NOT A NICETY. Identical input must produce an identical block: a prompt
 // that reshuffles between turns defeats prompt caching on every provider that offers it, and makes a bad
-// reply impossible to reproduce. Entries with no id — the one-off logs — are therefore keyed by SORTED
-// normalised name rather than by encounter order.
+// reply impossible to reproduce. Entries with no id use stable references derived from normalized names
+// and per-portion nutrition, so distinct snapshots remain loggable without renumbering other foods.
 //
 // Pure. Kotlin-twinnable.
 
@@ -82,53 +82,56 @@ public enum FoodWeekDigest {
 
     // MARK: - Keys
 
-    /// The key for a one-off food with no id, derived from its name.
-    ///
-    /// Sequential (`o1`, `o2`, …) over a SORTED set of normalised names, so the same week always produces
-    /// the same keys. Keying by encounter order would renumber everything the moment a new food was eaten
-    /// mid-week, which changes the prompt for days that did not change.
+    /// Normalize names so spelling case and incidental whitespace do not create duplicate references.
     static func normalisedName(_ raw: String) -> String {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
+            .lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
-    /// Assign one key per distinct food across the week.
-    ///
-    /// Library foods reuse `FoodLibraryDigest.handle`, so a key the model sees here is the SAME key it
-    /// sees in the saved-foods block and can quote back in a `log` action. A separate numbering would
-    /// have meant two vocabularies for one food.
+    /// A history reference describes one macro snapshot, not every meal that happens to share its name.
+    /// Includes cook identity so a fresh cook cannot inherit another cook's leftover reference.
+    static func identity(for entry: WeekEntryDigest) -> String {
+        let unit = entry.portion.isFinite && entry.portion > 0 ? entry.portion : 1
+        let m = entry.macros
+        let numbers = [m.kcal, m.protein, m.carbs, m.fat, m.fiber].map {
+            String(format: "%.6f", locale: Locale(identifier: "en_US_POSIX"), $0 / unit)
+        }
+        return ([normalisedName(entry.name), entry.batchId ?? ""] + numbers).joined(separator: "\u{1f}")
+    }
+
+    /// Canonical FNV-1a over UTF-16 code units. It is deterministic across launches and platforms.
+    static func historyHandle(_ identity: String) -> String {
+        var hash: UInt64 = 14695981039346656037
+        for unit in identity.utf16 { hash = (hash ^ UInt64(unit)) &* 1099511628211 }
+        return "o" + String(format: "%016llx", hash)
+    }
+
+    /// Library keys retain their established ID scheme; history-only keys never depend on list position.
     public static func keys(for entries: [WeekEntryDigest]) -> [String: String] {
         var out: [String: String] = [:]
-        for e in entries where e.itemId != nil {
-            let id = e.itemId!
-            out[id] = FoodLibraryDigest.handle(for: id)
-        }
-        // One-offs: sorted, then numbered, so the mapping is a function of the SET not the order.
-        let oneOffNames = Set(entries.filter { $0.itemId == nil }.map { normalisedName($0.name) })
-        for (i, name) in oneOffNames.sorted().enumerated() {
-            out["name:" + name] = "o\(i + 1)"
+        for entry in entries {
+            if let id = entry.itemId { out[id] = FoodLibraryDigest.handle(for: id) }
+            else {
+                let identity = identity(for: entry)
+                out["history:" + identity] = historyHandle(identity)
+            }
         }
         return out
     }
 
-    /// The key an entry resolves to.
     static func key(for entry: WeekEntryDigest, in keys: [String: String]) -> String? {
         if let id = entry.itemId { return keys[id] }
-        return keys["name:" + normalisedName(entry.name)]
+        return keys["history:" + identity(for: entry)]
     }
 
-    /// The same per-portion snapshot the context describes, for confirming a repeat of a one-off food.
-    /// Conflicting snapshots for one key are refused rather than choosing arbitrary macros.
+    /// Per-portion snapshots for confirmation. Hash collisions and conflicting library snapshots fail closed.
     public static func foodReferences(entries: [WeekEntryDigest]) -> [String: FoodDigestEntry] {
         let keyMap = keys(for: entries)
         let groups = Dictionary(grouping: entries) { key(for: $0, in: keyMap) ?? "" }
         var result: [String: FoodDigestEntry] = [:]
         for (handle, group) in groups where !handle.isEmpty {
-            // A cook must go through log_batch so confirming it also reduces its leftovers.
             guard group.allSatisfy({ $0.batchId == nil }) else { continue }
-            let snapshots = group.compactMap { entry -> FoodDigestEntry? in
+            let snapshots = group.sorted(by: occurrenceOrder).compactMap { entry -> FoodDigestEntry? in
                 guard entry.portion.isFinite, entry.portion > 0 else { return nil }
                 let unit = entry.portion
                 return FoodDigestEntry(id: handle, name: entry.name, servingLabel: "1 portion",
@@ -144,7 +147,6 @@ public enum FoodWeekDigest {
     }
 
     private static func equivalentMacros(_ a: MacroTotals, _ b: MacroTotals) -> Bool {
-        // Undoing portion scaling can differ by floating-point roundoff across otherwise identical eats.
         zip([a.kcal, a.protein, a.carbs, a.fat, a.fiber],
             [b.kcal, b.protein, b.carbs, b.fat, b.fiber]).allSatisfy {
                 $0.isFinite && $1.isFinite && abs($0 - $1) < 0.000001
@@ -169,7 +171,7 @@ public enum FoodWeekDigest {
         // One descriptor per distinct food, in key order so the list is stable.
         var described: [String: (name: String, macros: MacroTotals, portion: Double,
                                  isSaved: Bool, batchId: String?)] = [:]
-        for e in entries {
+        for e in entries.sorted(by: occurrenceOrder) {
             guard let k = key(for: e, in: keyMap) else { continue }
             if described[k] == nil {
                 let saved = e.itemId.map { savedFoodIds.contains($0) } ?? false

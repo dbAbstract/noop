@@ -16,7 +16,11 @@ final class CoachHistoricalFoodTests: XCTestCase {
                 portion: 1, macros: eggs)
         ]
         let references = FoodWeekDigest.foodReferences(entries: history)
-        let reply = #"{"noop_food_action":{"actions":[{"action":"log","itemId":"o1","portion":1,"day":"yesterday"},{"action":"log","itemId":"o2","portion":1,"day":"yesterday"}]}}"#
+        let butterKey = try XCTUnwrap(references.first { $0.value.name == "Butter (10g)" }?.key)
+        let eggsKey = try XCTUnwrap(references.first { $0.value.name == "Eggs (large, 2)" }?.key)
+        let reply = """
+        {"noop_food_action":{"actions":[{"action":"log","itemId":"\(butterKey)","portion":1,"day":"yesterday"},{"action":"log","itemId":"\(eggsKey)","portion":1,"day":"yesterday"}]}}
+        """
         let requests = try FoodActionParse.actions(fromReply: reply).get()
         for (request, expected) in zip(requests, [butter, eggs]) {
             let proposal = try XCTUnwrap(FoodProposal.resolve(request, library: [], recipeIds: [],
@@ -27,6 +31,30 @@ final class CoachHistoricalFoodTests: XCTestCase {
             XCTAssertEqual(macros, expected)
             XCTAssertEqual(portion, 1)
             XCTAssertEqual(proposal.state, .pending)
+        }
+    }
+
+    @MainActor
+    func testEggsAndConflictingButterSnapshotsRemainLoggable() throws {
+        let entries = [
+            WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Butter",
+                portion: 1, macros: butter),
+            WeekEntryDigest(daysAgo: 2, itemId: nil, batchId: nil, name: "Butter",
+                portion: 1, macros: MacroTotals(kcal: 148, protein: 0, carbs: 0, fat: 16, fiber: 0)),
+            WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Eggs",
+                portion: 1, macros: eggs)
+        ]
+        let references = FoodWeekDigest.foodReferences(entries: entries)
+        XCTAssertEqual(references.count, 3)
+        for (key, snapshot) in references {
+            let proposal = try XCTUnwrap(FoodProposal.resolve(
+                FoodActionRequest(action: .log(itemId: key, portion: 1)),
+                library: [], recipeIds: [], defaultServingLabel: "1 serving",
+                lastKnownWeightKg: nil, recentFoods: references))
+            guard case .create(_, _, let macros, _) = proposal.kind else {
+                return XCTFail("Each eggs/butter snapshot must resolve")
+            }
+            XCTAssertEqual(macros, snapshot.macros)
         }
     }
 
@@ -55,10 +83,12 @@ final class CoachHistoricalFoodTests: XCTestCase {
                 carbs: 0, fat: 9, fiber: 0, loggedAt: at)
         ])
         let context = await coach.foodContextBlock()
-        XCTAssertTrue(context.text.contains("o1 | Butter (10g)"))
-        XCTAssertTrue(context.text.contains("o2 | Eggs (large, 2)"))
-        let proposals = await coach.resolveProposals(in:
-            #"{"noop_food_action":{"action":"log","itemId":"o2","portion":0.5,"day":"yesterday","meal":"breakfast"}}"#, recentFoods: context.references)
+        let eggsKey = try XCTUnwrap(context.references.first { $0.value.name == "Eggs (large, 2)" }?.key)
+        XCTAssertTrue(context.text.contains("\(eggsKey) | Eggs (large, 2)"))
+        let reply = """
+        {"noop_food_action":{"action":"log","itemId":"\(eggsKey)","portion":0.5,"day":"yesterday","meal":"breakfast"}}
+        """
+        let proposals = await coach.resolveProposals(in: reply, recentFoods: context.references)
         let proposal = try XCTUnwrap(proposals.first)
         XCTAssertEqual(proposal.dayKey, key)
         XCTAssertEqual(proposal.loggedMacros?.kcal, 63)
@@ -76,7 +106,7 @@ final class CoachHistoricalFoodTests: XCTestCase {
         XCTAssertTrue(library.isEmpty)
         let updatedContext = await coach.foodContextBlock()
         XCTAssertTrue(updatedContext.text.contains("-1d 263 kcal/18P"), updatedContext.text)
-        XCTAssertFalse(updatedContext.text.contains("today: o2"),
+        XCTAssertFalse(updatedContext.text.contains("today: \(eggsKey)"),
             "Confirming yesterday's food today must not move it into today's context")
     }
 
