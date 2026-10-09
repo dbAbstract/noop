@@ -348,7 +348,7 @@ private extension FoodItem {
     }
 }
 
-// Internal rather than private: `Repository.foodEntries(from:to:)` and the cook reads in
+// Internal rather than private: `Repository.foodEntriesWithDays(from:to:)` and the cook reads in
 // `Strand/Data/FoodBatchStore.swift` need the same bridge, and a second copy of it is how the row and the
 // model drift apart. Left-private, the call resolved to `Decodable.init(from:)` instead and failed with a
 // label error that says nothing about the real cause.

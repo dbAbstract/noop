@@ -227,6 +227,7 @@ extension FoodProposal {
                         defaultServingLabel: String,
                         lastKnownWeightKg: Double?,
                         cooks: [FoodCook] = [],
+                        recentFoods: [String: FoodDigestEntry] = [:],
                         now: Date = Date(),
                         todayKey: String? = nil) -> FoodProposal? {
         // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
@@ -267,8 +268,14 @@ extension FoodProposal {
 
         switch request.action {
         case .log(let handle, let portion):
-            guard let found = item(for: handle) else { return proposal(.unresolved(handle: handle)) }
-            return proposal(.log(item: found, portion: portion))
+            if let found = item(for: handle) {
+                return proposal(.log(item: found, portion: portion))
+            }
+            // Historical keys are exact, request-scoped references, never fuzzy library prefixes.
+            let key = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let past = recentFoods[key] else { return proposal(.unresolved(handle: handle)) }
+            return proposal(.create(name: past.name, servingLabel: past.servingLabel,
+                                    macros: past.macros, portion: portion))
 
         case .create(let name, let serving, let macros, let portion):
             return proposal(.create(name: name,

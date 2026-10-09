@@ -555,3 +555,16 @@ extension Repository {
         return values.reduce(0, +) / Double(values.count)
     }
 }
+
+// MARK: - Coach conversation boundary
+
+extension Repository {
+    /// Read both sources: yesterday's imported night must not hide today's newly computed night.
+    func coachSleepWindows(now: Date = Date()) async -> [(start: Int, end: Int)] {
+        let to = Int(now.timeIntervalSince1970)
+        let from = to - 48 * 3_600
+        let imported = await sleepSessions(from: from, to: to)
+        let computed = await computedSleepSessions(from: from, to: to)
+        return (imported + computed).map { (start: $0.startTs, end: $0.endTs) }
+    }
+}

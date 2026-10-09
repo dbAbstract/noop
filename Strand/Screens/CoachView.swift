@@ -55,6 +55,7 @@ private struct CoachEndSentinelKey: PreferenceKey {
 /// contract): `hasKey`, `provider` / `provider.modelOptions`, `model`, `messages`,
 /// `sending`, `errorText`, `setKey(_:)`, `clearKey()`, and `send(_:)`.
 struct CoachView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var coach: AICoachEngine
     /// K8: used by "Save to Journal" — saves the coach advice as a journal entry with the text
     /// in the notes field, so it appears alongside other journal entries in Insights.
@@ -234,7 +235,7 @@ struct CoachView: View {
         // transcript genuinely empty.
         .task {
             await coach.loadPersistedMessagesIfNeeded()
-            coach.retireStaleConversationIfNeeded()
+            await coach.retireStaleConversationIfNeeded()
             // Gated on the transcript BEFORE consuming. `consumeStoredBrief()` clears the unconsumed
             // flag, and `surfaceScheduledBrief` then drops the text if a transcript exists, so a brief
             // that arrived on a day with a conversation already open was consumed and thrown away, gone
@@ -249,6 +250,13 @@ struct CoachView: View {
             // Seed the export once the restored transcript is in place, so the first use of the menu
             // shares the conversation rather than an empty placeholder.
             dumpURL = writeCoachDump()
+        }
+        .task(id: repo.refreshSeq) {
+            await coach.retireStaleConversationIfNeeded()
+        }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await coach.retireStaleConversationIfNeeded()
         }
         // #1862: a question handed over by the Today launcher sheet. Cleared BEFORE sending so a view
         // rebuild mid-flight cannot send it twice, and gated on `isConfigured` so an unconfigured handoff

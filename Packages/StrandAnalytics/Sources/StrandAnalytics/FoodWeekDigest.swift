@@ -119,6 +119,38 @@ public enum FoodWeekDigest {
         return keys["name:" + normalisedName(entry.name)]
     }
 
+    /// The same per-portion snapshot the context describes, for confirming a repeat of a one-off food.
+    /// Conflicting snapshots for one key are refused rather than choosing arbitrary macros.
+    public static func foodReferences(entries: [WeekEntryDigest]) -> [String: FoodDigestEntry] {
+        let keyMap = keys(for: entries)
+        let groups = Dictionary(grouping: entries) { key(for: $0, in: keyMap) ?? "" }
+        var result: [String: FoodDigestEntry] = [:]
+        for (handle, group) in groups where !handle.isEmpty {
+            // A cook must go through log_batch so confirming it also reduces its leftovers.
+            guard group.allSatisfy({ $0.batchId == nil }) else { continue }
+            let snapshots = group.compactMap { entry -> FoodDigestEntry? in
+                guard entry.portion.isFinite, entry.portion > 0 else { return nil }
+                let unit = entry.portion
+                return FoodDigestEntry(id: handle, name: entry.name, servingLabel: "1 portion",
+                    macros: MacroTotals(kcal: entry.macros.kcal / unit,
+                        protein: entry.macros.protein / unit, carbs: entry.macros.carbs / unit,
+                        fat: entry.macros.fat / unit, fiber: entry.macros.fiber / unit))
+            }
+            guard let first = snapshots.first, snapshots.count == group.count,
+                  snapshots.allSatisfy({ equivalentMacros($0.macros, first.macros) }) else { continue }
+            result[handle] = first
+        }
+        return result
+    }
+
+    private static func equivalentMacros(_ a: MacroTotals, _ b: MacroTotals) -> Bool {
+        // Undoing portion scaling can differ by floating-point roundoff across otherwise identical eats.
+        zip([a.kcal, a.protein, a.carbs, a.fat, a.fiber],
+            [b.kcal, b.protein, b.carbs, b.fat, b.fiber]).allSatisfy {
+                $0.isFinite && $1.isFinite && abs($0 - $1) < 0.000001
+            }
+    }
+
     // MARK: - The block
 
     /// A week of eating, keyed.
@@ -147,7 +179,7 @@ public enum FoodWeekDigest {
 
         var lines: [String] = []
         lines.append("EATEN (last \(days) days). Each food is listed ONCE below; the occurrences then "
-                     + "reference it by key. Quote a key exactly when logging one of these again.")
+                     + "reference it by key. Quote a CURRENT key exactly with log to repeat a food; edit only SAVED FOODS.")
 
         let shownKeys = described.keys.sorted().prefix(maxFoods)
         let dropped = described.count - shownKeys.count

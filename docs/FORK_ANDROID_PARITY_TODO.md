@@ -537,3 +537,22 @@ The rest is Apple-only UI: the cook/leftover proposal cards and the open-cooks s
 6. The reminder and the AI estimation path — both independent of everything above, and both safe to defer
    since neither changes a stored number.
 7. Flip the oracle entries and delete the corresponding rows from this file as each lands.
+
+## Coach wake rollover and historical food references
+
+Apple Coach now retires both restored and live transcripts after a completed sleep window of at least
+`DietDayBoundary.minimumNightHours`, rather than at midnight. Both imported and computed windows are
+read so an older import cannot hide a newly synced night. Rechecks run on opening, foreground, repository
+refresh and send. No recorded night falls back to a 36-hour inactive gap. Kotlin owes
+`CoachConversationBoundary` with oracle cases and the same lifecycle wiring; no schema changed.
+
+`FoodWeekDigest.foodReferences` maps the current context's keys to historical per-portion snapshots.
+A `log` against a history-only key now becomes a confirmable one-off food, without saving it to the
+library automatically. Unknown keys, conflicting snapshots and attempts to edit history are refused.
+Cook-linked history still requires `log_batch`, so confirming it reduces the cook's remainder.
+Resolution uses the context snapshot sent for that request, so a mid-request log cannot renumber its
+keys. Kotlin owes the same pure helper and proposal resolution.
+
+Coach food history now retains each row's stored `day` for occurrences and daily totals. `loggedAt`
+is the time an entry was confirmed and can be today for a meal backfilled to yesterday; deriving the
+meal's day from it incorrectly moved backfills into today's Coach context. Android owes that distinction.

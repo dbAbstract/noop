@@ -470,7 +470,7 @@ struct CoachSettingsView: View {
             defer { briefGenerating = false }
             let text = await CoachBriefScheduler.generateNow { await coach.generateBrief() }
             if let text {
-                coach.appendGeneratedBrief(text)
+                await coach.appendGeneratedBrief(text)
             } else {
                 briefStatus = "Couldn't generate a brief right now — check your key and data access."
             }

@@ -171,6 +171,28 @@ final class FoodWeekDigestTests: XCTestCase {
         XCTAssertTrue(block.contains("more foods this week, not listed"), block)
     }
 
+    func testHistoryReferencesUseWholePortionMacros() throws {
+        let historicalMeal = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Karahi",
+            portion: 0.6, macros: m(1260, 87, 72, 57))
+        let references = FoodWeekDigest.foodReferences(entries: [historicalMeal])
+        let cook = try XCTUnwrap(references["o1"])
+        XCTAssertEqual(cook.macros.kcal, 2100, accuracy: 0.000001)
+        XCTAssertEqual(cook.macros.protein, 145, accuracy: 0.000001)
+    }
+
+    func testCookHistoryCannotBecomeAnUnlinkedRepeat() {
+        XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [karahi(daysAgo: 1, portion: 0.6)]).isEmpty)
+    }
+
+    func testConflictingHistorySnapshotsAreNotLoggableByOneKey() {
+        let a = WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Curry",
+            portion: 1, macros: m(500))
+        let b = WeekEntryDigest(daysAgo: 2, itemId: nil, batchId: nil, name: "Curry",
+            portion: 1, macros: m(900))
+        XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [a, b]).isEmpty)
+        XCTAssertTrue(FoodWeekDigest.foodReferences(entries: [b, a]).isEmpty)
+    }
+
     // MARK: - Open cooks
 
     func testOpenCooksBlockCarriesRemainingNotWhole() {

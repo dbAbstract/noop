@@ -103,7 +103,7 @@ extension Repository {
     }
 
     /// Entries across the coach's window, newest day last.
-    func foodEntries(from: String, to: String) async -> [FoodEntry] {
+    func foodEntriesWithDays(from: String, to: String) async -> [(day: String, entry: FoodEntry)] {
         guard let store = await storeHandle() else { return [] }
         let rows = (try? await store.foodEntries(deviceId: FoodLogStore.sourceId,
                                                  from: from, to: to)) ?? []
@@ -116,7 +116,7 @@ extension Repository {
         return rows.map { row in
             var entry = FoodEntry(row: row)
             if let id = entry.itemId, let current = nameById[id] { entry.nameSnapshot = current }
-            return entry
+            return (day: row.day, entry: entry)
         }
     }
 }

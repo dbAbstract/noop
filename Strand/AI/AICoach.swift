@@ -202,9 +202,6 @@ final class AICoachEngine: ObservableObject {
     // Published state the UI binds to.
     @Published var messages: [ChatMessage] = []
 
-    /// Local day the current transcript was last written on; nil while it is empty. Drives the day
-    /// boundary in `send` — see `isStaleConversation`. Kotlin twin: `CoachViewModel.conversationDay`.
-    private var conversationDay: Int?
     @Published var sending = false
     @Published var errorText: String?
 
@@ -325,12 +322,12 @@ final class AICoachEngine: ObservableObject {
     bullet or numbered lists for plans, ### headings only when structure genuinely helps, and a \
     small table only for a week-ahead plan. No code blocks.
 
-    LOGGING FOOD AND WEIGHT. When SAVED FOODS appears above, the user logs by TELLING YOU, and you are \
+    LOGGING FOOD AND WEIGHT. When food context appears above, the user logs by TELLING YOU, and you are \
     the main way they do it. Take the work off them: read what they ate, work out the macros, and hand back \
     something to confirm. End the reply with one action block and nothing after it:
     {"noop_food_action": {"actions": [ … ]}}
     Each entry is one of:
-    {"action": "log",    "itemId": "<id from SAVED FOODS>", "portion": 1, "day": "today"}
+    {"action": "log",    "itemId": "<id from SAVED FOODS or current EATEN block>", "portion": 1, "day": "today"}
     {"action": "create", "name": "...", "servingLabel": "...", "kcal": 0, "protein": 0, "carbs": 0, \
     "fat": 0, "fiber": 0, "portion": 1, "day": "today"}
     {"action": "save",   "name": "...", "servingLabel": "...", "kcal": 0, "protein": 0, "carbs": 0, "fat": 0}
@@ -354,6 +351,14 @@ final class AICoachEngine: ObservableObject {
     more of one. For "I finished it" / "I had the rest", send "portion": null — the app reads the actual \
     remainder at the moment they confirm, which is more accurate than any fraction you could work out. Use \
     `close_batch` only when they say the rest was thrown away.
+
+    Keys in EATEN can also be used with `log` to repeat a historical food, including one never saved. \
+    Use ONLY keys from the CURRENT context; history keys can change as foods are added. Historical \
+    macros describe the stated portion, not an arbitrary weight: scale from that portion, or use `create` \
+    when the ingredients or quantity have changed. EATEN entries marked "from cook" must use \
+    `log_batch` with the key from OPEN COOKS, so their leftovers are reduced. \
+    Only SAVED FOODS can be edited with `edit`. \
+    A proposal is not logged until the user confirms its card. Do not claim it has already been saved.
 
     WHAT YOU CAN SEE about their diet, when those blocks are present above: their saved foods, their \
     recipes and what each is made of, EVERYTHING THEY HAVE EATEN IN THE LAST SEVEN DAYS (each food listed \
@@ -612,7 +617,6 @@ final class AICoachEngine: ObservableObject {
         // left the whole conversation sitting behind it — including whatever the user had told a coach
         // they were in the middle of disconnecting from.
         messages = []
-        conversationDay = nil
         // The error belongs to the connection being retired, so it goes with it. Kotlin has cleared it
         // here since the method existed and this side never did: harmless while only the chat rendered
         // an error, and a visible defect the moment the setup card does too, because the card this
@@ -651,7 +655,6 @@ final class AICoachEngine: ObservableObject {
         // Kotlin empties the transcript when it does. Leaving it meant a "clear my key" on Apple removed
         // the credential and kept the conversation.
         messages = []
-        conversationDay = nil
         // The error belongs to the connection being retired, so it goes with it. Kotlin has cleared it
         // here since the method existed and this side never did: harmless while only the chat rendered
         // an error, and a visible defect the moment the setup card does too, because the card this
@@ -819,28 +822,20 @@ final class AICoachEngine: ObservableObject {
     /// Called from the Coach screen's `.task` (mirroring `startBriefIfNeeded`) rather than `init`,
     /// which is synchronous and runs for every screen the app builds, not just Coach. Best-effort: a
     /// store failure just leaves the transcript empty, matching pre-K2 behaviour — never crashes.
-    func loadPersistedMessagesIfNeeded() async {
+    func loadPersistedMessagesIfNeeded(now: Date = Date()) async {
         guard !didLoadPersistedMessages else { return }
         didLoadPersistedMessages = true
         guard messages.isEmpty, let store = await repo.storeHandle() else { return }
         guard let rows = try? await store.coachMessages(), !rows.isEmpty else { return }
-        // Recover the day this transcript was last written on FROM THE ROWS. `conversationDay` lives in
-        // memory, so a process restart brought it back nil, and `isStaleConversation(nil, ...)` is false
-        // by design (nothing sent yet is never stale), which meant a restored conversation from any
-        // previous day was never retired, by `send` or by anything else (#2087).
-        let newest = rows.map(\.createdAt).max() ?? 0
-        let lastDay = Self.localEpochDay(Date(timeIntervalSince1970: TimeInterval(newest)))
-        // Retire by NOT restoring. The next append replaces the stored rows wholesale, so nothing is
-        // deleted here and a transcript is never destroyed by merely opening the screen.
-        guard !Self.isStaleConversation(lastEpochDay: lastDay, todayEpochDay: Self.localEpochDay()) else {
-            return
-        }
+        let newest = rows.map(\.createdAt).max()
+        guard !CoachConversationBoundary.shouldRetire(
+            lastMessage: newest, now: Int(now.timeIntervalSince1970),
+            sleepWindows: await repo.coachSleepWindows(now: now)) else { return }
         messages = rows
             .sorted { $0.orderIndex < $1.orderIndex }
             .map { ChatMessage(id: UUID(uuidString: $0.id) ?? UUID(),
                                 role: ChatMessage.Role(rawValue: $0.role) ?? .user,
                                 text: $0.text, sentAt: $0.createdAt) }
-        conversationDay = lastDay
     }
 
     /// Replace the ENTIRE persisted conversation with the current in-memory `messages`. Called once
@@ -868,7 +863,6 @@ final class AICoachEngine: ObservableObject {
     /// persisted table. Fire-and-forget on the store side; the in-memory clear is immediate.
     func clearConversation() {
         messages = []
-        conversationDay = nil
         droppedSummary = nil      // K13: reset the summary cache on clear
         droppedSummaryKey = []
         Task { try? await repo.storeHandle()?.clearCoachMessages() }
@@ -880,19 +874,18 @@ final class AICoachEngine: ObservableObject {
     func surfaceScheduledBrief(_ text: String) {
         guard messages.isEmpty else { return }
         appendMessage(ChatMessage(role: .assistant, text: "Today's brief\n\n" + text))
-        conversationDay = Self.localEpochDay()
         persistMessages()
     }
 
-    /// Retire yesterday's in-memory chat when Coach is opened, before checking for today's
-    /// scheduled brief. A process kept alive overnight does not reload persisted messages, so the
-    /// one-time load check cannot clear that chat. Keep the stored rows until a new turn or brief
-    /// replaces them, as the existing restored-chat path does.
-    func retireStaleConversationIfNeeded() {
-        guard Self.isStaleConversation(lastEpochDay: conversationDay,
-                                       todayEpochDay: Self.localEpochDay()) else { return }
+    /// Recheck on opening, foregrounding, sync, and send: sleep may arrive after the first screen load.
+    func retireStaleConversationIfNeeded(now: Date = Date()) async {
+        guard !sending, let newest = messages.map(\.sentAt).max() else { return }
+        let windows = await repo.coachSleepWindows(now: now)
+        // A new turn or a clear during the read must not be erased by an older decision.
+        guard !sending, messages.map(\.sentAt).max() == newest,
+              CoachConversationBoundary.shouldRetire(lastMessage: newest,
+                  now: Int(now.timeIntervalSince1970), sleepWindows: windows) else { return }
         messages = []
-        conversationDay = nil
         droppedSummary = nil
         droppedSummaryKey = []
     }
@@ -900,10 +893,9 @@ final class AICoachEngine: ObservableObject {
     /// K5: append an explicitly-generated brief (the Coach settings "Generate now" button) as a new
     /// assistant message, unconditionally — unlike `surfaceScheduledBrief`, this always appends so a
     /// mid-conversation tap still shows the fresh brief.
-    func appendGeneratedBrief(_ text: String) {
-        retireStaleConversationIfNeeded()
+    func appendGeneratedBrief(_ text: String) async {
+        await retireStaleConversationIfNeeded()
         appendMessage(ChatMessage(role: .assistant, text: "Today's brief\n\n" + text))
-        conversationDay = Self.localEpochDay()
         persistMessages()
     }
 
@@ -926,8 +918,8 @@ final class AICoachEngine: ObservableObject {
         guard CoachBriefScheduler.coachMasterEnabled else { return }
         guard let key = resolvedKey else { errorText = AICoachError.noKey.errorDescription; return }
 
-        // A transcript from an earlier local day is retired before the new turn is appended (#1542,
-        // Kotlin twin merged first). `messages` outlives a night — the engine is held for the app's
+        // A transcript from before the latest night is retired before the new turn is appended (#1542,
+        // originally midnight-based). `messages` outlives a night — the engine is held for the app's
         // lifetime — so without this the coach answers TODAY's question inside YESTERDAY's
         // conversation. The DATA was never stale: buildFullContext() re-reads on every send. It is the
         // assistant's own earlier turns stating yesterday's figures, and the model staying consistent
@@ -935,8 +927,7 @@ final class AICoachEngine: ObservableObject {
         // fresh strap data.
         //
         // Placed AFTER the guards on purpose: a send that never happens must not wipe a transcript.
-        retireStaleConversationIfNeeded()
-        conversationDay = Self.localEpochDay()
+        await retireStaleConversationIfNeeded()
 
         errorText = nil
         let userTurn = ChatMessage(role: .user, text: trimmed)
@@ -951,7 +942,9 @@ final class AICoachEngine: ObservableObject {
         // full running history so follow-ups stay coherent; the context only needs to ride the
         // earliest user message.
         // Include the user's data ONLY with explicit consent; otherwise send a note instead of numbers.
-        let context = dataConsent ? await buildFullContext() : noConsentNote
+        let snapshot = dataConsent ? await buildFullContextSnapshot() : (text: noConsentNote, references: [:])
+        let context = snapshot.text
+        let foodReferences = snapshot.references
         // K13: if the conversation overflows the sliding window, summarize the dropped middle so
         // the model retains context continuity. Best-effort; failure degrades to the old gap.
         await summarizeDroppedMiddleIfNeeded(key: key)
@@ -990,7 +983,7 @@ final class AICoachEngine: ObservableObject {
             // The reply can be ALL block and no prose (a terse model that just emits the action), which
             // would otherwise render as an empty bubble above the card. `fallbackProposalNote` covers
             // that case so the turn always says something.
-            let proposals = await resolveProposals(in: accumulated)
+            let proposals = await resolveProposals(in: accumulated, recentFoods: foodReferences)
             let clean = FoodActionParse.strippingAction(from: accumulated)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
@@ -1256,6 +1249,11 @@ final class AICoachEngine: ObservableObject {
     /// Full data context = the metrics summary + recent workouts (+ an OPT-IN on-device-signals summary
     /// when the second consent is on). Used when the user has granted data access.
     func buildFullContext() async -> String {
+        (await buildFullContextSnapshot()).text
+    }
+
+    /// Keep the text and its history references together across suspension points and concurrent briefs.
+    private func buildFullContextSnapshot() async -> (text: String, references: [String: FoodDigestEntry]) {
         var ctx = buildContext()
         ctx += "\n\n" + (await recentWorkoutsBlock())
         // Derived stress: a single Baevsky Stress Index summary line over today's R-R, computed the same
@@ -1272,8 +1270,8 @@ final class AICoachEngine: ObservableObject {
         // rather than a switch of its own: a user who has not turned food logging on has no library to
         // describe, and a second toggle for a block that would be empty anyway is just a thing to find.
         let food = await foodContextBlock()
-        if !food.isEmpty { ctx += "\n\n" + food }
-        return ctx
+        if !food.text.isEmpty { ctx += "\n\n" + food.text }
+        return (ctx, food.references)
     }
 
     /// Parse a reply for a food action and resolve it against the CURRENT library.
@@ -1284,7 +1282,8 @@ final class AICoachEngine: ObservableObject {
     /// "unrecognised food" the user never did anything to deserve.
     ///
     /// nil for the ordinary conversational turn, which is most of them.
-    func resolveProposals(in reply: String) async -> [FoodProposal] {
+    func resolveProposals(in reply: String,
+                          recentFoods: [String: FoodDigestEntry]) async -> [FoodProposal] {
         guard case .success(let requests) = FoodActionParse.actions(fromReply: reply) else { return [] }
         let library = await repo.foodLibrary()
         let recipeIds = await repo.recipeItemIds()
@@ -1316,6 +1315,7 @@ final class AICoachEngine: ObservableObject {
                                                       defaultServingLabel: String(localized: "1 serving"),
                                                       lastKnownWeightKg: lastWeight,
                                                       cooks: cooks,
+                                                      recentFoods: recentFoods,
                                                       todayKey: dietToday) else { return nil }
             guard let key = resolved.dedupeKey, applied.contains(key) else { return resolved }
             return FoodProposal(kind: .duplicate(of: resolved.displayName),
@@ -1341,11 +1341,11 @@ final class AICoachEngine: ObservableObject {
     /// read. Recipes are marked, because a recipe is the one food whose macros the coach must not offer
     /// to edit directly — they come from its ingredients.
     ///
-    /// Returns "" when food logging is off or the library is empty, so the block never says "you have no
+    /// Returns empty text when food logging is off, so the block never says "you have no
     /// saved foods" — an absent statement and a stated absence are different claims, and the second one
     /// invites a model to insist the user has never eaten anything.
-    func foodContextBlock() async -> String {
-        guard UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) else { return "" }
+    func foodContextBlock() async -> (text: String, references: [String: FoodDigestEntry]) {
+        guard UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) else { return ("", [:]) }
 
         var blocks: [String] = []
         let library = FoodLibrary.sorted(await repo.foodLibrary())
@@ -1397,19 +1397,22 @@ final class AICoachEngine: ObservableObject {
         let weekStart = Repository.localDayKey(
             Calendar.current.date(byAdding: .day, value: -(FoodWeekDigest.days - 1),
                                   to: Date()) ?? Date())
-        let weekEntries = await repo.foodEntries(from: weekStart, to: today)
+        let weekEntries = await repo.foodEntriesWithDays(from: weekStart, to: today)
         let todayEpochDay = Repository.epochDay(dayKey: today) ?? Repository.epochDay(Date())
-        blocks.append(FoodWeekDigest.block(
-            entries: weekEntries.map { entry in
-                WeekEntryDigest(
-                    daysAgo: todayEpochDay - (Repository.epochDay(entry.loggedAt)),
-                    itemId: entry.itemId?.uuidString,
-                    batchId: entry.batchId?.uuidString,
-                    name: entry.nameSnapshot,
-                    portion: entry.portion,
-                    macros: entry.effectiveMacros,
-                    meal: entry.mealType?.rawValue)
-            },
+        let digestEntries = weekEntries.map { record in
+            let entry = record.entry
+            // A backfill's loggedAt is the confirmation time; its stored day is when the food was eaten.
+            return WeekEntryDigest(
+                daysAgo: todayEpochDay - (Repository.epochDay(dayKey: record.day) ?? todayEpochDay),
+                itemId: entry.itemId?.uuidString,
+                batchId: entry.batchId?.uuidString,
+                name: entry.nameSnapshot,
+                portion: entry.portion,
+                macros: entry.effectiveMacros,
+                meal: entry.mealType?.rawValue)
+        }
+        let references = FoodWeekDigest.foodReferences(entries: digestEntries)
+        blocks.append(FoodWeekDigest.block(entries: digestEntries,
             savedFoodIds: Set(library.map { $0.id.uuidString })))
 
         // WHAT IS STILL IN THE FRIDGE. Separate from the week above because it answers a different
@@ -1450,7 +1453,7 @@ final class AICoachEngine: ObservableObject {
         // entirely before, so the coach could not answer "am I losing" at all.
         blocks.append(await weightContextLine())
 
-        return blocks.filter { !$0.isEmpty }.joined(separator: "\n\n")
+        return (blocks.filter { !$0.isEmpty }.joined(separator: "\n\n"), references)
     }
 
     /// The body mass the macro targets are priced at.
@@ -1599,40 +1602,6 @@ final class AICoachEngine: ObservableObject {
             session: session,
             onDelta: onDelta
         )
-    }
-
-    /// Sliding window over the chat: the FIRST user turn (it carries the metrics context) plus the most
-    /// recent `maxHistoryMessages`, dropping the middle. Sending the whole growing history crowds out the
-    /// reply on small-context local servers (Ollama defaults to a 2048-token window, the Custom
-    /// provider's main use case) and balloons token cost/latency on cloud providers. (parity with Android)
-    /// True when a transcript last written on `lastEpochDay` should be retired before a question asked
-    /// on `todayEpochDay` — i.e. the conversation crossed into a new local day.
-    ///
-    /// STRICTLY forward (`>`, never `!=`): a clock that moves BACKWARDS — the user flying west, a
-    /// timezone change, an NTP correction — must not wipe a conversation they are in the middle of.
-    /// Only real elapsed days retire a transcript. A nil `lastEpochDay` (nothing sent yet) is never
-    /// stale. Kotlin twin: `CoachViewModel.isStaleConversation`.
-    ///
-    /// `nonisolated` because it is a pure function of its arguments. AICoachEngine is @MainActor, so
-    /// without this the rule inherits that isolation and cannot be called from a synchronous test —
-    /// which is exactly how the first attempt at this twin failed to compile. Isolating a function
-    /// that touches no state buys nothing and costs its testability.
-    nonisolated static func isStaleConversation(lastEpochDay: Int?, todayEpochDay: Int) -> Bool {
-        guard let lastEpochDay else { return false }
-        return todayEpochDay > lastEpochDay
-    }
-
-    /// Days since the epoch in the LOCAL calendar. Kotlin computes the same value with
-    /// `LocalDate.now().toEpochDay()`.
-    ///
-    /// Counted with calendar day arithmetic from `startOfDay`, not by dividing an interval by 86,400:
-    /// a day is not always 86,400 seconds (DST), and the rule only needs a value that increments
-    /// exactly once per local midnight and orders correctly. Injectable so the tests never depend on
-    /// the machine's clock or zone.
-    nonisolated static func localEpochDay(_ date: Date = Date(), calendar: Calendar = .current) -> Int {
-        let start = calendar.startOfDay(for: date)
-        let epoch = Date(timeIntervalSince1970: 0)
-        return calendar.dateComponents([.day], from: epoch, to: start).day ?? 0
     }
 
     ///
