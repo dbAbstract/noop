@@ -110,6 +110,7 @@ enum CoachDump {
             "kind": kindName(proposal.kind),
             "displayName": proposal.displayName,
         ]
+        out["roughGuess"] = proposal.roughGuess
         if let meal = proposal.meal { out["meal"] = meal.rawValue }
         // What it would actually have banked, which is the figure a reader needs to judge whether the
         // proposal was wrong — the per-serving macros alone do not say.

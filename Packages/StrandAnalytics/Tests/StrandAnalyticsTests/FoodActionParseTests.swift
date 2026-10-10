@@ -7,6 +7,20 @@ import XCTest
 /// containing braces must never be read as a proposal to log food. A missed action is visible (no card
 /// appears, the user rephrases); a spurious one writes to the series the whole diet is judged on.
 final class FoodActionParseTests: XCTestCase {
+    func testRoughGuessIsOptionalStrictBooleanAndIndependentPerAction() throws {
+        let reply = """
+        {"noop_food_action":{"actions":[
+          {"action":"log","itemId":"abcd","portion":1,"roughGuess":true},
+          {"action":"log","itemId":"abcd","portion":1,"roughGuess":false},
+          {"action":"log","itemId":"abcd","portion":1},
+          {"action":"log","itemId":"abcd","portion":1,"roughGuess":"true"},
+          {"action":"log","itemId":"abcd","portion":1,"roughGuess":1}
+        ]}}
+        """
+        let requests = try FoodActionParse.actions(fromReply: reply).get()
+        XCTAssertEqual(requests.map(\.roughGuess), [true, false, nil, nil, nil])
+    }
+
 
     private func parse(_ s: String) -> Result<FoodAction, FoodActionParse.Failure> {
         FoodActionParse.action(fromReply: s)

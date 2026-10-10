@@ -133,12 +133,13 @@ extension Repository {
     /// making of a dish — and giving it an item would put every pot the user ever cooked into the picker.
     @discardableResult
     func logCookPortion(_ cook: FoodCook, portion: Double, day: String? = nil,
-                        at date: Date = Date(), mealType: MealType? = nil) async -> Bool {
+                        at date: Date = Date(), mealType: MealType? = nil,
+                        roughGuess: Bool = false) async -> Bool {
         let dayKey = day ?? Repository.localDayKey(date)
         let resolvedMeal = FoodEntries.mealToStore(dayKey: dayKey, loggedAt: date,
                                                    today: Repository.localDayKey(Date()),
                                                    explicit: mealType)
-        let entry = FoodEntry(macroSource: FoodMacroSource.aiEstimate,
+        let entry = FoodEntry(macroSource: roughGuess ? FoodMacroSource.roughGuess : FoodMacroSource.aiEstimate,
                               itemId: nil,
                               nameSnapshot: cook.name,
                               macrosSnapshot: cook.whole,

@@ -29,6 +29,21 @@ struct FoodProposalCard: View {
 
     @State private var working = false
     @State private var failed = false
+    @State private var roughGuess: Bool
+
+    init(proposal: FoodProposal, messageId: UUID) {
+        self.proposal = proposal
+        self.messageId = messageId
+        _roughGuess = State(initialValue: proposal.roughGuess)
+    }
+
+    private var logsFood: Bool {
+        switch proposal.kind {
+        case .log, .create, .logBatch: return true
+        case .cook(_, _, _, _, let portion): return portion > 0
+        default: return false
+        }
+    }
 
     var body: some View {
         NoopCard(padding: 14, tint: tint) {
@@ -42,7 +57,28 @@ struct FoodProposalCard: View {
                     duplicateBody(name)
                 } else {
                     detail
-                    if proposal.state == .pending { actions } else { settled }
+                    if proposal.state == .pending {
+                        if logsFood {
+                            Toggle("This is a rough guess", isOn: $roughGuess)
+                                .font(StrandFont.subhead)
+                                .tint(StrandPalette.accent)
+                                .disabled(working)
+                            Text(proposal.roughGuess
+                                ? String(localized: "Coach suggests this tag. Keep it for unweighed or uncertain portions; you can turn it off.")
+                                : String(localized: "Unweighed or unsure of the portion? Tag it so NOOP treats this day's intake as less certain."))
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        actions
+                    } else {
+                        settled
+                        if logsFood, proposal.state == .applied, proposal.roughGuess {
+                            Text("Rough guess")
+                                .font(StrandFont.caption)
+                                .foregroundStyle(StrandPalette.textTertiary)
+                        }
+                    }
                 }
             }
         }
@@ -364,10 +400,12 @@ struct FoodProposalCard: View {
         Task {
             // Marked aiEstimate wherever macros came from the model, so a guess stays identifiable in the
             // log long after this conversation has scrolled away.
-            let ok = await repo.applyFoodProposal(proposal, saveToLibrary: save, profile: profile)
+            var selected = proposal
+            selected.roughGuess = roughGuess
+            let ok = await repo.applyFoodProposal(selected, saveToLibrary: save, profile: profile)
             working = false
             if ok {
-                coach.updateProposalState(messageId: messageId, proposalId: proposal.id, to: .applied)
+                coach.updateProposalState(messageId: messageId, proposalId: proposal.id, to: .applied, roughGuess: selected.roughGuess)
             } else {
                 // Left PENDING on failure. A card that said "Logged." over a write that did not happen
                 // would be the worst outcome available here.

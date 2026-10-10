@@ -77,15 +77,17 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
     /// The meal the user named, passed through to the write so a backfilled entry — which has no usable
     /// timestamp — still groups under the meal they said it was.
     let meal: MealType?
+    var roughGuess: Bool
 
     init(id: UUID = UUID(), kind: Kind, state: State = .pending,
-         dayKey: String, dayLabel: String, meal: MealType? = nil) {
+         dayKey: String, dayLabel: String, meal: MealType? = nil, roughGuess: Bool = false) {
         self.id = id
         self.kind = kind
         self.state = state
         self.dayKey = dayKey
         self.dayLabel = dayLabel
         self.meal = meal
+        self.roughGuess = roughGuess
     }
 
     /// A content identity for spotting a re-proposal.
@@ -263,7 +265,12 @@ extension FoodProposal {
 
         func proposal(_ kind: Kind) -> FoodProposal {
             FoodProposal(kind: kind, dayKey: day.key, dayLabel: day.label,
-                         meal: request.meal.flatMap(MealType.fromMeal))
+                         meal: request.meal.flatMap(MealType.fromMeal), roughGuess: request.roughGuess ?? {
+                            if case .log(let item, _) = kind {
+                                return item.macroSource == FoodMacroSource.roughGuess
+                            }
+                            return false
+                         }())
         }
 
         switch request.action {
@@ -356,7 +363,7 @@ extension Repository {
             // saveToLibrary: true because the food is ALREADY in the library — this is what stamps
             // `lastUsedAt` so the picker's recents stay meaningful, matching a pick in the Add food sheet.
             await logFood(item: item, portion: portion, day: day, at: date,
-                          mealType: proposal.meal, saveToLibrary: true)
+                          mealType: proposal.meal, roughGuess: proposal.roughGuess, saveToLibrary: true)
             return true
 
         case .cook(let name, let recipe, let macros, let note, let portion):
@@ -369,11 +376,11 @@ extension Repository {
             guard await saveCook(cook) else { return false }
             guard portion > 0 else { return true }
             return await logCookPortion(cook, portion: portion, day: day, at: date,
-                                        mealType: proposal.meal)
+                                        mealType: proposal.meal, roughGuess: proposal.roughGuess)
 
         case .logBatch(let cook, let portion):
             return await logCookPortion(cook, portion: portion, day: day, at: date,
-                                        mealType: proposal.meal)
+                                        mealType: proposal.meal, roughGuess: proposal.roughGuess)
 
         case .closeBatch(let cook):
             await setCookClosed(cook.id, closed: true, at: date)
@@ -388,7 +395,7 @@ extension Repository {
                                 name: name, servingLabel: serving, macros: macros)
             if saveToLibrary { await saveFoodItem(item) }
             await logFood(item: item, portion: portion, day: day, at: date,
-                          mealType: proposal.meal, saveToLibrary: saveToLibrary)
+                          mealType: proposal.meal, roughGuess: proposal.roughGuess, saveToLibrary: saveToLibrary)
             return true
 
         case .edit(let item, let name, let macros):

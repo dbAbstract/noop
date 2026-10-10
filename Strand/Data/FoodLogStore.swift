@@ -431,7 +431,7 @@ extension Repository {
     /// nothing analytical is lost — only the offer to log it again in one tap.
     @discardableResult
     func logFood(item: FoodItem, portion: Double, day: String? = nil,
-                 at date: Date = Date(), mealType: MealType? = nil,
+                 at date: Date = Date(), mealType: MealType? = nil, roughGuess: Bool? = nil,
                  saveToLibrary: Bool = true) async -> MacroTotals {
         let dayKey = day ?? Repository.localDayKey(date)
         // Resolved rather than taken verbatim, so the meal is STORED from now on instead of being inferred
@@ -440,7 +440,10 @@ extension Repository {
         let resolvedMeal = FoodEntries.mealToStore(dayKey: dayKey, loggedAt: date,
                                                   today: Repository.localDayKey(Date()),
                                                   explicit: mealType)
-        let entry = FoodEntry(macroSource: item.macroSource,
+        let source = roughGuess == true ? FoodMacroSource.roughGuess
+            : (roughGuess == false && item.macroSource == FoodMacroSource.roughGuess
+                ? FoodMacroSource.aiEstimate : item.macroSource)
+        let entry = FoodEntry(macroSource: source,
                               itemId: saveToLibrary ? item.id : nil,
                               nameSnapshot: item.name, macrosSnapshot: item.macros,
                               portion: portion, loggedAt: date, mealType: resolvedMeal)

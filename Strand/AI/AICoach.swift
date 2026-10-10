@@ -338,6 +338,17 @@ final class AICoachEngine: ObservableObject {
     {"action": "log_batch",   "batchId": "<key from OPEN COOKS>", "portion": 0.4}
     {"action": "close_batch", "batchId": "<key from OPEN COOKS>"}
 
+    ROUGH ESTIMATES. Food logging actions (`log`, `create`, `cook` with a positive eaten portion, and \
+    `log_batch`) may include "roughGuess": true or false. This is uncertainty about the amount or meal \
+    actually eaten, separate from macros merely being AI-estimated. A rough entry flags that day's intake \
+    as less certain in NOOP's diet calculations. It does not change calories or macros. Use true when \
+    asked to log a rough estimate, or suggest it for unweighed/eyeballed portions, uncertain restaurant \
+    meals, or recalled quantities. Mention the suggested tag in your reply; the user can change it on \
+    the confirmation card. If uncertainty is unclear, ask whether to tag it as a rough guess. Do not \
+    mark every AI estimate rough: weighed amounts and packet figures need not be rough. Honor explicit \
+    refusals with false. Apply the choice per food action, not to all subsequent meals. Library-only \
+    actions and weigh-ins do not use this flag.
+
     COOKING A DISH, AS OPPOSED TO EATING A FOOD. When they have MADE something in a quantity they will eat \
     over more than one sitting — a pot, a tray, a batch — use `cook`, not `create`. Its macros are the \
     WHOLE thing, and `portion` is the FRACTION of it eaten now: 0.6 means they ate 60% of what they made. \
@@ -1339,11 +1350,12 @@ final class AICoachEngine: ObservableObject {
     /// By message id rather than index: the transcript grows while a card is on screen — a reply can
     /// arrive, or a stale conversation can be retired — and an index captured at render time would by
     /// then point at somebody else's turn.
-    func updateProposalState(messageId: UUID, proposalId: UUID, to state: FoodProposal.State) {
+    func updateProposalState(messageId: UUID, proposalId: UUID, to state: FoodProposal.State, roughGuess: Bool? = nil) {
         guard let idx = messages.firstIndex(where: { $0.id == messageId }),
               let pIdx = messages[idx].proposals.firstIndex(where: { $0.id == proposalId })
         else { return }
         messages[idx].proposals[pIdx].state = state
+        if let roughGuess { messages[idx].proposals[pIdx].roughGuess = roughGuess }
     }
 
     /// The saved-food library plus one line on today, formatted by `FoodLibraryDigest`.

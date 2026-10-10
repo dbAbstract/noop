@@ -8,6 +8,70 @@ final class CoachHistoricalFoodTests: XCTestCase {
     private let butter = MacroTotals(kcal: 74, protein: 0, carbs: 0, fat: 8, fiber: 0)
 
     @MainActor
+    func testRoughCoachEntriesFlagTheDayWithoutChangingLibraryOrMacros() async throws {
+        let oldEnabled = UserDefaults.standard.object(forKey: FoodLogStore.enabledKey)
+        UserDefaults.standard.set(true, forKey: FoodLogStore.enabledKey)
+        defer {
+            if let oldEnabled { UserDefaults.standard.set(oldEnabled, forKey: FoodLogStore.enabledKey) }
+            else { UserDefaults.standard.removeObject(forKey: FoodLogStore.enabledKey) }
+        }
+        let store = try await WhoopStore.inMemory()
+        let repo = Repository(deviceId: "rough-coach-test")
+        repo.setStoreForTesting(store)
+        let now = Date()
+        let day = Repository.localDayKey(now)
+        let saved = FoodItem(name: "Eggs", servingLabel: "2 eggs", macros: eggs)
+        await repo.saveFoodItem(saved)
+        let request = FoodActionRequest(action: .log(itemId: saved.id.uuidString, portion: 1), roughGuess: true)
+        let log = try XCTUnwrap(FoodProposal.resolve(request, library: [saved], recipeIds: [],
+            defaultServingLabel: "1 serving", lastKnownWeightKg: nil))
+        XCTAssertTrue(log.roughGuess)
+        let applied = await repo.applyFoodProposal(log)
+        XCTAssertTrue(applied)
+        var entries = await repo.foodEntries(day: day)
+        XCTAssertEqual(entries.first?.macroSource, FoodMacroSource.roughGuess)
+        XCTAssertEqual(entries.first?.effectiveMacros, eggs)
+        let library = await repo.foodLibrary()
+        XCTAssertNil(library.first?.macroSource, "An uncertain portion must not rewrite the saved food")
+        let roughDays = await repo.roughIntakeDays(days: 7, now: now)
+        XCTAssertTrue(roughDays.contains(day))
+        _ = await repo.deleteFoodEntry(id: try XCTUnwrap(entries.first?.id), day: day)
+        let cleared = await repo.roughIntakeDays(days: 7, now: now)
+        XCTAssertFalse(cleared.contains(day))
+
+        let creation = FoodActionRequest(action: .create(name: "Butter", servingLabel: "10g",
+            macros: butter, portion: 1), roughGuess: true)
+        var proposal = try XCTUnwrap(FoodProposal.resolve(creation, library: [], recipeIds: [],
+            defaultServingLabel: "1 serving", lastKnownWeightKg: nil))
+        XCTAssertTrue(proposal.roughGuess)
+        let roughCreation = await repo.applyFoodProposal(proposal)
+        XCTAssertTrue(roughCreation)
+        let roughEntries = await repo.foodEntries(day: day)
+        XCTAssertEqual(roughEntries.first?.macroSource, FoodMacroSource.roughGuess)
+        let creationDays = await repo.roughIntakeDays(days: 7, now: now)
+        XCTAssertTrue(creationDays.contains(day))
+        _ = await repo.deleteFoodEntry(id: try XCTUnwrap(roughEntries.first?.id), day: day)
+        proposal.roughGuess = false // The confirmation card can decline the model's suggestion.
+        let declined = await repo.applyFoodProposal(proposal)
+        XCTAssertTrue(declined)
+        entries = await repo.foodEntries(day: day)
+        XCTAssertEqual(entries.first?.macroSource, FoodMacroSource.aiEstimate)
+        let declinedDays = await repo.roughIntakeDays(days: 7, now: now)
+        XCTAssertFalse(declinedDays.contains(day))
+
+        let cook = FoodCook(id: UUID(), recipeId: nil, name: "Curry", note: nil,
+            cookedOn: day, whole: eggs, createdAt: now, closedAt: nil, loggedPortions: [])
+        let batch = FoodProposal(kind: .logBatch(cook: cook, portion: 0.5),
+            dayKey: day, dayLabel: "Today", roughGuess: true)
+        let batchApplied = await repo.applyFoodProposal(batch)
+        XCTAssertTrue(batchApplied)
+        entries = await repo.foodEntries(day: day)
+        let batchEntry = try XCTUnwrap(entries.first { $0.batchId == cook.id })
+        XCTAssertEqual(batchEntry.macroSource, FoodMacroSource.roughGuess)
+        XCTAssertEqual(batchEntry.effectiveMacros.kcal, eggs.kcal * 0.5)
+    }
+
+    @MainActor
     func testExportedEggsAndButterHistoryKeysProduceConfirmableFoods() throws {
         let history = [
             WeekEntryDigest(daysAgo: 1, itemId: nil, batchId: nil, name: "Butter (10g)",

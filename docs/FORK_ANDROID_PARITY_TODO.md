@@ -578,3 +578,11 @@ food no longer renumbers references. Differently composed meals with the same na
 and confirmable snapshots, rather than collapsing into an ambiguous key that cannot be logged. The
 references are prompt-only, with no schema or backup changes. Kotlin owes the same helper and Swift
 oracle tests when the food feature is ported. Old numbered keys such as `o4` must never be guessed at.
+
+## Coach rough estimates (Apple-only)
+
+Food action objects accept optional Boolean `roughGuess`, resolved independently per proposal. Coach
+cards expose an editable rough-guess toggle for eaten foods. Confirmation stamps the existing
+`rough-guess` entry provenance and rebanks the existing `intake_rough` day flag; saved library metadata
+is unchanged by a per-entry choice. No migration or backup keys change. Kotlin owes parsing, proposal
+UI, per-entry writes and matching tests when Coach food logging is implemented.

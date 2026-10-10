@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - Reading a food-log ACTION out of a coach reply
 //
@@ -86,11 +87,14 @@ public struct FoodActionRequest: Equatable, Sendable {
     /// actually describe a backfilled meal — and a backfill has no usable timestamp to infer one from, so
     /// this is the only way such an entry ever gets grouped.
     public let meal: Meal?
+    /// Per-entry uncertainty; nil preserves the saved food’s existing provenance.
+    public let roughGuess: Bool?
 
-    public init(action: FoodAction, day: FoodActionDay = .today, meal: Meal? = nil) {
+    public init(action: FoodAction, day: FoodActionDay = .today, meal: Meal? = nil, roughGuess: Bool? = nil) {
         self.action = action
         self.day = day
         self.meal = meal
+        self.roughGuess = roughGuess
     }
 }
 
@@ -218,7 +222,10 @@ public enum FoodActionParse {
         case .failure(let f): return .failure(f)
         case .success(let day):
             return single(from: body).map {
-                FoodActionRequest(action: $0, day: day, meal: meal(from: body))
+                FoodActionRequest(action: $0, day: day, meal: meal(from: body),
+                    roughGuess: (body["roughGuess"] as? NSNumber).flatMap {
+                        CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil
+                    })
             }
         }
     }
