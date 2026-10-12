@@ -134,6 +134,25 @@ extension Repository {
         return true
     }
 
+    /// Save an explicitly reviewed plan while preserving its calibrated baseline and historical goals.
+    /// The store rejects a plan changed since the editor opened, including an in-place calibration.
+    func saveReviewedDietGoal(plan: DietGoalPlan, proteinGPerKg: Double,
+                              expecting expected: DietGoalRow?) async -> Bool {
+        guard plan.isAllowed, proteinGPerKg.isFinite,
+              (MacroTargets.minProteinGPerKg...MacroTargets.maxProteinGPerKg).contains(proteinGPerKg),
+              let store = await storeHandle() else { return false }
+        let row = DietGoalRow(id: UUID().uuidString, deviceId: DietStore.sourceId,
+                              startedOn: Self.localDayKey(Date()), startWeightKg: plan.startWeightKg,
+                              targetWeightKg: plan.targetWeightKg, months: plan.months,
+                              activityLevel: ActivityLevel.measuredMovementBaseline.rawValue,
+                              dailyDeficitKcal: plan.dailyDeficitKcal,
+                              createdAt: Int(Date().timeIntervalSince1970), proteinGPerKg: proteinGPerKg,
+                              measuredBaselineKcal: expected?.measuredBaselineKcal)
+        guard (try? await store.replaceDietGoal(row, expecting: expected)) == true else { return false }
+        noteFoodChanged()
+        return true
+    }
+
     /// Stop dieting: close the open goal without starting another.
     func clearDietGoal(on day: String? = nil) async {
         let dayKey = day ?? Repository.localDayKey(Date())

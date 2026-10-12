@@ -135,7 +135,7 @@ final class DebugMirrorAndDumpTests: XCTestCase {
 
     /// Bumped whenever the shape changes, or a reader guesses from the keys present and gets it wrong.
     func testTheFormatVersionWasBumpedForTheNewFields() {
-        XCTAssertEqual(CoachDump.formatVersion, 2)
+        XCTAssertEqual(CoachDump.formatVersion, 3)
     }
 
     func testTheTranscriptIsCarried() {

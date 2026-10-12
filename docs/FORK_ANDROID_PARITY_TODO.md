@@ -586,3 +586,27 @@ cards expose an editable rough-guess toggle for eaten foods. Confirmation stamps
 `rough-guess` entry provenance and rebanks the existing `intake_rough` day flag; saved library metadata
 is unchanged by a per-entry choice. No migration or backup keys change. Kotlin owes parsing, proposal
 UI, per-entry writes and matching tests when Coach food logging is implemented.
+
+## Coach diet planning and weekly review (Apple-only)
+
+Coach receives the current goal, planned pace, a weight trend restricted to that goal, completed-day
+intake coverage, rough-day counts, and the separate intake-derived expenditure interval. Logged-day
+coverage never establishes meal completeness. The local `CoachDietReviewSignal` compares the planned
+pace with the observed interval after at least 21 days and six weigh-in days, requires a recent weight,
+and distinguishes insufficient evidence from a departure from the plan. A narrow flat trend can rule
+out the planned pace without claiming that weight loss itself has been measured.
+
+The Diet screen offers a local weekly check-in. Only a requested, successful review acknowledges that
+goal's weekly cadence; the timestamp is local UI state, with no backup whitelist changes. There is no
+new scheduled provider call or notification. Coach uses the existing provider and data-consent gates.
+
+The separate `noop_diet_goal` block proposes target weight, whole months, optional protein g/kg and a
+reason. It cannot set calories or expenditure. Its card opens the regular goal editor, which validates
+and derives the plan again before saving. Pending cards are transient across restarts. Confirmed
+editor values, including edits, are retained in live conversation exports (format version 3).
+
+`replaceDietGoal` closes and inserts in one transaction and compares the entire previously reviewed
+row, so both a newer plan and an in-place calibration invalidate a stale editor. A revised plan retains
+the adopted measured baseline and preserves historical goals. Kotlin owes the pure parser and review
+signal with Swift-oracle tests, the corresponding Room transaction, context, editor and review UI.
+No schema or physiological calculation changes.

@@ -28,7 +28,8 @@ enum CoachDump {
     /// Schema version, so a file can be read correctly after the shape changes. Bumped on any field change
     /// — a reader that guesses from the keys present will get a later version subtly wrong.
     /// 2: adds `errorText`, `isSending`, `failedMessageCount` and per-message `failure`.
-    static let formatVersion = 2
+    /// 3: adds transient diet-goal proposals and their confirmation state.
+    static let formatVersion = 3
 
     /// Build the JSON. Returns nil only if encoding fails, which would mean a non-finite number reached a
     /// macro field and is itself worth knowing about.
@@ -93,6 +94,24 @@ enum CoachDump {
         ]
         if !message.proposals.isEmpty {
             out["proposals"] = message.proposals.map(dict(for:))
+        }
+        if let proposal = message.dietProposal {
+            var goal: [String: Any] = [
+                "id": proposal.id.uuidString,
+                "state": String(describing: proposal.state),
+                "targetWeightKg": proposal.request.targetWeightKg,
+                "months": proposal.request.months,
+                "reason": proposal.request.reason,
+                "previousGoalId": proposal.previousGoal?.id ?? "",
+            ]
+            if let protein = proposal.request.proteinGPerKg { goal["proteinGPerKg"] = protein }
+            if let plan = proposal.appliedPlan {
+                goal["appliedTargetWeightKg"] = plan.targetWeightKg
+                goal["appliedMonths"] = plan.months
+                goal["appliedDeficitKcal"] = plan.dailyDeficitKcal
+                if let protein = proposal.appliedProteinGPerKg { goal["appliedProteinGPerKg"] = protein }
+            }
+            out["dietProposal"] = goal
         }
         // Which turn failed and why, rather than one global error that cannot say which.
         if let failure = message.failure { out["failure"] = failure }

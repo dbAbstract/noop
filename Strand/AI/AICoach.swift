@@ -37,6 +37,7 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     /// That is deliberate rather than unfinished — a card restored hours later would invite the user to
     /// log a meal they have long since logged or forgotten, with no way to tell which.
     var proposals: [FoodProposal] = []
+    var dietProposal: CoachDietProposal?
     /// Why this turn did not get through, when it did not.
     ///
     /// On the USER's message rather than on the engine, because `errorText` is a single global slot: it
@@ -56,11 +57,13 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     var sentAt: Int
 
     init(id: UUID = UUID(), role: Role, text: String, proposals: [FoodProposal] = [],
-         failure: String? = nil, sentAt: Int = Int(Date().timeIntervalSince1970)) {
+         failure: String? = nil, sentAt: Int = Int(Date().timeIntervalSince1970),
+         dietProposal: CoachDietProposal? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.proposals = proposals
+        self.dietProposal = dietProposal
         self.failure = failure
         self.sentAt = sentAt
     }
@@ -199,6 +202,7 @@ final class AICoachEngine: ObservableObject {
     @Published var messages: [ChatMessage] = []
 
     @Published var sending = false
+    private var preparingSend = false
     @Published var errorText: String?
 
     /// Whether the last failure was the provider turning the stored key away, as opposed to a rate
@@ -440,6 +444,12 @@ final class AICoachEngine: ObservableObject {
         return Self.defaultSystemPrompt
     }
 
+    /// Planning protocol travels with interactive requests without rewriting the user's prompt editor.
+    var interactiveSystemPrompt: String {
+        let base = systemPrompt
+        return base.contains(CoachDietAction.sentinel) ? base : base + "\n\n" + Self.dietProtocol
+    }
+
     /// True when a CUSTOM prompt is stored that does not teach the food-logging protocol.
     ///
     /// The protocol lives in `defaultSystemPrompt`, and a stored override replaces that wholesale — so a
@@ -509,7 +519,7 @@ final class AICoachEngine: ObservableObject {
         // Estimate the context size: system prompt + data context (rough — we don't build the
         // full context here to avoid a DB read on every keystroke). Use the last known context
         // size or a reasonable default.
-        let systemPromptTokens = systemPrompt.count / 4
+        let systemPromptTokens = interactiveSystemPrompt.count / 4
         // The data context is typically ~2000-4000 chars depending on the user's data.
         // Use a conservative estimate of 3000 chars (750 tokens) when consent is on.
         let contextTokens = dataConsent ? 750 : 50
@@ -916,6 +926,9 @@ final class AICoachEngine: ObservableObject {
     /// system prompt + context + running history, parse the reply, append it. Never throws/crashes;
     /// failures land in `errorText`.
     func send(_ userText: String) async {
+        guard !sending, !preparingSend else { return }
+        preparingSend = true
+        defer { preparingSend = false }
         let trimmed = userText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { errorText = AICoachError.emptyQuestion.errorDescription; return }
         // The master switch, checked at the EGRESS rather than only on the routes in. Every way into Coach
@@ -953,6 +966,8 @@ final class AICoachEngine: ObservableObject {
         let snapshot = dataConsent ? await buildFullContextSnapshot() : (text: noConsentNote, references: [:])
         let context = snapshot.text
         let foodReferences = snapshot.references
+        let reviewGoalId = trimmed == CoachDietReviewHistory.prompt ? await repo.currentDietGoal()?.id : nil
+
         // K13: if the conversation overflows the sliding window, summarize the dropped middle so
         // the model retains context continuity. Best-effort; failure degrades to the old gap.
         await summarizeDroppedMiddleIfNeeded(key: key)
@@ -987,7 +1002,7 @@ final class AICoachEngine: ObservableObject {
                    self.messages[lastIdx].role == .assistant {
                     self.messages[lastIdx] = ChatMessage(
                         id: placeholder.id, role: .assistant,
-                        text: FoodActionParse.displayText(accumulated)
+                        text: CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
                     )
                 }
             }
@@ -997,12 +1012,21 @@ final class AICoachEngine: ObservableObject {
             // would otherwise render as an empty bubble above the card. `fallbackProposalNote` covers
             // that case so the turn always says something.
             let proposals = await resolveProposals(in: accumulated, recentFoods: foodReferences)
-            let clean = FoodActionParse.strippingAction(from: accumulated)
+            var dietProposal: CoachDietProposal?
+            if dataConsent, UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey),
+               let request = CoachDietAction.parse(accumulated) {
+                dietProposal = CoachDietProposal(request: request, previousGoal: await repo.currentDietGoal())
+            }
+
+            var clean = CoachDietAction.displayText(CoachDietAction.strippingAction(from: FoodActionParse.strippingAction(from: accumulated)))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if accumulated.contains(CoachDietAction.sentinel), dietProposal == nil {
+                clean += "\n\n" + String(localized: "The proposed goal could not be prepared. No settings changed. Ask Coach to try again with a goal weight and a timeline in whole months.")
+            }
             if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                 let text: String
                 if !clean.isEmpty { text = clean }
-                else if !proposals.isEmpty { text = String(localized: "Here's what I've got:") }
+                else if !proposals.isEmpty || dietProposal != nil { text = String(localized: "Here's what I've got:") }
                 else {
                     // "(no reply)" said nothing about WHY, and on a reasoning model there is a specific
                     // likely cause worth naming: the token cap covers reasoning as well as the answer, so a
@@ -1016,11 +1040,16 @@ final class AICoachEngine: ObservableObject {
                                reason: String(localized: "Empty reply from \(model)."))
                 }
                 messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
-                                                text: text, proposals: proposals)
+                                                text: text, proposals: proposals, dietProposal: dietProposal)
+                if trimmed == CoachDietReviewHistory.prompt, dataConsent,
+                   UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey), !clean.isEmpty,
+                   !messages.contains(where: { $0.id == userId && $0.failure != nil }) {
+                    CoachDietReviewHistory.record(goalId: reviewGoalId)
+                }
             }
         } catch let e as AICoachError {
             // Mid-stream error: keep the partial text + an interrupted marker (PRD K1 acceptance).
-            let partial = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partial = CoachDietAction.displayText(FoodActionParse.displayText(accumulated)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !partial.isEmpty, let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                 messages[lastIdx] = ChatMessage(
                     id: placeholder.id, role: .assistant,
@@ -1037,7 +1066,7 @@ final class AICoachEngine: ObservableObject {
             // Typed, never text-matched: the message is localized and the case is not.
             if case .badKey = e { keyRejected = true } else { keyRejected = false }
         } catch {
-            let partial = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partial = CoachDietAction.displayText(FoodActionParse.displayText(accumulated)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !partial.isEmpty, let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                 messages[lastIdx] = ChatMessage(
                     id: placeholder.id, role: .assistant,
@@ -1083,7 +1112,7 @@ final class AICoachEngine: ObservableObject {
     /// prescription + one recovery tip, without the user typing. Requires a key + data consent.
     /// K1: streams the brief the same way `send` does.
     func startBriefIfNeeded() async {
-        guard isConfigured, dataConsent, messages.isEmpty, !sending else { return }
+        guard isConfigured, dataConsent, messages.isEmpty, !sending, !preparingSend else { return }
         guard let key = resolvedKey else { return }
         errorText = nil
         sending = true
@@ -1113,11 +1142,11 @@ final class AICoachEngine: ObservableObject {
                         // Same hide-while-streaming treatment the chat path gets, so a block the model
                         // emits anyway never types itself out in front of the user.
                         id: placeholder.id, role: .assistant,
-                        text: prefix + FoodActionParse.displayText(accumulated)
+                        text: prefix + CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
                     )
                 }
             }
-            let clean = FoodActionParse.strippingAction(from: accumulated)
+            let clean = CoachDietAction.strippingAction(from: FoodActionParse.strippingAction(from: accumulated))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if clean.isEmpty {
                 if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
@@ -1127,7 +1156,7 @@ final class AICoachEngine: ObservableObject {
                 messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant, text: prefix + clean)
             }
         } catch let e as AICoachError {
-            let partial = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partial = CoachDietAction.displayText(FoodActionParse.displayText(accumulated)).trimmingCharacters(in: .whitespacesAndNewlines)
             if partial.isEmpty {
                 if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                     messages.remove(at: lastIdx)
@@ -1142,7 +1171,7 @@ final class AICoachEngine: ObservableObject {
             // Typed, never text-matched: the message is localized and the case is not.
             if case .badKey = e { keyRejected = true } else { keyRejected = false }
         } catch {
-            let partial = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partial = CoachDietAction.displayText(FoodActionParse.displayText(accumulated)).trimmingCharacters(in: .whitespacesAndNewlines)
             if partial.isEmpty {
                 if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
                     messages.remove(at: lastIdx)
@@ -1259,7 +1288,7 @@ final class AICoachEngine: ObservableObject {
         // Stripped as well as prevented. The persona above tells it not to emit an action block, but a
         // model that does so anyway must not put raw JSON in front of the user — which is exactly what
         // happened when this path had neither guard.
-        let clean = FoodActionParse.strippingAction(from: reply)
+        let clean = CoachDietAction.strippingAction(from: FoodActionParse.strippingAction(from: reply))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return clean.isEmpty ? nil : clean
     }
@@ -1470,7 +1499,9 @@ final class AICoachEngine: ObservableObject {
 
         // The weight trend, with its interval — the other half of whether the diet is working, and absent
         // entirely before, so the coach could not answer "am I losing" at all.
-        blocks.append(await weightContextLine())
+        let longerTermWeight = await weightContextLine()
+        blocks.append("LONGER-TERM WEIGHT HISTORY (up to 120 days; may include previous plans):\n" + longerTermWeight)
+        blocks.append(await repo.coachDietSnapshot().context)
 
         return (blocks.filter { !$0.isEmpty }.joined(separator: "\n\n"), references)
     }
@@ -1594,7 +1625,7 @@ final class AICoachEngine: ObservableObject {
         try await provider.client.send(
             key: key,
             model: model,
-            systemPrompt: overridingSystemPrompt ?? systemPrompt,
+            systemPrompt: overridingSystemPrompt ?? interactiveSystemPrompt,
             messages: messages,
             session: session
         )
@@ -1615,7 +1646,7 @@ final class AICoachEngine: ObservableObject {
         try await provider.client.streamWithImage(
             key: key,
             model: model,
-            systemPrompt: overridingSystemPrompt ?? systemPrompt,
+            systemPrompt: overridingSystemPrompt ?? interactiveSystemPrompt,
             messages: messages,
             inlineImage: inlineImage,
             session: session,

@@ -107,6 +107,33 @@ extension WhoopStore {
         }
     }
 
+    /// Atomically replace the goal reviewed by the user. A stale card cannot overwrite a newer plan.
+    /// The close and insert share a transaction, so a failed insert leaves the original goal open.
+    public func replaceDietGoal(_ replacement: DietGoalRow, expecting expected: DietGoalRow?) async throws -> Bool {
+        try syncWrite { db in
+            let current = try Row.fetchOne(db, sql: """
+                SELECT * FROM dietGoal WHERE deviceId = ? AND endedOn IS NULL
+                ORDER BY startedOn DESC, createdAt DESC LIMIT 1
+                """, arguments: [replacement.deviceId]).map(DietGoalRow.decode)
+            guard current == expected, replacement.endedOn == nil,
+                  replacement.id != current?.id else { return false }
+            try db.execute(sql: "UPDATE dietGoal SET endedOn = ? WHERE deviceId = ? AND endedOn IS NULL",
+                           arguments: [replacement.startedOn, replacement.deviceId])
+            try db.execute(sql: """
+                INSERT INTO dietGoal
+                    (id, deviceId, startedOn, endedOn, startWeightKg, targetWeightKg, months,
+                     activityLevel, dailyDeficitKcal, targetOverrideKcal, createdAt, proteinGPerKg,
+                     measuredBaselineKcal)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [replacement.id, replacement.deviceId, replacement.startedOn,
+                                 replacement.endedOn, replacement.startWeightKg, replacement.targetWeightKg,
+                                 replacement.months, replacement.activityLevel, replacement.dailyDeficitKcal,
+                                 replacement.targetOverrideKcal, replacement.createdAt, replacement.proteinGPerKg,
+                                 replacement.measuredBaselineKcal])
+            return true
+        }
+    }
+
     /// The goal in force on `day`: started on or before it, and not ended before it.
     ///
     /// Ties (two goals starting the same day, which a same-day revision produces) resolve to the most

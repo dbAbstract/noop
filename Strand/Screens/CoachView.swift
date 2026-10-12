@@ -66,6 +66,7 @@ struct CoachView: View {
     /// Changes only when the transcript crosses the jump-button visibility threshold.
     @State private var isAtEnd = true
     @State private var didScrollToInitialMessage = false
+    @State private var coachEntryReady = false
     /// Name for the transcript's coordinate space, so the sentinel reports a position relative to the
     /// scroll view rather than to the screen.
     private static let transcriptSpace = "coach.transcript"
@@ -205,7 +206,8 @@ struct CoachView: View {
             CoachBriefScheduler.activateIfEnabled(
                 generateBrief: { await coach.generateBrief() },
                 detectedWake: { await repo.detectedWakeMinuteOfDay() })
-            await coach.startBriefIfNeeded()
+            coachEntryReady = true
+            if coach.pendingPrompt == nil { await coach.startBriefIfNeeded() }
         }
         .task(id: repo.refreshSeq) {
             await coach.retireStaleConversationIfNeeded()
@@ -218,11 +220,14 @@ struct CoachView: View {
         // rebuild mid-flight cannot send it twice, and gated on `isConfigured` so an unconfigured handoff
         // (which the launcher does not produce, but a future caller might) degrades to showing setup
         // rather than a failed request.
-        .task(id: coach.pendingPrompt) {
-            guard let prompt = coach.pendingPrompt, !prompt.isEmpty else { return }
+        .task(id: "\(coachEntryReady)-\(coach.sending)-\(coach.pendingPrompt ?? "")") {
+            guard coachEntryReady, !coach.sending,
+                  let prompt = coach.pendingPrompt, !prompt.isEmpty else { return }
             coach.pendingPrompt = nil
             guard coach.isConfigured else { return }
-            await coach.send(prompt)
+            // Clearing the handoff changes this task's ID. The engine owns the ongoing request,
+            // so it must outlive that SwiftUI task's cancellation and a tab transition.
+            Task { await coach.send(prompt) }
         }
         // K14: haptic feedback when a reply arrives (sending goes true → false).
         .onChangeCompat(of: coach.sending) { isSending in
@@ -466,6 +471,15 @@ struct CoachView: View {
     /// Settings and connection, merged.
     private var coachMenu: some View {
         Menu {
+            if UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) {
+                Button {
+                    Task { await coach.send(CoachDietReviewHistory.prompt) }
+                } label: {
+                    Label("Review diet progress", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                .disabled(coach.sending || !coach.dataConsent)
+            }
+
             Button {
                 showSettings = true
             } label: {
@@ -672,6 +686,9 @@ struct CoachView: View {
                                         ForEach(message.proposals) { proposal in
                                             FoodProposalCard(proposal: proposal, messageId: message.id)
                                                 .frame(maxWidth: 560, alignment: .leading)
+                                        }
+                                        if let proposal = message.dietProposal {
+                                            CoachDietProposalCard(proposal: proposal, messageId: message.id)
                                         }
                                         if let failure = message.failure {
                                             retryRow(message: message, reason: failure)

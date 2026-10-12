@@ -20,21 +20,27 @@ struct DietGoalSheet: View {
     /// Existing goal to edit, or nil to create one.
     let existing: DietGoalRow?
     let onSaved: () -> Void
+    let suggestion: CoachDietGoalRequest?
+    let onPlanSaved: ((DietGoalPlan, Double) -> Void)?
 
     @State private var targetWeight: Double
     @State private var months: Double
     @State private var saving = false
+    @State private var saveFailed = false
     @State private var proteinGPerKg: Double
 
     /// Fixed, never picked — see `baselineSection`. Named so the reason travels with the value.
     private let activity = ActivityLevel.measuredMovementBaseline
 
-    init(existing: DietGoalRow?, onSaved: @escaping () -> Void) {
+    init(existing: DietGoalRow?, suggestion: CoachDietGoalRequest? = nil,
+         onPlanSaved: ((DietGoalPlan, Double) -> Void)? = nil, onSaved: @escaping () -> Void) {
         self.existing = existing
+        self.suggestion = suggestion
+        self.onPlanSaved = onPlanSaved
         self.onSaved = onSaved
-        _targetWeight = State(initialValue: existing?.targetWeightKg ?? 0)   // resolved on appear
-        _months = State(initialValue: Double(existing?.months ?? 6))
-        _proteinGPerKg = State(initialValue: existing?.proteinGPerKg ?? MacroTargets.defaultProteinGPerKg)
+        _targetWeight = State(initialValue: suggestion?.targetWeightKg ?? existing?.targetWeightKg ?? 0)   // resolved on appear
+        _months = State(initialValue: Double(suggestion?.months ?? existing?.months ?? 6))
+        _proteinGPerKg = State(initialValue: suggestion?.proteinGPerKg ?? existing?.proteinGPerKg ?? MacroTargets.defaultProteinGPerKg)
     }
 
     private var startWeight: Double { profile.weightKg }
@@ -63,6 +69,20 @@ struct DietGoalSheet: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionGap) {
+                if let suggestion {
+                    NoopCard {
+                        VStack(alignment: .leading, spacing: NoopMetrics.space2) {
+                            Text("Coach proposal").font(StrandFont.headline)
+                            Text(suggestion.reason).font(StrandFont.body)
+                            Text("Review and edit before saving. This starts a revised plan today and keeps your previous plan in history.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                            if let existing {
+                                Text("Current goal: \(existing.targetWeightKg.formatted()) kg over \(existing.months) months")
+                                    .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                            }
+                        }
+                    }
+                }
                 destinationSection
                 timelineSection
                 baselineSection
@@ -73,6 +93,12 @@ struct DietGoalSheet: View {
             .padding(NoopMetrics.screenPadding)
         }
         .frame(minWidth: 380, minHeight: 560)
+        .disabled(saving)
+        .alert("Could not save goal", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Your plan may have changed since this editor opened, or storage is unavailable. Close this editor and review the current goal before trying again.")
+        }
         .onAppear {
             // Default to a round number below the current weight rather than 0, so the sheet opens on a
             // plausible goal instead of an invalid one the user has to fix before it says anything.
@@ -346,7 +372,7 @@ struct DietGoalSheet: View {
 
     private var actions: some View {
         HStack {
-            if existing != nil {
+            if existing != nil && suggestion == nil {
                 Button("Stop") {
                     Task {
                         await repo.clearDietGoal()
@@ -361,17 +387,20 @@ struct DietGoalSheet: View {
             }
             Spacer()
             Button(saving ? "Saving…" : "Set goal") {
-                guard let p = plan, p.isAllowed else { return }
+                guard plan?.isAllowed == true else { return }
                 saving = true
+                let submittedProtein = proteinGPerKg
                 Task {
-                    await repo.setDietGoal(startWeightKg: p.startWeightKg,
-                                           targetWeightKg: p.targetWeightKg,
-                                           months: p.months,
-                                           activity: activity,
-                                           dailyDeficitKcal: p.dailyDeficitKcal,
-                                           proteinGPerKg: proteinGPerKg)
+                    guard let currentPlan = plan, currentPlan.isAllowed,
+                          await repo.saveReviewedDietGoal(plan: currentPlan, proteinGPerKg: submittedProtein,
+                                                          expecting: existing) else {
+                        saving = false
+                        saveFailed = true
+                        return
+                    }
                     await repo.refreshDietDay(profile: profile)
                     saving = false
+                    onPlanSaved?(currentPlan, submittedProtein)
                     onSaved()
                     dismiss()
                 }

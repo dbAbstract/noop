@@ -377,8 +377,8 @@ public enum FoodActionParse {
     ///
     /// Returns the text unchanged when there is no sentinel, so the ordinary conversational path pays
     /// nothing and cannot be corrupted by this.
-    public static func strippingAction(from reply: String) -> String {
-        guard reply.contains(sentinel), let range = sentinelObjectRange(in: reply) else { return reply }
+    public static func strippingAction(from reply: String, sentinel: String = Self.sentinel) -> String {
+        guard reply.contains(sentinel), let range = sentinelObjectRange(in: reply, sentinel: sentinel) else { return reply }
         var text = reply
         var lower = range.lowerBound
         var upper = range.upperBound
@@ -403,9 +403,9 @@ public enum FoodActionParse {
     /// So: a COMPLETE block is removed, and an INCOMPLETE one truncates the display at its opening brace.
     /// Truncating is safe because the protocol puts the block last — anything after it has not arrived
     /// yet, and the final pass re-renders the whole reply properly.
-    public static func displayText(_ reply: String) -> String {
+    public static func displayText(_ reply: String, sentinel: String = Self.sentinel) -> String {
         guard reply.contains(sentinel) else { return reply }
-        if sentinelObjectRange(in: reply) != nil { return strippingAction(from: reply) }
+        if sentinelObjectRange(in: reply, sentinel: sentinel) != nil { return strippingAction(from: reply, sentinel: sentinel) }
         // Incomplete. Cut at the brace that opens the object carrying the sentinel, or at the sentinel
         // itself if even that brace has not arrived.
         guard let s = reply.range(of: sentinel) else { return reply }
@@ -431,7 +431,7 @@ public enum FoodActionParse {
 
     /// Range of that object. Brace counting, string-aware, matching `MacroEstimateParse.firstJSONObject`
     /// — a nested object (the body under the sentinel is itself one) defeats any first-to-last slice.
-    static func sentinelObjectRange(in text: String) -> Range<String.Index>? {
+    static func sentinelObjectRange(in text: String, sentinel: String = Self.sentinel) -> Range<String.Index>? {
         var depth = 0
         var start: String.Index?
         var inString = false

@@ -75,6 +75,7 @@ struct DietDetailView: View {
                 // Two halves rather than one long scroll, because they answer different questions and the
                 // day selector only governs one of them. With both stacked, a selector at the top of a
                 // screen whose lower two-thirds ignores it is its own kind of wrong.
+                CoachDietCheckIn()
                 Picker("View", selection: $tabRaw) {
                     Text("Day").tag(DietTab.day.rawValue)
                     Text("Progress").tag(DietTab.progress.rawValue)
