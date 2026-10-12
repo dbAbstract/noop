@@ -260,6 +260,44 @@ struct SettingsView: View {
     /// Persisted so it remembers the user's choice; mirrors the Android `noop.settingsAdvancedOpen` key.
     @AppStorage(SettingsDisclosureDefaults.advancedOpenKey) private var advancedOpen = SettingsDisclosureDefaults.advancedOpenDefault
 
+    private var searchableSettingsSections: [String] {
+        var sections = ["profileCard", "unitsCard", "appearanceCard", "strapCard", "streakCard",
+                        "featuresCard", "recoveryCard", "hrvCard", "testCentreCard", "experimentalCard",
+                        "backupCard", "aboutCard"]
+        #if os(iOS)
+        sections += ["liveNotificationsCard", "syncCard"]
+        #endif
+        return sections
+    }
+
+    private func settingsMatches(_ section: String) -> Bool {
+        let query = settingsSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+        let terms: [String: [String]] = [
+            "profileCard": ["Profile Age Sex Height Weight Waist Maximum heart rate HR zones Day boundary Steps calibration Photo", "Profile", "Age", "Sex", "Height", "Weight", "Waist", "Maximum", "heart", "rate", "HR", "zones", "Day", "boundary", "Steps", "calibration", "Photo"],
+            "unitsCard": ["Units Metric Imperial Temperature Distance Energy Calories Strain", "Units", "Metric", "Imperial", "Temperature", "Distance", "Energy", "Calories", "Strain"],
+            "appearanceCard": ["Appearance Language Clock format Coach Hide bar when scrolling Theme Accent color Liquid Reduce motion Day-cycle background Sky behind cards Transparent cards Card transparency Background image", "Appearance", "Language", "Clock", "format", "Coach", "Hide", "bar", "when", "scrolling", "Theme", "Accent", "color", "Liquid", "Reduce", "motion", "Day-cycle", "background", "Sky", "behind", "cards", "Transparent", "cards", "Card", "transparency", "Background", "image"],
+            "strapCard": ["Strap Bluetooth Device Rename Pair Connect", "Strap", "Bluetooth", "Device", "Rename", "Pair", "Connect"],
+            "liveNotificationsCard": ["Live notifications Live Activity Lock Screen Dynamic Island", "Live", "notifications", "Live", "Activity", "Lock", "Screen", "Dynamic", "Island"],
+            "streakCard": ["Streak Daily goals", "Streak", "Daily", "goals"],
+            "featuresCard": ["Features Food logging Diet Nutrition Food reminder Journal reminder Hydration Auto-detect workouts Keep screen on workout sync", "Features", "Food", "logging", "Diet", "Nutrition", "Food", "reminder", "Journal", "reminder", "Hydration", "Auto-detect", "workouts", "Keep", "screen", "on", "workout", "sync"],
+            "syncCard": ["Sync Background History transfers", "Sync", "Background", "History", "transfers"],
+            "recoveryCard": ["Recovery Charge Baseline Recalibrate Scoring", "Recovery", "Charge", "Baseline", "Recalibrate", "Scoring"],
+            "hrvCard": ["HRV Continuous HRV capture Overnight only HRV window RR intervals", "HRV", "Continuous", "HRV", "capture", "Overnight", "only", "HRV", "window", "RR", "intervals"],
+            "testCentreCard": ["Test Centre Diagnostics Debug Logs Troubleshooting", "Test", "Centre", "Diagnostics", "Debug", "Logs", "Troubleshooting"],
+            "experimentalCard": ["Experimental Sleep staging Live sessions Raw sensor diagnostics Puffin Oura Oxygen SpO2", "Experimental", "Sleep", "staging", "Live", "sessions", "Raw", "sensor", "diagnostics", "Puffin", "Oura", "Oxygen", "SpO2"],
+            "backupCard": ["Backup Restore Export Import Files", "Backup", "Restore", "Export", "Import", "Files"],
+            "aboutCard": ["About Version Update Help Apple Watch Privacy License", "About", "Version", "Update", "Help", "Apple", "Watch", "Privacy", "License"],
+        ]
+        return (terms[section] ?? []).contains {
+            $0.localizedStandardContains(query) ||
+                String(localized: String.LocalizationValue($0)).localizedStandardContains(query)
+        }
+    }
+
+    var initialSearch: String = ""
+    @State private var settingsSearch = ""
+
     var body: some View {
         ScreenScaffold(title: "Settings",
                        subtitle: "Your numbers, your strap, and how NOOP works. All on \(Platform.deviceNounPhrase).",
@@ -268,40 +306,56 @@ struct SettingsView: View {
                        // Settings' own frosted cards sit on the dark canvas below the sky band, unchanged.
                        topBackground: liquidScaffoldSky()) {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
+                if !settingsSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                    !searchableSettingsSections.contains(where: settingsMatches) {
+                    Text("No results").font(StrandFont.body).foregroundStyle(StrandPalette.textSecondary)
+                }
                 // Everyday sections stay expanded (S3): the ones a first-run user actually needs.
-                profileCard.staggeredAppear(index: 0)
-                unitsCard.staggeredAppear(index: 1)
-                appearanceCard.staggeredAppear(index: 2)
-                strapCard.staggeredAppear(index: 3)
+                if settingsMatches("profileCard") { profileCard.staggeredAppear(index: 0) }
+                if settingsMatches("unitsCard") { unitsCard.staggeredAppear(index: 1) }
+                if settingsMatches("appearanceCard") { appearanceCard.staggeredAppear(index: 2) }
+                if settingsMatches("strapCard") { strapCard.staggeredAppear(index: 3) }
                 #if os(iOS)
-                liveNotificationsCard.staggeredAppear(index: 3)
+                if settingsMatches("liveNotificationsCard") { liveNotificationsCard.staggeredAppear(index: 3) }
                 #endif
-                streakCard.staggeredAppear(index: 4)
-                featuresCard.staggeredAppear(index: 5)
+                if settingsMatches("streakCard") { streakCard.staggeredAppear(index: 4) }
+                if settingsMatches("featuresCard") { featuresCard.staggeredAppear(index: 5) }
                 #if os(iOS)
-                syncCard.staggeredAppear(index: 6)
+                if settingsMatches("syncCard") { syncCard.staggeredAppear(index: 6) }
                 #endif
 
                 // Lower-frequency sections collapse behind a single default-closed disclosure so the
                 // screen opens at ~6 sections instead of 11. Nothing is removed; every section here
                 // (Recovery / advanced scoring, Test Centre, the experimental probes + raw-capture, and
                 // Backup & restore) stays one tap away. Modelled on the Test Centre "Advanced" group.
-                SettingsDisclosureGroup(
-                    title: "Advanced",
-                    subtitle: "Recovery, HRV tuning, Test Centre, experimental probes, and backup. Tucked away to keep the everyday screen tidy.",
-                    isExpanded: $advancedOpen
-                ) {
-                    recoveryCard
-                    hrvCard   // #518: Continuous HRV capture + HRV window moved here out of the always-visible Strap card
-                    testCentreCard
-                    experimentalCard
-                    backupCard
+                if settingsSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    SettingsDisclosureGroup(
+                        title: "Advanced",
+                        subtitle: "Recovery, HRV tuning, Test Centre, experimental probes, and backup. Tucked away to keep the everyday screen tidy.",
+                        isExpanded: $advancedOpen
+                    ) {
+                        if settingsMatches("recoveryCard") { recoveryCard }
+                        if settingsMatches("hrvCard") { hrvCard }
+                        if settingsMatches("testCentreCard") { testCentreCard }
+                        if settingsMatches("experimentalCard") { experimentalCard }
+                        if settingsMatches("backupCard") { backupCard }
+                    }
+                    .staggeredAppear(index: 6)
+                } else {
+                    if settingsMatches("recoveryCard") { recoveryCard }
+                    if settingsMatches("hrvCard") { hrvCard }
+                    if settingsMatches("testCentreCard") { testCentreCard }
+                    if settingsMatches("experimentalCard") { experimentalCard }
+                    if settingsMatches("backupCard") { backupCard }
                 }
-                .staggeredAppear(index: 6)
 
                 // About stays expanded at the foot (version, links and the help sheets people return to).
-                aboutCard.staggeredAppear(index: 7)
+                if settingsMatches("aboutCard") { aboutCard.staggeredAppear(index: 7) }
             }
+        }
+        .searchable(text: $settingsSearch, prompt: "Search settings")
+        .onAppear {
+            if settingsSearch.isEmpty { settingsSearch = initialSearch }
         }
         .alert(backupAlertTitle, isPresented: $showBackupAlert) {
             Button("OK", role: .cancel) { }

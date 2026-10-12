@@ -49,6 +49,7 @@ struct RootTabView: View {
     @State private var routedPillar: NavRouter.Destination?
     /// Selected tab — bound so tab switches can crossfade (README §Motion: ~240ms opacity swap
     /// between tab roots, calm easing). Defaults to Today.
+    @State private var moreSearch = ""
     @State private var selectedTab: Int = 0
     /// One `NavigationPath` per tab, indexed by tab tag. Re-tapping the already-active tab pops
     /// that tab's stack to its root (#135) by clearing its path — an animated pop that leaves the
@@ -504,64 +505,117 @@ struct RootTabView: View {
     // + SectionHeader's UPPERCASE overline + the 28pt section rhythm). Rebuilt on the shared page chrome:
     // ScreenScaffold for the title1 "More" + subtitle, a `SectionHeader` overline per group, and the group's
     // rows in a single grouped NoopCard with hairline dividers — the same row idiom Settings/Health use.
+    private var moreSearchEntries: [MoreSearchEntry] {
+        [
+        MoreSearchEntry(title: "What Moves You", icon: "wand.and.sparkles", route: .insightsHub, keywords: ""),
+        MoreSearchEntry(title: "Intelligence", icon: "brain.head.profile", route: .intelligence, keywords: ""),
+        MoreSearchEntry(title: "Insights", icon: "lightbulb.fill", route: .insights, keywords: ""),
+        MoreSearchEntry(title: "Explore", icon: "square.grid.2x2.fill", route: .explore, keywords: ""),
+        MoreSearchEntry(title: "Compare", icon: "rectangle.split.2x1.fill", route: .compare, keywords: ""),
+        MoreSearchEntry(title: "Live", icon: "waveform.path.ecg", route: .live, keywords: ""),
+        MoreSearchEntry(title: "Workouts", icon: "figure.run", route: .workouts, keywords: ""),
+        MoreSearchEntry(title: "Lift Log", icon: "dumbbell.fill", route: .liftLog, keywords: ""),
+        MoreSearchEntry(title: "Health", icon: "heart.text.square.fill", route: .health, keywords: ""),
+        MoreSearchEntry(title: "Lab Book", icon: "books.vertical.fill", route: .labBook, keywords: ""),
+        MoreSearchEntry(title: "Stress", icon: "bolt.heart.fill", route: .stress, keywords: ""),
+        MoreSearchEntry(title: "Breathe", icon: "wind", route: .breathe, keywords: ""),
+        MoreSearchEntry(title: "Intervals", icon: "timer", route: .intervals, keywords: ""),
+        MoreSearchEntry(title: "Rhythm", icon: "waveform.path", route: .rhythm, keywords: ""),
+        MoreSearchEntry(title: "Your Data, Fused", icon: "square.stack.3d.up.fill", route: .fusedRecord, keywords: ""),
+        MoreSearchEntry(title: "Apple Health", icon: "heart.fill", route: .appleHealth, keywords: "HealthKit import export permissions Apple Watch"),
+        MoreSearchEntry(title: "Mi Band", icon: "figure.walk.motion", route: .miBand, keywords: ""),
+        MoreSearchEntry(title: "Data Sources", icon: "externaldrive.fill", route: .dataSources, keywords: ""),
+        MoreSearchEntry(title: "Backup & Sync", icon: "externaldrive.fill.badge.icloud", route: .backupSync, keywords: "backup restore export files daily hourly"),
+        MoreSearchEntry(title: "Shortcuts Export", icon: "square.and.arrow.up.fill", route: .shortcutsExport, keywords: "Apple Health export Siri sync heart rate HRV steps"),
+        MoreSearchEntry(title: "NOOP Limitations", icon: "list.bullet.rectangle", route: .noopLimitations, keywords: ""),
+        MoreSearchEntry(title: "Alarms", icon: "alarm.fill", route: .alarms, keywords: "wake sleep smart alarm"),
+        MoreSearchEntry(title: "Automations", icon: "wand.and.stars", route: .automations, keywords: ""),
+        MoreSearchEntry(title: "Test Centre", icon: "stethoscope", route: .testCentre, keywords: "diagnostics debug logs troubleshooting"),
+        MoreSearchEntry(title: "Siri & Shortcuts", icon: "mic.fill", route: .siriShortcuts, keywords: "automation voice Siri shortcuts"),
+        MoreSearchEntry(title: "Power saving", icon: "battery.25", route: .powerSaving, keywords: "battery drain power continuous HRV"),
+        MoreSearchEntry(title: "Settings", icon: "gearshape.fill", route: .settings, keywords: "profile age height weight units language appearance theme notifications food diet hydration continuous HRV recovery scoring background transparency reduce motion"),
+        ]
+    }
+
     private func moreTab(path: Binding<NavigationPath>, scrollSignal: Int) -> some View {
         NavigationStack(path: path) {
             ScreenScaffold(title: "More", subtitle: "Everything else, one tap away",
                            onRefresh: { await repo.refresh() },
                            topBackground: liquidScaffoldSky()) {
-                moreSection("Insights") {
-                    MoreRow("What Moves You", "wand.and.sparkles", .insightsHub)
-                    MoreRow("Intelligence", "brain.head.profile", .intelligence)
-                    // K3: Coach promoted to a top-level tab — no longer listed under More.
-                    MoreRow("Insights", "lightbulb.fill", .insights)
-                    MoreRow("Explore", "square.grid.2x2.fill", .explore)
-                    MoreRow("Compare", "rectangle.split.2x1.fill", .compare)
-                }
-                moreSection("Body") {
-                    MoreRow("Live", "waveform.path.ecg", .live)
-                    MoreRow("Workouts", "figure.run", .workouts)
-                    MoreRow("Lift Log", "dumbbell.fill", .liftLog)
-                    MoreRow("Health", "heart.text.square.fill", .health)
-                    MoreRow("Lab Book", "books.vertical.fill", .labBook)
-                    MoreRow("Stress", "bolt.heart.fill", .stress)
-                    MoreRow("Breathe", "wind", .breathe)
-                    MoreRow("Intervals", "timer", .intervals)
-                    // Experimental beat-to-beat regularity visualization — self-gates on its own consent.
-                    MoreRow("Rhythm", "waveform.path", .rhythm)
-                }
-                moreSection("Data") {
-                    MoreRow("Your Data, Fused", "square.stack.3d.up.fill", .fusedRecord)
-                    MoreRow("Apple Health", "heart.fill", .appleHealth)
-                    MoreRow("Mi Band", "figure.walk.motion", .miBand)
-                    MoreRow("Data Sources", "externaldrive.fill", .dataSources)
-                    MoreRow("Backup & Sync", "externaldrive.fill.badge.icloud", .backupSync)
-                    // #155: HealthKit-free Apple Health path for sideloaded installs (Siri Shortcut
-                    // reads the opt-in Documents/noop_sync.txt drop file).
-                    MoreRow("Shortcuts Export", "square.and.arrow.up.fill", .shortcutsExport)
-                    // The plain 4.0 vs 5.0/MG capability grid — what NOOP reads live off each strap.
-                    MoreRow("NOOP Limitations", "list.bullet.rectangle", .noopLimitations)
-                }
-                moreSection("App") {
-                    // #805/#811: the v7.3.1 #766 alarm consolidation moved Smart Alarm under a single
-                    // "Alarms" sidebar entry (RootView .smartAlarm) but the regression dropped the row
-                    // from the iPhone More list, leaving Alarms unreachable on iPhone. Restore it here
-                    // (route to SmartAlarmView, the cross-platform iOS/macOS surface).
-                    //
-                    // Notifications (RootView .notifications) is deliberately NOT added: that screen is
-                    // macOS-only (it picks which Mac apps tap your wrist via NSWorkspace, imports AppKit,
-                    // and project.yml excludes Screens/NotificationSettingsView.swift from the iOS target),
-                    // so it can't compile or apply on iPhone. iPhone's wrist-alert controls live on the
-                    // Automations screen instead. Its absence from the iPhone More list is correct.
-                    MoreRow("Alarms", "alarm.fill", .alarms)
-                    MoreRow("Automations", "wand.and.stars", .automations)
-                    // The Test Centre (the diagnostics + bug-report hub) gets a first-class home here, not
-                    // just buried in Settings, so the feedback loop is one tap from the More tab.
-                    MoreRow("Test Centre", "stethoscope", .testCentre)
-                    MoreRow("Siri & Shortcuts", "mic.fill", .siriShortcuts)
-                    // #477 lives here rather than inside Settings: the strap-battery levers are the
-                    // ones people reach for when a strap is running down, so they get their own row.
-                    MoreRow("Power saving", "battery.25", .powerSaving)
-                    MoreRow("Settings", "gearshape.fill", .settings)
+                if moreSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    moreSection("Insights") {
+                        MoreRow("What Moves You", "wand.and.sparkles", .insightsHub)
+                        MoreRow("Intelligence", "brain.head.profile", .intelligence)
+                        // K3: Coach promoted to a top-level tab — no longer listed under More.
+                        MoreRow("Insights", "lightbulb.fill", .insights)
+                        MoreRow("Explore", "square.grid.2x2.fill", .explore)
+                        MoreRow("Compare", "rectangle.split.2x1.fill", .compare)
+                    }
+                    moreSection("Body") {
+                        MoreRow("Live", "waveform.path.ecg", .live)
+                        MoreRow("Workouts", "figure.run", .workouts)
+                        MoreRow("Lift Log", "dumbbell.fill", .liftLog)
+                        MoreRow("Health", "heart.text.square.fill", .health)
+                        MoreRow("Lab Book", "books.vertical.fill", .labBook)
+                        MoreRow("Stress", "bolt.heart.fill", .stress)
+                        MoreRow("Breathe", "wind", .breathe)
+                        MoreRow("Intervals", "timer", .intervals)
+                        // Experimental beat-to-beat regularity visualization — self-gates on its own consent.
+                        MoreRow("Rhythm", "waveform.path", .rhythm)
+                    }
+                    moreSection("Data") {
+                        MoreRow("Your Data, Fused", "square.stack.3d.up.fill", .fusedRecord)
+                        MoreRow("Apple Health", "heart.fill", .appleHealth)
+                        MoreRow("Mi Band", "figure.walk.motion", .miBand)
+                        MoreRow("Data Sources", "externaldrive.fill", .dataSources)
+                        MoreRow("Backup & Sync", "externaldrive.fill.badge.icloud", .backupSync)
+                        // #155: HealthKit-free Apple Health path for sideloaded installs (Siri Shortcut
+                        // reads the opt-in Documents/noop_sync.txt drop file).
+                        MoreRow("Shortcuts Export", "square.and.arrow.up.fill", .shortcutsExport)
+                        // The plain 4.0 vs 5.0/MG capability grid — what NOOP reads live off each strap.
+                        MoreRow("NOOP Limitations", "list.bullet.rectangle", .noopLimitations)
+                    }
+                    moreSection("App") {
+                        // #805/#811: the v7.3.1 #766 alarm consolidation moved Smart Alarm under a single
+                        // "Alarms" sidebar entry (RootView .smartAlarm) but the regression dropped the row
+                        // from the iPhone More list, leaving Alarms unreachable on iPhone. Restore it here
+                        // (route to SmartAlarmView, the cross-platform iOS/macOS surface).
+                        //
+                        // Notifications (RootView .notifications) is deliberately NOT added: that screen is
+                        // macOS-only (it picks which Mac apps tap your wrist via NSWorkspace, imports AppKit,
+                        // and project.yml excludes Screens/NotificationSettingsView.swift from the iOS target),
+                        // so it can't compile or apply on iPhone. iPhone's wrist-alert controls live on the
+                        // Automations screen instead. Its absence from the iPhone More list is correct.
+                        MoreRow("Alarms", "alarm.fill", .alarms)
+                        MoreRow("Automations", "wand.and.stars", .automations)
+                        // The Test Centre (the diagnostics + bug-report hub) gets a first-class home here, not
+                        // just buried in Settings, so the feedback loop is one tap from the More tab.
+                        MoreRow("Test Centre", "stethoscope", .testCentre)
+                        MoreRow("Siri & Shortcuts", "mic.fill", .siriShortcuts)
+                        // #477 lives here rather than inside Settings: the strap-battery levers are the
+                        // ones people reach for when a strap is running down, so they get their own row.
+                        MoreRow("Power saving", "battery.25", .powerSaving)
+                        MoreRow("Settings", "gearshape.fill", .settings)
+                    }
+                } else {
+                    let results = moreSearchEntries.filter { entry in
+                        let title = String(localized: String.LocalizationValue(entry.title))
+                        return (title + " " + entry.title + " " + entry.keywords)
+                            .localizedStandardContains(moreSearch.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    if results.isEmpty {
+                        Text("No results").font(StrandFont.body).foregroundStyle(StrandPalette.textSecondary)
+                    } else {
+                        NoopCard(padding: 0) {
+                            VStack(spacing: 0) {
+                                ForEach(results, id: \.route) { entry in
+                                    MoreRow(LocalizedStringKey(entry.title), entry.icon,
+                                            entry.route == .settings ? .settingsSearch(moreSearch) : entry.route)
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.cardRadius, style: .continuous))
+                        }
+                    }
                 }
             }
             // The rows push MoreDestination VALUES so a re-tap of the More tab can pop them off the
@@ -578,6 +632,7 @@ struct RootTabView: View {
                     .toolbarBackground(.hidden, for: .navigationBar)
             }
         }
+        .searchable(text: $moreSearch, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search settings and tools")
         // Scroll the More index to the top on an at-root re-tap (#198 follow-up); read by its ScreenScaffold.
         .environment(\.scrollToTopSignal, scrollSignal)
         .tabItem { Label("More", systemImage: "ellipsis") }
@@ -647,6 +702,7 @@ private enum MoreDestination: Hashable {
     case live, workouts, liftLog, health, labBook, stress, breathe, intervals, rhythm
     case fusedRecord, appleHealth, miBand, dataSources, backupSync, shortcutsExport, noopLimitations
     case alarms, automations, testCentre, siriShortcuts, powerSaving, settings
+    case settingsSearch(String)
 
     @ViewBuilder var destination: some View {
         switch self {
@@ -677,6 +733,7 @@ private enum MoreDestination: Hashable {
         case .testCentre:      TestCentreView()
         case .siriShortcuts:   SiriShortcutsSettingsView()
         case .powerSaving:     PowerSavingView()
+        case .settingsSearch(let query): SettingsView(initialSearch: query)
         case .settings:        SettingsView()
         }
     }
@@ -687,6 +744,13 @@ private enum MoreDestination: Hashable {
 /// the SF Symbol icon tinted `StrandPalette.accent`, the title in the body text colour, a `Spacer`, and a
 /// trailing `chevron.right` in `textTertiary`. ~44pt min height + the card's row insets keep the whole row a
 /// comfortable tap target.
+private struct MoreSearchEntry {
+    let title: String
+    let icon: String
+    let route: MoreDestination
+    let keywords: String
+}
+
 private struct MoreRow: View {
     let title: LocalizedStringKey
     let icon: String
