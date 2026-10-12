@@ -23,6 +23,13 @@ class IllnessAlertPolicyTest {
         assertTrue(IllnessAlertPolicy.shouldNotify("strained", false, "2026-06-09", "2026-06-10"))
     }
 
+    /** No stored previous evaluation on upgrade is unknown, not proof of a clear-to-raised edge. */
+    @Test
+    fun firstEvaluationOfAlreadyRaisedHistoryDoesNotNotify() {
+        assertFalse(IllnessAlertPolicy.shouldNotify("strained", null, null, "2026-06-10"))
+        assertFalse(IllnessAlertPolicy.shouldNotify("strained", null, "2026-06-09", "2026-06-10"))
+    }
+
     @Test
     fun sameDayRepeatIsSuppressed() {
         assertFalse(IllnessAlertPolicy.shouldNotify("strained", false, "2026-06-10", "2026-06-10"))

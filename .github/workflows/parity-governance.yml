@@ -1,6 +1,6 @@
-# These are the scanner's own unit and repository-acceptance tests, plus the
-# explicitly named legacy R-R preservation contract. Keep that companion test
-# exact rather than widening back to every Tools/tests file.
+# These are the scanner's own unit and repository-acceptance tests. The legacy
+# R-R preservation contract reads product source and runs on the unfiltered
+# tools-python leg (#2587).
 #
 # On a PULL REQUEST, run the multi-minute suite only when its implementation,
 # authority, named protection tests or workflow change; ordinary product-source
@@ -34,7 +34,6 @@ on:
       - 'Tools/parity_*.json'
       - 'Tools/parity_case_specs/**'
       - 'Tools/tests/test_parity_*.py'
-      - 'Tools/tests/test_rr_legacy_preservation_contract.py'
       - '.github/workflows/parity-governance.yml'
   push:
     branches: [main]
@@ -44,7 +43,6 @@ on:
       - 'Tools/parity_*.json'
       - 'Tools/parity_case_specs/**'
       - 'Tools/tests/test_parity_*.py'
-      - 'Tools/tests/test_rr_legacy_preservation_contract.py'
       - '.github/workflows/parity-governance.yml'
   # Daily, so authority staleness is found on a schedule instead of by whoever
   # next edits Tools/. See the header note.
@@ -74,14 +72,13 @@ jobs:
           python3 -m unittest -v \
             tests.test_parity_ledger \
             tests.test_parity_governance_acceptance \
-            tests.test_rr_legacy_preservation_contract \
             tests.test_parity_disposition_kinds \
             tests.test_parity_harness \
             2>&1 | tee "$RUNNER_TEMP/out.txt"
           ran=$(grep -oE '^Ran [0-9]+ test' "$RUNNER_TEMP/out.txt" | grep -oE '[0-9]+')
           echo "collected ${ran:-0} tests"
-          if [ "${ran:-0}" -lt 159 ]; then
-            echo "::error::expected at least 159 parity-governance tests, collected ${ran:-0} — discovery is broken, not the suite"
+          if [ "${ran:-0}" -lt 157 ]; then
+            echo "::error::expected at least 157 parity-governance tests, collected ${ran:-0} — discovery is broken, not the suite"
             exit 1
           fi
         working-directory: Tools

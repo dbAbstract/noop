@@ -1240,8 +1240,13 @@ object NoopPrefs {
      *  fresh notification about an alert that had not transitioned at all (#2586). */
     const val KEY_ILLNESS_WAS_RAISED = "noop.illnessWasRaised"
 
-    fun illnessWasRaised(context: Context): Boolean =
-        of(context).getBoolean(KEY_ILLNESS_WAS_RAISED, false)
+    /** Null means no evaluable history has established a previous state yet. Treating it as clear
+     *  would invent a transition on upgrade when an existing two-night warning is already raised. */
+    fun illnessWasRaised(context: Context): Boolean? {
+        val prefs = of(context)
+        return if (prefs.contains(KEY_ILLNESS_WAS_RAISED))
+            prefs.getBoolean(KEY_ILLNESS_WAS_RAISED, false) else null
+    }
 
     fun setIllnessWasRaised(context: Context, raised: Boolean) {
         of(context).edit().putBoolean(KEY_ILLNESS_WAS_RAISED, raised).apply()

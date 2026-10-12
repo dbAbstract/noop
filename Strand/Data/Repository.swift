@@ -102,8 +102,6 @@ struct RepositoryFreshness: Equatable, Sendable {
     var latestDay: String?
 
     static let empty = RepositoryFreshness()
-
-    var hasAnyHistory: Bool { importedDays > 0 || computedDays > 0 || appleDays > 0 }
 }
 
 /// What `deleteSleepSession` hands back so a transient UNDO can restore the night (#65). Carries the
@@ -184,6 +182,12 @@ final class Repository: ObservableObject {
 
     /// Daily metrics (recovery/strain/sleep/HRV/RHR…) over the recent window, oldest→newest.
     @Published var days: [DailyMetric] = []
+    /// The Charge baselines (HRV, resting HR, respiration) resolved from the imported and own daily rows
+    /// with the engine's own rule (#2525), recomputed on every `refresh()`. The single funnel every Charge
+    /// readout below the headline reads (the "What shaped it" rows, the calibration count, the confidence
+    /// tier), so none of them can fold a different history than the score was computed against. nil until
+    /// the first refresh.
+    @Published private(set) var chargeBaselines: ChargeBaselines.Resolved?
     /// Cached sleep sessions over the recent window, oldest→newest.
     @Published var sleeps: [CachedSleepSession] = []
     /// Imported (export-verbatim) sleep figures by day. Empty until a WHOOP import lands.
@@ -854,6 +858,7 @@ final class Repository: ObservableObject {
     private struct MergedCaches {
         let importedSleep: [String: ImportedSleepFigures]
         let days: [DailyMetric]
+        let chargeBaselines: ChargeBaselines.Resolved
         let sleeps: [CachedSleepSession]
         let vitalRows: [SourcedDailyMetric]
         let freshness: RepositoryFreshness
@@ -962,6 +967,13 @@ final class Repository: ObservableObject {
         let impSleep = await unionSleepSessions(store: store, from: lo, to: hi)
         let compSleep = await unionComputedSleepSessions(store: store, from: lo, to: hi)
 
+        // #2525: the Charge baselines' inputs, read on the main actor before detaching: today's local day
+        // (the same local-calendar key the engine anchors its fold on) and the two recalibration epochs the
+        // engine reads from the same UserDefaults keys.
+        let chargeAnchorDay = AnalyticsEngine.dayString(nowTs, offsetSec: TimeZone.current.secondsFromGMT(for: now))
+        let hrvEpoch = Baselines.hrvBaselineEpoch()
+        let recoveryEpoch = Baselines.recoveryBaselineEpoch()
+
         // Export-verbatim sleep figures (long-format metricSeries rows from WhoopImporter).
         // SleepView prefers these per day over its APPROXIMATE recomputations.
         let perf = await unionMetricSeries(store: store, key: "sleep_performance", from: fromDay, to: toDay)
@@ -989,6 +1001,11 @@ final class Repository: ObservableObject {
                     into: Self.mergeDaily(imported: imported, computed: computed, userEditedDays: editedDays),
                     activityFile
                 ),
+                // From the two buckets BEFORE `mergeDaily` blends them: the rule needs to know which nights
+                // are imported and which are the wearer's own.
+                chargeBaselines: ChargeBaselines.resolve(imported: imported, own: computed,
+                                                         anchorDay: chargeAnchorDay,
+                                                         hrvEpoch: hrvEpoch, recoveryEpoch: recoveryEpoch),
                 sleeps: Self.mergeSleep(imported: impSleep, computed: compSleep),
                 vitalRows: Self.sourceRows(imported: imported, computed: computed, apple: apple),
                 freshness: Self.computeFreshness(imported: imported, computed: computed, apple: apple,
@@ -1005,6 +1022,7 @@ final class Repository: ObservableObject {
         // is what stops the analyze-tail's burst of refresh() calls each re-firing TodayView.loadAll().
         let unchanged = loaded
             && merged.days == days
+            && merged.chargeBaselines == chargeBaselines
             && merged.sleeps == sleeps
             && merged.importedSleep == importedSleep
             && merged.vitalRows == vitalRows
@@ -1015,6 +1033,7 @@ final class Repository: ObservableObject {
         // the intraday-updating views reload exactly once for this real change.
         self.importedSleep = merged.importedSleep
         self.days = merged.days
+        self.chargeBaselines = merged.chargeBaselines
         self.sleeps = merged.sleeps
         self.vitalRows = merged.vitalRows
         self.freshness = merged.freshness
@@ -1207,9 +1226,10 @@ final class Repository: ObservableObject {
     /// materialized, against the per-day row fetches a caller would otherwise repeat. Compared only to
     /// itself in memory, so the format is free to change. Kotlin twin:
     /// `WhoopRepository.hrUnionFingerprint`, which is a twin in ROLE only: each side compares its own
-    /// value against its own previous value, neither is persisted or sent anywhere, and the two encode
-    /// the same facts differently. There is no byte-identity contract here and no oracle asserting one,
-    /// so do not "align" the encodings on the assumption that there is.
+    /// value against its own previous value, and the two encode the same facts differently. This one is
+    /// never stored or sent anywhere; the Kotlin side does persist one, for a widget worker that has no
+    /// process memory between wakes (#2710). There is no byte-identity contract here and no oracle
+    /// asserting one, so do not "align" the encodings on the assumption that there is.
     func hrFingerprintUnion(from: Int, to: Int) async -> String {
         guard let store = await ensureStore() else { return "" }
         var parts: [String] = []
@@ -1236,25 +1256,6 @@ final class Repository: ObservableObject {
             }
         }
         return byTs.values.sorted { $0.ts < $1.ts }
-    }
-
-    /// Cheap change-detector over a window of heart rate: a COUNT and a MAX on an indexed column, no
-    /// rows and no decode.
-    ///
-    /// Exists for the stress widget (#2040), whose producer must not read a day's streams on a periodic
-    /// tick just to discover nothing moved. Unions the same ids the reads above do, so a change under
-    /// either source is seen; nil when there is no store yet, which a caller treats as "cannot tell"
-    /// rather than as "unchanged". Twin of Kotlin's `hrFingerprintWindow`.
-    func hrFingerprint(from: Int, to: Int) async -> (count: Int, maxTs: Int)? {
-        guard let store = await ensureStore() else { return nil }
-        var count = 0
-        var maxTs = 0
-        for id in rawPhysiologyReadIds(store: store) {
-            guard let fp = try? await store.hrFingerprint(deviceId: id, from: from, to: to) else { continue }
-            count += fp.count
-            maxTs = max(maxTs, fp.maxTs)
-        }
-        return (count, maxTs)
     }
 
     /// R-R beats across the active physical WHOOP and canonical history. Exact duplicates are removed

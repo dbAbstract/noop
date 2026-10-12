@@ -646,6 +646,7 @@
     <string name="l10n_sleep_screen_nap_window_durationtext_durmin_bbc35167">Nap %1$s, %2$s</string>
     <string name="l10n_sleep_screen_night_detail_8f271bcf">Detalle de la noche</string>
     <string name="l10n_sleep_screen_no_movement_detail_for_this_night_a6f9736a">No hay detalle de movimiento para esta noche.</string>
+    <string name="l10n_sleep_screen_move_relative_to_tonight_fd71d87b">Movimiento, en relación con esta noche</string>
     <string name="l10n_sleep_screen_no_nights_here_yet_607248f5">Aún no hay noches aquí.</string>
     <string name="l10n_sleep_screen_no_nights_with_sleep_data_yet_fa71b6b3">Aún no hay noches con datos de sueño. Tu registro se irá llenando a medida que duermas con la pulsera puesta.</string>
     <string name="l10n_sleep_screen_not_enough_history_in_this_range_7e2fd640">No hay suficiente historia en este rango. Prueba 3M, 6M o TODOS.</string>
@@ -1419,6 +1420,10 @@
     <string name="l10n_settings_screen_version_avail_version_is_available_5b401bd4">Versión %1$s está disponible</string>
     <string name="l10n_settings_screen_waist_optional_d5356703">Cintura (opcional)</string>
     <string name="l10n_settings_screen_weight_69c0b815">Peso</string>
+    <string name="l10n_settings_screen_use_weight_from_health_connect_c1fe3e2a">Usar el peso de Health Connect</string>
+    <string name="l10n_settings_screen_use_weight_from_health_connect_detail_40238f8a">Tras cada sincronización, el peso de tu perfil toma la lectura más reciente de Health Connect. Desactívalo para ajustarlo a mano.</string>
+    <string name="l10n_settings_screen_weight_from_health_connect_caption_5ca6ea7d">De Health Connect · %1$s</string>
+    <string name="l10n_settings_screen_weight_from_health_connect_none_dd3f4884">De Health Connect · aún sin peso</string>
     <string name="l10n_settings_screen_what_each_strap_can_read_and_51e7d3fc">Lo que cada correa puede leer, y por qué algunas características difieren.</string>
     <string name="l10n_settings_screen_what_s_new_4d8dc5fe">Novedades</string>
     <string name="l10n_settings_screen_what_s_new_in_noop_appchangelog_d26fb453">Lo nuevo en NOOP %1$s</string>
@@ -1857,6 +1862,7 @@
     <!-- The remaining notifier titles/bodies, surfaced by extending i18n_audit.py to the
          notification builders. Same defect as the block above: user-visible, never localised. -->
     <string name="illness_alert_title">Aviso temprano: tómatelo con calma</string>
+    <string name="illness_alert_window">Noches: %1$s, %2$s</string>
     <string name="inactivity_title">Recordatorio de movimiento</string>
     <string name="smart_alarm_title">Buenos días</string>
     <string name="smart_alarm_body">Tu alarma inteligente acaba de sonar.</string>
@@ -2238,7 +2244,8 @@
     <string name="today_show_all_metrics">Mostrar todas las métricas (%1$d)</string>
     <string name="today_hr_empty_selected_day">No hay datos de frecuencia cardíaca para este día. Vuelve a un día en que llevaras la pulsera.</string>
     <string name="today_hr_empty_window">No hay datos de frecuencia cardíaca en las últimas %1$s. Prueba un intervalo mayor o «Hoy».</string>
-    <string name="today_hr_calibrating">Calibrando. Aún no se han guardado datos de frecuencia cardíaca hoy. La curva se completará cuando la pulsera transfiera los datos.</string>
+    <string name="today_hr_none_today">Aún no hay datos de frecuencia cardíaca guardados para hoy. La curva se dibujará cuando la pulsera los transfiera o cuando una importación los traiga.</string>
+    <string name="today_hr_one_block">Solo hay un bloque de cinco minutos de frecuencia cardíaca guardado para hoy. La curva necesita dos para trazar una línea.</string>
     <string name="today_hr_average_last_window">Media de 5 minutos | últimas %1$s</string>
     <string name="today_hr_zoomed_hint">Ampliado · arrastra para desplazarte</string>
     <string name="today_not_connected">Sin conexión</string>
@@ -2851,4 +2858,6 @@
     <string name="raw_diag_ecg_probe_start">Iniciar captura de ECG</string>
     <string name="raw_diag_ecg_probe_stop">Detener captura de ECG</string>
     <string name="raw_diag_ecg_probe_running">Puede que siga activa una captura en esta correa. El veredicto se registra en el strap log.</string>
+    <string name="today_customize_live_session_availability">Aparece hoy si Live Sessions está activado en Ajustes o hay una sesión activa.</string>
+    <string name="l10n_app_changelog_today_your_way_heart_rate_any_5e1308b3">Hoy a tu manera, frecuencia cardíaca para cualquier aplicación e italiano</string>
 </resources>

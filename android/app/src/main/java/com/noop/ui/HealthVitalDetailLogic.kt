@@ -250,15 +250,19 @@ internal fun vitalReadingRows(
         )
     }
 
-/** "9 Jun" for a "YYYY-MM-DD" reading day (today / yesterday read as words to match the hero "as of"
- *  line); the verbatim string if it doesn't parse. Locale.US month, matching [asOfLabel]. */
-internal fun vitalReadingDateLabel(day: String): String {
+/** Include the weekday so a recovery reading can be matched to a training day without counting dates.
+ *  Keep Today/Yesterday as context, and format the calendar date in the device's active locale. */
+internal fun vitalReadingDateLabel(
+    day: String,
+    today: LocalDate = LocalDate.now(),
+    locale: Locale = Locale.getDefault(),
+): String {
     val date = runCatching { LocalDate.parse(day) }.getOrNull() ?: return day
-    val today = LocalDate.now()
+    val dated = date.format(DateTimeFormatter.ofPattern("EEE d MMM", locale))
     return when (date) {
-        today -> "Today"
-        today.minusDays(1) -> "Yesterday"
-        else -> date.format(DateTimeFormatter.ofPattern("d MMM", Locale.US))
+        today -> "Today · ${date.format(DateTimeFormatter.ofPattern("EEE", locale))}"
+        today.minusDays(1) -> "Yesterday · ${date.format(DateTimeFormatter.ofPattern("EEE", locale))}"
+        else -> dated
     }
 }
 
@@ -375,7 +379,7 @@ internal fun vitalHistorySpanDays(points: List<Pair<String, Double>>): Long {
     return (last.toEpochDay() - first.toEpochDay()).coerceAtLeast(0L)
 }
 
-/** #943 (ryanbr): which range chips have anything NEW to show. filterVitalPoints windows off the
+/** #943 (ryanbr): which range chips have anything NEW to show. filterVitalReadings windows off the
  *  LATEST reading, so with under a week of history every window returned the identical full point set
  *  and all six chips drew the same line (a week of data stretched full-width under a "1Y" label). A
  *  range only differs from its predecessor once the data span EXCEEDS the predecessor's window, so the
@@ -413,24 +417,8 @@ internal fun unlockedVitalRanges(spanDays: Long): List<VitalDetailRange> {
     return unlocked
 }
 
-internal fun filterVitalPoints(
-    points: List<Pair<String, Double>>,
-    range: VitalDetailRange,
-): List<Pair<String, Double>> {
-    val windowDays = range.days ?: return points
-    val latestDate = points.lastOrNull()?.first?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-        ?: return points.takeLast(windowDays.toInt())
-    val cutoff = latestDate.minusDays(windowDays - 1)
-    val filtered = points.filter { (day, _) ->
-        runCatching { LocalDate.parse(day) }.getOrNull()?.let { !it.isBefore(cutoff) } ?: false
-    }
-    return filtered.ifEmpty { points.takeLast(windowDays.toInt()) }
-}
-
-/** [filterVitalPoints] for the source-carrying [VitalReading] list — the SAME latest-relative window, so
- *  the readings table and the chart always agree on which readings are in view (task #8). Kept as a twin
- *  of the point filter (identical windowing) rather than shared-generic to preserve the pinned-test shape
- *  of [filterVitalPoints]. */
+/** Latest-relative window used by the vital chart, reading count, and source-carrying table.
+ * Unparseable latest dates fall back to the last window-sized set of readings. */
 internal fun filterVitalReadings(
     readings: List<VitalReading>,
     range: VitalDetailRange,

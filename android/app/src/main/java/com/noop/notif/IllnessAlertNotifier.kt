@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.noop.R
+import com.noop.data.DailyMetric
 import com.noop.ui.NoopPrefs
 import com.noop.ui.appLaunchIntent
 
@@ -25,10 +26,10 @@ internal object IllnessAlertPolicy {
      */
     fun shouldNotify(
         alert: String?,
-        previouslyRaised: Boolean,
+        previouslyRaised: Boolean?,
         lastNotifiedDay: String?,
         today: String,
-    ): Boolean = alert != null && !previouslyRaised && lastNotifiedDay != today
+    ): Boolean = alert != null && previouslyRaised == false && lastNotifiedDay != today
 }
 
 /**
@@ -40,6 +41,13 @@ internal object IllnessAlertPolicy {
 object IllnessAlertNotifier {
     private const val CHANNEL_ID = "noop_illness_watch"
     private const val NOTIF_ID = 4202   // 4201 is the ongoing connection notification
+
+    /** The watch averages the last two stored wake-days, so name both while either can keep it raised. */
+    fun withWindow(context: Context, alert: String, days: List<DailyMetric>): String {
+        val recent = days.takeLast(2)
+        if (recent.size < 2) return alert
+        return "$alert\n${context.getString(R.string.illness_alert_window, recent[0].day, recent[1].day)}"
+    }
 
     @SuppressLint("MissingPermission") // guarded by areNotificationsEnabled() + runCatching
     fun onEvaluated(context: Context, alert: String?) {
@@ -56,7 +64,8 @@ object IllnessAlertNotifier {
         // An unconditional write there would put a SharedPreferences commit on that path several times
         // a minute to store a boolean that almost never moves, which is the same waste the battery
         // gate below this call site already avoids by keying on actual movement.
-        if (wasRaised != (alert != null)) NoopPrefs.setIllnessWasRaised(context, alert != null)
+        if (wasRaised == null || wasRaised != (alert != null))
+            NoopPrefs.setIllnessWasRaised(context, alert != null)
         if (!notify) return
         // Defensive: never let a notify() throw (revoked POST_NOTIFICATIONS, OEM quirk) crash a collector.
         runCatching {

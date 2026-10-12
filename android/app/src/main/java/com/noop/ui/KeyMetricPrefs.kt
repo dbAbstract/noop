@@ -59,8 +59,8 @@ object KeyMetricPrefs {
     private const val KEY_LAYOUT = "today.keyMetrics"
     private const val KEY_DETAILED = "today.keyMetricsDetailed"
 
-    /** Whether the Key-Metrics tiles render DETAILED — taller/squarer with a 14-day trend graph under the
-     *  fill bar. Display-only, default off (the compact ktile look). Set from the #251 editor's switch;
+    /** Whether the Key-Metrics tiles render DETAILED — taller/squarer with a trend graph under the
+     *  fill bar. Display-only, default off (the Today-only compact ktile look). Set by the editor;
      *  key name is parity-ready for the macOS/iOS twin (@AppStorage "today.keyMetricsDetailed"). */
     fun detailed(context: Context): Boolean =
         NoopPrefs.of(context).getBoolean(KEY_DETAILED, false)

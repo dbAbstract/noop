@@ -938,6 +938,7 @@
     <string name="l10n_sleep_screen_nap_window_durationtext_durmin_bbc35167">Nap %1$s, %2$s</string>
     <string name="l10n_sleep_screen_night_detail_8f271bcf">Night detail</string>
     <string name="l10n_sleep_screen_no_movement_detail_for_this_night_a6f9736a">No movement detail for this night.</string>
+    <string name="l10n_sleep_screen_move_relative_to_tonight_fd71d87b">Move, relative to tonight</string>
     <string name="l10n_sleep_screen_no_nights_here_yet_607248f5">No nights here yet</string>
     <string name="l10n_sleep_screen_no_nights_with_sleep_data_yet_fa71b6b3">No nights with sleep data yet. Your ledger fills in as you wear the strap to bed.</string>
     <string name="l10n_sleep_screen_not_enough_history_in_this_range_7e2fd640">Not enough history in this range. Try 3M, 6M, or ALL.</string>
@@ -1724,6 +1725,10 @@
     <string name="l10n_settings_screen_version_avail_version_is_available_5b401bd4">Version %1$s is available</string>
     <string name="l10n_settings_screen_waist_optional_d5356703">Waist (optional)</string>
     <string name="l10n_settings_screen_weight_69c0b815">Weight</string>
+    <string name="l10n_settings_screen_use_weight_from_health_connect_c1fe3e2a">Use weight from Health Connect</string>
+    <string name="l10n_settings_screen_use_weight_from_health_connect_detail_40238f8a">After every sync, your profile weight takes the newest Health Connect reading. Turn off to set it by hand.</string>
+    <string name="l10n_settings_screen_weight_from_health_connect_caption_5ca6ea7d">From Health Connect · %1$s</string>
+    <string name="l10n_settings_screen_weight_from_health_connect_none_dd3f4884">From Health Connect · no weight yet</string>
     <string name="l10n_settings_screen_what_each_strap_can_read_and_51e7d3fc">What each strap can read, and why some features differ.</string>
     <string name="l10n_settings_screen_what_s_new_4d8dc5fe">What\'s new</string>
     <string name="l10n_settings_screen_what_s_new_in_noop_appchangelog_d26fb453">What\'s new in NOOP %1$s</string>
@@ -1996,6 +2001,7 @@
     <!-- The remaining notifier titles/bodies, surfaced by extending i18n_audit.py to the
          notification builders. Same defect as the block above: user-visible, never localised. -->
     <string name="illness_alert_title">Early warning: take it easy</string>
+    <string name="illness_alert_window">Nights: %1$s, %2$s</string>
     <string name="inactivity_title">Move reminder</string>
     <string name="smart_alarm_title">Good morning</string>
     <string name="smart_alarm_body">Your smart alarm just went off.</string>
@@ -2359,7 +2365,8 @@
     <string name="today_show_all_metrics">Show all metrics (%1$d)</string>
     <string name="today_hr_empty_selected_day">No heart rate for this day. Step back to a day the strap was worn.</string>
     <string name="today_hr_empty_window">No heart rate in the last %1$s. Try a wider window or Today.</string>
-    <string name="today_hr_calibrating">Calibrating, no heart rate banked yet today. Your curve fills in as the strap offloads.</string>
+    <string name="today_hr_none_today">No heart rate stored for today yet. The curve draws once the strap offloads, or once an import brings one in.</string>
+    <string name="today_hr_one_block">Only one five-minute block of heart rate is stored for today. The curve needs two of them to draw a line.</string>
     <string name="today_hr_average_last_window">5-minute average | last %1$s</string>
     <string name="today_hr_zoomed_hint">Zoomed in · drag to pan</string>
     <string name="today_not_connected">Not connected</string>
@@ -2880,4 +2887,6 @@
     <string name="raw_diag_ecg_probe_start">Start ECG capture</string>
     <string name="raw_diag_ecg_probe_stop">Stop ECG capture</string>
     <string name="raw_diag_ecg_probe_running">A capture may still be running on this strap. The verdict goes to the strap log.</string>
+    <string name="today_customize_live_session_availability">Appears today when Live Sessions is enabled in Settings or a session is active.</string>
+    <string name="l10n_app_changelog_today_your_way_heart_rate_any_5e1308b3">Today your way, heart rate any app can read, and Italian</string>
 </resources>

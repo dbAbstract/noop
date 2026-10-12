@@ -15,6 +15,7 @@ import SwiftUI
 import StrandDesign
 import WhoopStore
 import StrandAnalytics
+import WhoopProtocol
 
 struct LiquidTodayView: View {
     @AppStorage(DayCycleMode.storageKey) private var dayCycleModeRaw = DayCycleMode.sleepOnset.rawValue
@@ -165,6 +166,10 @@ struct LiquidTodayView: View {
     /// the other caches. It composes `TodayView.lastScoredRecoveryDay`, which is O(days) — exactly the scan
     /// this cache exists to keep out of body. Never resolved in body.
     @State private var cachedChargeDisplay: ChargeDisplay = .noData
+    /// Active WHOOP 5 R-R policy bounds for the selected night's missing Charge explanation.
+    @State private var whoop5StrictRR = false
+    @State private var firstRecordedRRDay: String?
+    @State private var firstScorableRRDay: String?
     /// Flips true once the first load() completes. Until then the hero gauges + sky render STATIC so the
     /// launch data-churn (refresh publish + BLE/HR notifies) isn't fighting 4 live canvases + CoreMotion.
     @State private var dataLoaded = false
@@ -246,6 +251,15 @@ struct LiquidTodayView: View {
     }
     /// The Charge hero's resolved state (see `cachedChargeDisplay`), read O(1) from the cache.
     private var chargeDisplay: ChargeDisplay { cachedChargeDisplay }
+
+    /// Match classic Today's existing legacy-night judgement, including its selected-day gate.
+    private var chargeLegacyRRGap: Bool {
+        guard let day = displayDay, day.recovery == nil else { return false }
+        return Whoop5RR.legacyUnscorableNight(
+            strictWhoop5: whoop5StrictRR, day: day.day,
+            firstRecordedDay: firstRecordedRRDay, firstScorableDay: firstScorableRRDay,
+            avgHrv: day.avgHrv, totalSleepMin: day.totalSleepMin)
+    }
 
     /// The actual O(days) resolution. Offset 0 prefers live repo.today; past offsets look up. Run ONCE
     /// per data/day change from load(), never from body.
@@ -368,7 +382,9 @@ struct LiquidTodayView: View {
                     // nothing and keeps its slot in the saved order.
                     ForEach(sectionOrder) { section in
                         switch section {
-                        case .hero: heroCard
+                        case .hero:
+                            heroCard
+                            if chargeLegacyRRGap { ChargeLegacyRRGapNote() }
                         case .diet: DietBudgetCard()
                         case .weight: WeightTodayCard()
                         case .liveSession: if liveSessionsBeta { liveSessionStartRow }
@@ -529,7 +545,10 @@ struct LiquidTodayView: View {
     /// Arm the refresh once the pull passes the threshold; FIRE it when the finger releases (the pull
     /// springs back toward zero). Guarded so it can't double-fire or re-trigger mid-refresh.
     private func handlePull(_ y: CGFloat) {
-        pullY = max(0, y)
+        let nextPullY = max(0, y)
+        // Normal upward scrolling keeps reporting negative offsets. Avoid invalidating the whole
+        // dashboard for every such frame when the visible pull indicator is already at zero.
+        if nextPullY != pullY { pullY = nextPullY }
         guard !refreshing else { return }
         // #1748 twin: gate the ARM, not the release. `syncNow()`'s own gate checks connected + bonded, and
         // `bonded` is set by the live-HR path for a 5/MG that has never completed a handshake — so the pull
@@ -1657,6 +1676,7 @@ struct LiquidTodayView: View {
         // readiness verdict. Both scan repo.days (up to 599 rows); doing it per-render was the stutter.
         let day = resolveDisplayDay()
         cachedDisplayDay = day
+        await reloadRRUnitPolicy()
         cachedReadiness = ReadinessEngine.evaluate(days: repo.days, today: day?.day)
         // Prior-day vitals carry, resolved ONCE here (never in body). Bound to today's own key so it can't
         // echo today's still-forming row; only on today (a past day's own row is the whole story).
@@ -1671,8 +1691,8 @@ struct LiquidTodayView: View {
         // classic Today reads, so the two screens agree on when a wearer is genuinely mid-calibration
         // rather than simply lacking a scored night.
         let calNights = (selectedDayOffset == 0)
-            ? RecoveryScorer.calibrationNights(nightlyHrv: repo.days.map(\.avgHrv),
-                                               dayKeys: repo.days.map(\.day),
+            ? RecoveryScorer.calibrationNights(nightlyHrv: repo.chargeBaselines?.hrvHistory.values ?? [],
+                                               dayKeys: repo.chargeBaselines?.hrvHistory.dayKeys ?? [],
                                                hasRecovery: day?.recovery != nil)
             : nil
         let priorScored = TodayView.lastScoredRecoveryDay(
@@ -1720,8 +1740,14 @@ struct LiquidTodayView: View {
             // maximum is above it. See `ProfileStore.effortHRmax`.
             let maxHR = profile.effortHRmax
             let restHR = day?.restingHr.map(Double.init) ?? StrainScorer.defaultRestingHR
-            liveStrainLocal = StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
-                                                  method: PuffinExperiment.effortMethod, sex: profile.sex)
+            let method = PuffinExperiment.effortMethod
+            let sex = profile.sex
+            // Fingerprinting and scoring a full day's HR samples is pure work. Keep it off the
+            // main actor so a Repository refresh cannot block an in-progress scroll.
+            liveStrainLocal = await Task.detached(priority: .utility) {
+                StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
+                                    method: method, sex: sex)
+            }.value
         } else {
             liveStrainLocal = nil
         }
@@ -1914,6 +1940,23 @@ struct LiquidTodayView: View {
 
         // First load done — bring the hero gauges + sky to life now the launch churn has settled.
         if !dataLoaded { withAnimation(.easeIn(duration: 0.4)) { dataLoaded = true } }
+    }
+
+    /// Re-read the indexed first-beat bounds on each load, so a new labelled sync clears the note.
+    private func reloadRRUnitPolicy() async {
+        guard let store = await repo.storeHandle() else {
+            whoop5StrictRR = false
+            firstRecordedRRDay = nil
+            firstScorableRRDay = nil
+            return
+        }
+        let owner = repo.deviceId
+        func dayKey(_ ts: Int?) -> String? {
+            ts.map { Repository.localDayKey(Date(timeIntervalSince1970: TimeInterval($0))) }
+        }
+        whoop5StrictRR = (try? await store.isWhoop5RRSource(deviceId: owner)) ?? false
+        firstRecordedRRDay = dayKey((try? await store.firstRecordedRRTimestamp(deviceId: owner)) ?? nil)
+        firstScorableRRDay = dayKey((try? await store.firstScorableWhoop5RRTimestamp(deviceId: owner)) ?? nil)
     }
 
     // MARK: - Derived (sync, off repo.today / repo.days)
@@ -2665,10 +2708,12 @@ private struct LiquidLiveHR: View {
             if series.count >= 2 {
                 ZStack {
                     LiquidHeartRateGrid()
+                    // Historical buckets cannot change between live ticks. Do not run the decorative
+                    // trace clock for this fallback; genuine live HR keeps its existing animation.
                     LiquidThread(bpm: series,
                                  segments: isLive ? nil : (fallbackSegments.count == series.count
                                                            ? fallbackSegments : nil),
-                                 tint: tint, height: 92, animated: animated)
+                                 tint: tint, height: 92, animated: animated && isLive)
                 }
                 .frame(height: 92)
                 .clipShape(RoundedRectangle(cornerRadius: NoopMetrics.space2, style: .continuous))

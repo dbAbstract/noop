@@ -28,6 +28,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -64,6 +66,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import android.content.Context
 import androidx.compose.ui.draw.drawBehind
@@ -79,6 +82,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -645,6 +649,7 @@ fun <T> SegmentedPillControl(
     // control can teach that an option exists before it is usable, e.g. trend ranges that unlock as
     // history builds. Defaulted so every existing call site is untouched.
     enabled: (T) -> Boolean = { true },
+    accessibilityLabel: String? = null,
 ) {
     val outerShape = RoundedCornerShape(50)
     val scrollsForLargeText = adaptsToAvailableWidth && LocalDensity.current.fontScale > 1f
@@ -656,6 +661,8 @@ fun <T> SegmentedPillControl(
     // SegmentedPillControl refresh (segment height 36, pill fills it for an even inset).
     Row(
         modifier = modifier
+            .selectableGroup()
+            .then(if (accessibilityLabel != null) Modifier.semantics { contentDescription = accessibilityLabel } else Modifier)
             .then(if (scrollsForLargeText) Modifier.horizontalScroll(rangeScrollState) else Modifier)
             .then(if (usesEqualWidth) Modifier.fillMaxWidth() else Modifier)
             .height(36.dp)
@@ -686,7 +693,14 @@ fun <T> SegmentedPillControl(
                     .fillMaxHeight()
                     .clip(pillShape)
                     .then(pillBg)
-                    .then(if (itemEnabled) Modifier.clickableNoRipple { onSelect(item) } else Modifier)
+                    .selectable(
+                        selected = selected,
+                        enabled = itemEnabled,
+                        role = Role.Tab,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { onSelect(item) },
+                    )
                     .padding(horizontal = if (usesEqualWidth) Metrics.space4 else 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1514,13 +1528,18 @@ fun StepperField(
     accessibility: String,
     unit: String? = null,
     valueColor: Color = Palette.textPrimary,
+    // False when another source owns the value (e.g. weight synced from Health Connect): the value
+    // still reads, dimmed, and the buttons stop responding.
+    enabled: Boolean = true,
     onMinus: () -> Unit,
     onPlus: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.semantics { contentDescription = accessibility },
+        modifier = Modifier
+            .semantics { contentDescription = accessibility }
+            .alpha(if (enabled) 1f else Palette.disabledOpacity),
     ) {
         Text(
             value,
@@ -1531,20 +1550,20 @@ fun StepperField(
         if (unit != null) {
             Text(unit, style = NoopType.caption, color = Palette.textTertiary)
         }
-        StepperButton(symbol = "−", onClick = onMinus, label = uiString(R.string.l10n_components_decrease_accessibility_df5f1511, accessibility))
-        StepperButton(symbol = "+", onClick = onPlus, label = uiString(R.string.l10n_components_increase_accessibility_0949c0e9, accessibility))
+        StepperButton(symbol = "−", onClick = onMinus, label = uiString(R.string.l10n_components_decrease_accessibility_df5f1511, accessibility), enabled = enabled)
+        StepperButton(symbol = "+", onClick = onPlus, label = uiString(R.string.l10n_components_increase_accessibility_0949c0e9, accessibility), enabled = enabled)
     }
 }
 
 @Composable
-fun StepperButton(symbol: String, onClick: () -> Unit, label: String) {
+fun StepperButton(symbol: String, onClick: () -> Unit, label: String, enabled: Boolean = true) {
     Box(
         modifier = Modifier
             .size(30.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Palette.surfaceInset)
             .border(1.dp, Palette.hairline, RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {

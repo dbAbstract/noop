@@ -142,6 +142,10 @@ class RepositoryBaselineTests(unittest.TestCase):
         # dropping the step or hanging a filter off it later. That already happened once to the leg this
         # test guards (#1691), which is why the leg is unfiltered in the first place.
         self.assertIn("tests.test_parity_governance_acceptance", core)
+        # #2587: the R-R contract reads IntelligenceEngine.swift and
+        # IntelligencePersistence.kt, so its two tests must run on this unfiltered leg.
+        self.assertIn("python3 -m unittest -v tests.test_rr_legacy_preservation_contract", core)
+        self.assertIn("expected at least 2 R-R preservation tests", core)
         # The Windows leg keeps a filter, because it runs ONLY the Tools/linux-capture tests and those
         # read nothing outside their own package. That is the whole reason it could be split off: the
         # runner costs twice a Linux minute, and the cost argument is true for this job alone.
@@ -169,7 +173,6 @@ class RepositoryBaselineTests(unittest.TestCase):
                 "Tools/parity_*.json",
                 "Tools/parity_case_specs/**",
                 "Tools/tests/test_parity_*.py",
-                "Tools/tests/test_rr_legacy_preservation_contract.py",
                 ".github/workflows/parity-governance.yml",
             ] * 2,
             governance_paths,
@@ -187,8 +190,8 @@ class RepositoryBaselineTests(unittest.TestCase):
         self.assertNotIn("test_german_today_localization", governance)
         self.assertIn("tests.test_parity_ledger", governance)
         self.assertIn("tests.test_parity_governance_acceptance", governance)
-        self.assertIn("tests.test_rr_legacy_preservation_contract", governance)
-        pull_request_paths = governance_paths[:7]
+        self.assertNotIn("tests.test_rr_legacy_preservation_contract", governance)
+        pull_request_paths = governance_paths[:6]
         self.assertFalse(any(
             fnmatchcase("Tools/tests/test_german_today_localization.py", pattern)
             for pattern in pull_request_paths
@@ -197,7 +200,7 @@ class RepositoryBaselineTests(unittest.TestCase):
             fnmatchcase("Tools/tests/test_parity_ledger.py", pattern)
             for pattern in pull_request_paths
         ))
-        self.assertTrue(any(
+        self.assertFalse(any(
             fnmatchcase("Tools/tests/test_rr_legacy_preservation_contract.py", pattern)
             for pattern in pull_request_paths
         ))

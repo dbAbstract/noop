@@ -837,21 +837,20 @@ struct TodayView: View {
 
     /// The ordered "What shaped it" Charge drivers for the displayed Charge ring, PLUS the confidence tier
     /// computed from the SAME folded HRV baseline. PURE derivation from the SAME `displayDay` (post-#814
-    /// union-read row) the ring already shows, plus the HRV/RHR/resp baselines folded from `repo.days`
-    /// (exactly the inputs `AnalyticsEngine` scored with), so a row can NEVER describe a term the ring's
-    /// number didn't use. This is NOT a second store read: it reads only data already resolved into
-    /// `repo.days`/`displayDay`. nil for a calibrating / cold-start night (no usable HRV baseline or no
-    /// value), so the sheet gates through to the calibration countdown instead.
+    /// union-read row) the ring already shows, plus the HRV/RHR/resp baselines `repo.chargeBaselines`
+    /// resolved with the engine's own rule (#2525), so a row can NEVER describe a term the ring's number
+    /// didn't use. This is NOT a second store read: it reads only data already resolved into
+    /// `repo.chargeBaselines`/`displayDay`. nil for a calibrating / cold-start night (no usable HRV baseline
+    /// or no value), so the sheet gates through to the calibration countdown instead.
     ///
     /// PERF: this replaces the two separate computed properties (`chargeDrivers` +
     /// `chargeBreakdownConfidence`) that EACH re-folded the full `repo.days` history per body evaluation of
-    /// the open sheet — four O(n) passes per eval, with the confidence's doc claiming it reused the drivers'
-    /// fold while actually recomputing it. One call folds each series exactly once (three passes), and the
-    /// sheet reads drivers + confidence out of a single sheet-local `let`.
+    /// the open sheet. The baselines are now resolved once per refresh, so a body evaluation folds nothing,
+    /// and the sheet reads drivers + confidence out of a single sheet-local `let`.
     private func chargeBreakdown() -> (drivers: [ChargeDriver], confidence: ScoreConfidence)? {
         guard let row = chargeBreakdownRow else { return nil }
-        return ChargeBreakdownWiring.breakdown(days: repo.days, row: row, sleepPerfPercent: restScore,
-                                               hrvBaselineEpoch: Baselines.hrvBaselineEpoch())
+        guard let baselines = repo.chargeBaselines else { return nil }
+        return ChargeBreakdownWiring.breakdown(baselines: baselines, row: row, sleepPerfPercent: restScore)
     }
 
     /// The night's relative skin-temp marker for the displayed row (A5), or nil. Surfaced verbatim from
@@ -1146,8 +1145,8 @@ struct TodayView: View {
 
     private func computeCalibration() -> Int? {
         guard selectedDayOffset == 0 else { return nil }
-        return RecoveryScorer.calibrationNights(nightlyHrv: repo.days.map(\.avgHrv),
-                                                dayKeys: repo.days.map(\.day),
+        return RecoveryScorer.calibrationNights(nightlyHrv: repo.chargeBaselines?.hrvHistory.values ?? [],
+                                                dayKeys: repo.chargeBaselines?.hrvHistory.dayKeys ?? [],
                                                 hasRecovery: repo.today?.recovery != nil)
     }
 
@@ -1477,9 +1476,11 @@ struct TodayView: View {
                 // Compact top bar: profile/settings (left) · ‹ Today › day-nav (centre, bold) · strap
                 // battery (right). Replaces the big title + the full-width day-nav pill (WHOOP-style).
                 todayTopBar
-                HealthAlertBanner()
+                if selectedDayOffset == 0, let currentDay = repo.today?.day,
+                   currentDay == repo.days.last?.day { HealthAlertBanner() }
                 #else
-                HealthAlertBanner()
+                if selectedDayOffset == 0, let currentDay = repo.today?.day,
+                   currentDay == repo.days.last?.day { HealthAlertBanner() }
                 // Browse past days: chevrons + a date jump capped at today (no future days). Anchored to
                 // the LOGICAL day (the same anchor `selectedLogicalDay` uses) so the full-date label tracks
                 // the data shown in the 00:00-04:00 window instead of jumping a calendar day ahead (#14).
@@ -1489,6 +1490,10 @@ struct TodayView: View {
                 // A "workout in progress" indicator whenever a manual workout is active. A tap routes to Live
                 // and opens the in-exercise screen. Its own leaf owns the AppModel observation + per-second
                 // clock, so the live tick never re-renders TodayView.body.
+                //
+                // No Start here, the Android twin carries the reasoning (TodayScreen.kt, the same block):
+                // #2467 wanted Today's Start to arrive WITH the recording-plus-coaching merge, and only the
+                // button was built, so Today held both of the entry points the report was about.
                 ActiveWorkoutIndicatorSection()
                 // The "still building" and "new here?" prompts are about getting today's scores going,
                 // so they stay anchored to today rather than reappearing on every navigated past day.
@@ -2031,7 +2036,7 @@ struct TodayView: View {
             // scorable beats at all, the Deep-window note would name a window that was never reached and
             // send the wearer to a setting that cannot help.
             if chargeLegacyRRGap {
-                chargeLegacyRRGapNote
+                ChargeLegacyRRGapNote()
             } else if chargeDeepWindowGap {
                 chargeDeepWindowGapNote
             } else if selectedDayOffset == 0 && !chargeScoreState.isCalibrating {
@@ -2079,31 +2084,6 @@ struct TodayView: View {
                                               firstRecordedDay: firstRecordedRRDay,
                                               firstScorableDay: firstScorableRRDay,
                                               avgHrv: d.avgHrv, totalSleepMin: d.totalSleepMin)
-    }
-
-    /// #1505: the note shown instead of a bare "-" when this night's beats predate transport labelling.
-    /// Same card shape as the #233 note it sits beside, on today AND a navigated past day alike, since a
-    /// past day is where this one is almost always read.
-    private var chargeLegacyRRGapNote: some View {
-        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "waveform.path.ecg")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(StrandPalette.chargeColor)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(ChargeBreakdownFormat.chargeLegacyRRGapTitle)
-                        .font(StrandFont.headline)
-                        .foregroundStyle(StrandPalette.textPrimary)
-                    Text(ChargeBreakdownFormat.chargeLegacyRRGapDetail)
-                        .font(StrandFont.subhead)
-                        .foregroundStyle(StrandPalette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(ChargeBreakdownFormat.chargeLegacyRRGapAccessibility)
     }
 
     /// #233: whether the SELECTED day's empty Charge is explained by the Deep-sleep HRV window finding no
@@ -2214,7 +2194,7 @@ struct TodayView: View {
                         // taps through to its own explanation rather than the generic empty note. Same
                         // precedence as the note above the rings: no scorable beats outranks no deep sleep.
                         if chargeLegacyRRGap {
-                            chargeLegacyRRGapNote
+                            ChargeLegacyRRGapNote()
                         } else if chargeDeepWindowGap {
                             chargeDeepWindowGapNote
                         } else if let banked = recoveryCalibration {
@@ -3599,6 +3579,27 @@ struct TodayView: View {
 
     // MARK: HEART RATE, today's continuous HR, off the strap's own ~1Hz history.
 
+    /// The Today HR card's empty-state heading, which states what the bucket read returned and nothing
+    /// else. It used to open "Calibrating" and assert that nothing had been banked today, neither of which
+    /// is established here: the gate is simply that the active-strap-plus-imports union came back with
+    /// under two buckets. Nothing on that branch knows whether a strap is calibrating, whether it has
+    /// offloaded, or whether rows sit under a source this union cannot see, and a card naming a cause it
+    /// has not checked sends a reader looking in the wrong place. One stored block is not "no heart rate"
+    /// either, so it gets its own line rather than being rounded down to zero. Android twin: the `when` in
+    /// `HeartRateTrendCard`'s empty branch.
+    private var hrEmptyTitle: String {
+        if selectedDayOffset != 0 { return String(localized: "No heart rate for this day") }
+        if hrPoints.count == 1 { return String(localized: "One five-minute block of heart rate today") }
+        return String(localized: "No heart rate stored for today yet")
+    }
+
+    /// The line under `hrEmptyTitle`: what would put a curve here, without claiming why there is not one.
+    private var hrEmptyDetail: String {
+        if selectedDayOffset != 0 { return String(localized: "Step back to a day the strap was worn.") }
+        if hrPoints.count == 1 { return String(localized: "The curve needs two of them to draw a line.") }
+        return String(localized: "The curve draws once the strap offloads, or once an import brings one in.")
+    }
+
     /// A full-width 24-hour heart-rate trend, plotted from 5-minute bucket means of the strap's
     /// `hrSample` history (offloaded even while the app was closed, so the day reads continuously).
     /// When there are fewer than two buckets it shows an explicit calibrating/empty card rather than
@@ -3661,23 +3662,20 @@ struct TodayView: View {
                 hrZoomHint
             }
         } else {
-            // #863: an empty / single-bucket day. A calibrating 4.0 banks HR slowly, so an empty curve early
-            // on isn't a fault , say so explicitly instead of leaving a blank where the chart was (which read
-            // as the graph freezing). We don't silently swap in another day's curve here; the honest empty
-            // state is the parity-matched fix. Mirrors the Android HeartRateTrendCard empty branch.
+            // #863: an empty / single-bucket day. An empty curve early on isn't a fault, so say what the
+            // read came back with instead of leaving a blank where the chart was (which read as the graph
+            // freezing). We don't silently swap in another day's curve here; the honest empty state is the
+            // parity-matched fix. The wording lives in `hrEmptyTitle` / `hrEmptyDetail`, which say what was
+            // found rather than why. Mirrors the Android HeartRateTrendCard empty branch.
             VStack(alignment: .leading, spacing: NoopMetrics.gap) {
                 SectionHeader("Heart Rate", overline: "\(selectedDayOverline)")
                 ChartCard(
                     title: "Beats per minute",
-                    subtitle: selectedDayOffset == 0
-                        ? String(localized: "Calibrating, no heart rate banked yet today")
-                        : String(localized: "No heart rate for this day"),
+                    subtitle: hrEmptyTitle,
                     trailing: nil,
                     tint: StrandPalette.metricRose
                 ) {
-                    Text(selectedDayOffset == 0
-                        ? String(localized: "Your curve fills in as the strap offloads its history.")
-                        : String(localized: "Step back to a day the strap was worn."))
+                    Text(hrEmptyDetail)
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -5072,8 +5070,14 @@ struct TodayView: View {
             // maximum is above it. See `ProfileStore.effortHRmax`.
             let maxHR = profile.effortHRmax
             let restHR = displayDay?.restingHr.map(Double.init) ?? StrainScorer.defaultRestingHR
-            liveStrainLocal = StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
-                                        method: PuffinExperiment.effortMethod, sex: profile.sex)
+            let method = PuffinExperiment.effortMethod
+            let sex = profile.sex
+            // The full-day fingerprint and score are pure; do not occupy the main actor
+            // while the Today cards are scrolling or responding to touch.
+            liveStrainLocal = await Task.detached(priority: .utility) {
+                StrainScorer.strain(todayHr, maxHR: maxHR, restingHR: restHR,
+                                    method: method, sex: sex)
+            }.value
         } else {
             liveStrainLocal = nil
         }

@@ -117,6 +117,20 @@ jobs:
           fi
         working-directory: Tools
 
+      # #2587: this contract reads Swift and Android product source. Run it on every PR and
+      # main push, with its own floor so moving or renaming the test cannot silently skip it.
+      - name: Run legacy R-R preservation contract
+        run: |
+          set -o pipefail
+          python3 -m unittest -v tests.test_rr_legacy_preservation_contract 2>&1 | tee "$RUNNER_TEMP/rr-contract.txt"
+          ran=$(grep -oE '^Ran [0-9]+ test' "$RUNNER_TEMP/rr-contract.txt" | grep -oE '[0-9]+')
+          echo "collected ${ran:-0} tests"
+          if [ "${ran:-0}" -lt 2 ]; then
+            echo "::error::expected at least 2 R-R preservation tests, collected ${ran:-0} — discovery is broken, not the suite"
+            exit 1
+          fi
+        working-directory: Tools
+
       # Parity governance has its own path-filtered workflow because that suite scans the repository and
       # is intentionally much slower. Keep this core floor independent so growth in parity cannot hide
       # accidental deletion here; these six source-reference checks raise it to 114.

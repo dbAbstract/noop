@@ -46,13 +46,11 @@ A few principles run through the whole codebase. Internalize them before opening
 1. **Offline by design.** There is no NOOP server, telemetry, or account, and **nothing about you
    leaves the device unless you explicitly switch on a feature that sends it.** Strap data, imports,
    and computed metrics live in a local SQLite database.
-   The app makes exactly four network requests, all documented in
-   [docs/PRIVACY_SECURITY.md §1.1](PRIVACY_SECURITY.md): the opt-in AI Coach, the
-   compile-time-optional Oura history import, the update check (a read of a public version number,
-   on by default, switchable off), and Android's default-off Experimental one-way export to a
-   user-owned endpoint. Adding a fifth needs a very good reason and the same treatment: named in the
-   privacy doc, and switchable off. New hosted services or undisclosed network calls do not belong
-   here; see [Scope](SCOPE.md).
+   [Privacy & Security §1.1](PRIVACY_SECURITY.md#11-network-paths-canonical-inventory) owns the
+   network inventory: defaults, triggers, destinations, payloads and platform-service boundaries.
+   The update check is on by default and sends no health data. Any new network path needs a clear
+   justification, disclosure in that inventory and a way to disable it. New hosted services or
+   undisclosed network calls do not belong here; see [Scope](SCOPE.md).
 2. **Interoperability, not impersonation.** NOOP talks to a strap the user already owns. It does not
    log into a WHOOP account, bypass a paywall, or ship WHOOP's proprietary code/firmware/assets/logos.
    Keep contributions on the right side of that line, and keep all WHOOP references *nominative*
@@ -332,18 +330,18 @@ anonymous, offline, sideloaded project — not a gap to fill with more gates.
   matter most (protocol/analytics math, storage, i18n) without a device or an app build. The check
   names you see are JOB names and do not resemble the workflow names; the table in the root
   [CONTRIBUTING.md](../CONTRIBUTING.md#what-ci-checks) maps them.
-- **Disabled by design — you build the app yourself:** `app-build.yml` (app-target compile, iOS needs
-  `macos-26`) is **off**. So a compile error in **app-target** code (SwiftUI Views, `BLEManager`,
-  `Repository`, a Compose screen) passes every default check — `android.yml` builds and unit-tests the
-  Android app but nothing compiles the Apple app target. Before you push app-layer changes, compile
-  locally — `xcodebuild … build` / `./gradlew compileFullDebugKotlin` — or dispatch `app-build.yml`
-  on demand.
+- **On relevant PRs:** `app-build.yml` is active and path-filtered to the Apple app/test targets,
+  `Packages/**`, `project.yml` and its own workflow file. It compiles `Strand` on `macos-15` and
+  `NOOPiOS` on `macos-26` (for the iOS 26 SDK), and runs `StrandTests` on the macOS leg; the iOS leg
+  is compile-only. Before concluding an app-layer change is validated, build locally or verify the
+  corresponding app checks passed on the current PR head. Package tests alone do not compile Apple
+  app targets; Android's app compile and unit tests are covered by `android.yml`.
 - **Gated at release, not per PR:** Android release lint (`lintVitalFullRelease`) runs inside
   `assembleFullRelease` in the staging/release builds, so lint-fatal issues (e.g. an
   `ExtraTranslation` in a `values-<lang>` file) surface there. Run `./gradlew lintVitalFullRelease`
   locally before a release if you touched `res/`.
-- **On demand:** `app-build.yml` also runs the `StrandTests` macOS integration suite; dispatch it when
-  you change app-target Swift that no package test covers.
+- **On demand:** `app-build.yml` also accepts a manual dispatch. It has no push trigger, so use this
+  for a direct non-release commit to `main` or an explicit PR build probe.
 - **Absent on purpose:** dependency/vuln scanning and Android instrumentation/connected tests. The
   dependency set is small and pinned, there is no server or telemetry, and BLE/offload behavior is
   validated **on a real strap** — compile-success proves nothing about connection behavior.
