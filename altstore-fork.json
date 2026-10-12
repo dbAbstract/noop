@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1051",
-          "buildVersion": "1051",
+          "version": "12.1.0.1052",
+          "buildVersion": "1052",
           "date": "2026-10-12",
-          "localizedDescription": "Add Coach diet reviews and editable goal proposals",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1051.ipa",
-          "size": 16826895,
+          "localizedDescription": "Add calendar-week diet reports and Coach reviews",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1052.ipa",
+          "size": 16903233,
           "minOSVersion": "17.0"
         }
       ]
