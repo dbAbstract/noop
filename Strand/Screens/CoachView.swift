@@ -600,7 +600,10 @@ struct CoachView: View {
         // Insets keep the fixed chrome outside the transcript's scrollable area.
         transcript
         .safeAreaInset(edge: .top, spacing: 0) {
-            connectedHeader
+            VStack(spacing: NoopMetrics.space2) {
+                connectedHeader
+                CoachWeeklyReviewBanner()
+            }
                 .padding(.horizontal, NoopMetrics.screenHPadding)
                 .padding(.top, 4)
                 .padding(.bottom, 10)

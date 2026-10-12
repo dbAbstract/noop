@@ -6,9 +6,24 @@ import WhoopStore
 private final class CoachDietURLProtocol: URLProtocol {
     nonisolated(unsafe) static var status = 200
     nonisolated(unsafe) static var text = ""
+    nonisolated(unsafe) static var lastBody = ""
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        if let body = request.httpBody {
+            Self.lastBody = String(decoding: body, as: UTF8.self)
+        } else if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var body = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                body.append(contentsOf: buffer.prefix(count))
+            }
+            Self.lastBody = String(decoding: body, as: UTF8.self)
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil,
                                        headerFields: ["Content-Type": "text/event-stream"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -26,7 +41,7 @@ final class CoachDietTests: XCTestCase {
     private func withEngine(_ body: (AICoachEngine, Repository) async throws -> Void) async throws {
         let keys = ["ai.provider", "ai.model", "ai.dataConsent", "ai.customConnected", "ai.customBaseURL",
                     "noop.coachEnabled", FoodLogStore.enabledKey, CoachDietReviewHistory.dateKey,
-                    CoachDietReviewHistory.goalKey, AICoachEngine.systemPromptKey]
+                    CoachDietReviewHistory.goalKey, CoachDietReviewHistory.weeksKey, AICoachEngine.systemPromptKey]
         let previous = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         defer {
             for (key, value) in previous {
@@ -38,6 +53,7 @@ final class CoachDietTests: XCTestCase {
         UserDefaults.standard.set(true, forKey: FoodLogStore.enabledKey)
         UserDefaults.standard.removeObject(forKey: CoachDietReviewHistory.dateKey)
         UserDefaults.standard.removeObject(forKey: CoachDietReviewHistory.goalKey)
+        UserDefaults.standard.removeObject(forKey: CoachDietReviewHistory.weeksKey)
         let store = try await WhoopStore.inMemory()
         let repo = Repository(deviceId: "coach-diet-wire-test")
         repo.setStoreForTesting(store)
@@ -87,6 +103,39 @@ final class CoachDietTests: XCTestCase {
             await engine.send(CoachDietReviewHistory.prompt)
             XCTAssertNil(engine.errorText)
             XCTAssertNotNil(CoachDietReviewHistory.lastReviewed(goalId: nil))
+        }
+    }
+
+    @MainActor
+    func testHistoricalWeekUsesSelectedEvidenceAndAcknowledgesOnlySuccessfulReply() async throws {
+        try await withEngine { engine, repo in
+            let today = WeeklyDietReview.dayIndex(Repository.localDayKey(Date()))!
+            let latest = WeeklyDietReview.monday(containing: today) - 7
+            let old = latest - 7
+            let store = await repo.storeHandle()!
+            _ = try await store.upsertMetricSeries([
+                MetricPoint(day: WeeklyDietReview.dayKey(old), key: FoodLogStore.Keys.caloriesIn, value: 1234),
+                MetricPoint(day: WeeklyDietReview.dayKey(latest), key: FoodLogStore.Keys.caloriesIn, value: 2345),
+            ], deviceId: FoodLogStore.sourceId)
+            let oldKey = WeeklyDietReview.dayKey(old)
+            let latestKey = WeeklyDietReview.dayKey(latest)
+            let prompt = CoachDietReviewHistory.weeklyPrompt(startKey: oldKey)
+            CoachDietURLProtocol.status = 500
+            CoachDietURLProtocol.text = ""
+            await engine.send(prompt)
+            XCTAssertFalse(CoachDietReviewHistory.hasReviewed(week: oldKey))
+            CoachDietURLProtocol.status = 200
+            CoachDietURLProtocol.text = "The selected week has only one logged day. We cannot infer a full-week deficit."
+            await engine.send(prompt)
+            XCTAssertNil(engine.errorText)
+            XCTAssertTrue(CoachDietURLProtocol.lastBody.contains("SELECTED WEEK AND PRECEDING WEEKS"))
+            XCTAssertTrue(CoachDietURLProtocol.lastBody.contains("Week \(oldKey)"))
+            XCTAssertTrue(CoachDietReviewHistory.hasReviewed(week: oldKey))
+            XCTAssertFalse(CoachDietReviewHistory.hasReviewed(week: latestKey))
+            engine.dataConsent = false
+            await engine.send(CoachDietReviewHistory.weeklyPrompt(startKey: latestKey))
+            XCTAssertFalse(CoachDietReviewHistory.hasReviewed(week: latestKey))
+            XCTAssertFalse(CoachDietURLProtocol.lastBody.contains("WEEKLY DIET REPORTS (newest first):"))
         }
     }
 

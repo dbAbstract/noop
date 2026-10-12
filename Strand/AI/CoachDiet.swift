@@ -58,6 +58,31 @@ enum CoachDietReviewHistory {
     static let goalKey = "coachDiet.lastReviewGoalId"
     static let prompt = "Review my diet progress with me. Compare my current goal with the measured weight trend, explain data quality and uncertainty, and ask about logging consistency and how manageable the plan feels before suggesting any changes. If there is not enough evidence, tell me what to collect next."
 
+    static let weeksKey = "coachDiet.reviewedWeeks"
+
+    static func weeklyPrompt(startKey: String) -> String {
+        "Review my diet week starting \(startKey). Compare calories in, estimated calories out, calorie balance and weight with the preceding weeks. Explain the longer-term alignment and uncertainty, then discuss logging consistency and manageability before proposing changes."
+    }
+
+    static func requestedWeek(_ text: String) -> String? {
+        let prefix = "Review my diet week starting "
+        guard text.hasPrefix(prefix) else { return nil }
+        let key = String(text.dropFirst(prefix.count).prefix(10))
+        guard let index = WeeklyDietReview.dayIndex(key), WeeklyDietReview.monday(containing: index) == index,
+              text == weeklyPrompt(startKey: key) else { return nil }
+        return key
+    }
+
+    static func hasReviewed(week: String, defaults: UserDefaults = .standard) -> Bool {
+        (defaults.stringArray(forKey: weeksKey) ?? []).contains(week)
+    }
+
+    static func record(week: String, defaults: UserDefaults = .standard) {
+        var weeks = Set(defaults.stringArray(forKey: weeksKey) ?? [])
+        weeks.insert(week)
+        defaults.set(weeks.sorted(), forKey: weeksKey)
+    }
+
     static func lastReviewed(goalId: String?, defaults: UserDefaults = .standard) -> Date? {
         guard defaults.string(forKey: goalKey) == (goalId ?? "no-goal"),
               defaults.double(forKey: dateKey) > 0 else { return nil }
@@ -111,6 +136,17 @@ extension Repository {
 extension AICoachEngine {
     static let dietProtocol = """
     DIET PLANNING AND REVIEW. Use DIET REVIEW's locally computed signal, interval, goal and coverage.
+    WEEKLY DIET REPORTS contain completed Monday–Sunday weeks, newest first. Compare full-week
+    balances only when both weeks have seven matched days; otherwise compare matched-day averages
+    with their coverage and explain that totals describe partial logs. Negative balance means deficit.
+    Never treat absent meals/days as zero or a logged day as proof that every meal was recorded.
+    Weekly mean weight changes are descriptive; use the provided longer-window alignment verdict
+    for inference. Uncertain means no conclusion: explain sparse/stale weights, missing calories,
+    rough estimates, scatter or unknown/calibrated burn provenance. A weight-derived calibration
+    cannot independently validate those same weight/intake data. A mismatch cannot distinguish
+    underlogged intake from overestimated burn and must not trigger an automatic calorie cut.
+    If a SELECTED WEEK is provided, focus on it and its preceding weeks, not the latest week.
+    The active goal is today's goal; do not assume it governed a historical week.
     Do not call a few similar weigh-ins a plateau or equate logging coverage with complete meals.
     Underreported intake and overestimated expenditure are indistinguishable from these data alone.
     Describe intake-derived expenditure as an effective estimate incorporating logging habits, never

@@ -610,3 +610,21 @@ row, so both a newer plan and an in-place calibration invalidate a stale editor.
 the adopted measured baseline and preserves historical goals. Kotlin owes the pure parser and review
 signal with Swift-oracle tests, the corresponding Room transaction, context, editor and review UI.
 No schema or physiological calculation changes.
+
+### Calendar-week diet reports
+
+Apple builds derive Monday–Sunday diet reports from the existing food, weight and banked expenditure
+series. Reports remain local, rebuild after historical corrections, and expose totals, daily averages,
+matched-day balance, coverage, rough estimates, weekly mean weight and comparisons with prior weeks.
+The weekly card and paged history work without Coach; discussing a selected week uses existing provider
+consent. Successful replies acknowledge that specific calendar week in local UI preferences.
+
+The Android twin still needs `WeeklyDietReview` aggregation and its calendar-day boundary tests, the
+weekly report/history UI, selected-week Coach context and success-only acknowledgements. The new Apple
+metric `diet_burn_source` is banked in the same write as expenditure: `0` means formula, `1` means
+intake/weight-calibrated, absence means unknown for historical data. No existing schema is changed.
+Alignment needs at least six weigh-in days spanning 21 days, a recent last weigh-in, complete matching
+calorie days between the first and last weigh-ins, formula-only provenance, no rough estimates and a
+slope interval narrower than the relevant change. Otherwise the report names its uncertainty. Calibrated
+or unknown burn must not independently validate the same weight/intake evidence. Port the pure helper
+using the Swift oracle before enabling an Android verdict.

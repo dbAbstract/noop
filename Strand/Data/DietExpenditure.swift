@@ -41,7 +41,11 @@ enum DietStore {
         /// when it is known.
         static let activity = "diet_activity_kcal"
 
-        static let all = [target, expenditure, activity]
+        /// Provenance banked with the estimate: 0 = formula, 1 = intake/weight calibration.
+        /// Absence on older days means unknown; it cannot be reconstructed from today's goal.
+        static let burnSource = "diet_burn_source"
+
+        static let all = [target, expenditure, activity, burnSource]
     }
 }
 
@@ -407,6 +411,7 @@ extension Repository {
             _ = try? await store.upsertMetricSeries([
                 MetricPoint(day: dayKey, key: DietStore.Keys.target, value: budget),
                 MetricPoint(day: dayKey, key: DietStore.Keys.expenditure, value: energy.expenditure.totalKcal),
+                MetricPoint(day: dayKey, key: DietStore.Keys.burnSource, value: energy.usesMeasuredBaseline ? 1 : 0),
                 // Written from the SAME assembly as the total above, so the two can never describe
                 // different days' activity.
                 MetricPoint(day: dayKey, key: DietStore.Keys.activity, value: energy.expenditure.activityKcal),

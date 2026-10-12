@@ -964,9 +964,23 @@ final class AICoachEngine: ObservableObject {
         // earliest user message.
         // Include the user's data ONLY with explicit consent; otherwise send a note instead of numbers.
         let snapshot = dataConsent ? await buildFullContextSnapshot() : (text: noConsentNote, references: [:])
-        let context = snapshot.text
+        var context = snapshot.text
+        let requestedWeek = CoachDietReviewHistory.requestedWeek(trimmed)
+        var reviewedWeek: String?
+        if dataConsent, UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey),
+           requestedWeek != nil || trimmed == CoachDietReviewHistory.prompt {
+            if let reports = try? await repo.weeklyDietReports(),
+               let index = requestedWeek.flatMap({ key in reports.firstIndex { $0.startKey == key } })
+                    ?? (requestedWeek == nil && !reports.isEmpty ? 0 : nil) {
+                reviewedWeek = reports[index].startKey
+                context += "\n\nSELECTED WEEK AND PRECEDING WEEKS:\n" + reports.dropFirst(index).prefix(4)
+                    .map(\.coachContext).joined(separator: "\n\n")
+            } else {
+                context += "\n\nSelected weekly report unavailable. Explain the missing report; do not invent totals."
+            }
+        }
         let foodReferences = snapshot.references
-        let reviewGoalId = trimmed == CoachDietReviewHistory.prompt ? await repo.currentDietGoal()?.id : nil
+        let reviewGoalId = (trimmed == CoachDietReviewHistory.prompt || requestedWeek != nil) ? await repo.currentDietGoal()?.id : nil
 
         // K13: if the conversation overflows the sliding window, summarize the dropped middle so
         // the model retains context continuity. Best-effort; failure degrades to the old gap.
@@ -1041,10 +1055,11 @@ final class AICoachEngine: ObservableObject {
                 }
                 messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
                                                 text: text, proposals: proposals, dietProposal: dietProposal)
-                if trimmed == CoachDietReviewHistory.prompt, dataConsent,
+                if (trimmed == CoachDietReviewHistory.prompt || requestedWeek != nil), dataConsent,
                    UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey), !clean.isEmpty,
                    !messages.contains(where: { $0.id == userId && $0.failure != nil }) {
                     CoachDietReviewHistory.record(goalId: reviewGoalId)
+                    if let reviewedWeek { CoachDietReviewHistory.record(week: reviewedWeek) }
                 }
             }
         } catch let e as AICoachError {
@@ -1502,6 +1517,12 @@ final class AICoachEngine: ObservableObject {
         let longerTermWeight = await weightContextLine()
         blocks.append("LONGER-TERM WEIGHT HISTORY (up to 120 days; may include previous plans):\n" + longerTermWeight)
         blocks.append(await repo.coachDietSnapshot().context)
+        if let reports = try? await repo.weeklyDietReports(), !reports.isEmpty {
+            blocks.append("WEEKLY DIET REPORTS (newest first):\n" + reports.prefix(4).map(\.coachContext).joined(separator: "\n\n"))
+            if !CoachDietReviewHistory.hasReviewed(week: reports[0].startKey) {
+                blocks.append("The latest completed week's review is ready. Mention it briefly when relevant to a diet discussion; do not interrupt unrelated questions.")
+            }
+        }
 
         return (blocks.filter { !$0.isEmpty }.joined(separator: "\n\n"), references)
     }
