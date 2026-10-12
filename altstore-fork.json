@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1049",
-          "buildVersion": "1049",
+          "version": "12.1.0.1050",
+          "buildVersion": "1050",
           "date": "2026-10-12",
-          "localizedDescription": "Merge upstream main through e5801750 into personal fork",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1049.ipa",
-          "size": 16737110,
+          "localizedDescription": "Add search for Apple settings and More destinations",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1050.ipa",
+          "size": 16757336,
           "minOSVersion": "17.0"
         }
       ]
