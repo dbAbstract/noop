@@ -361,6 +361,7 @@ struct StrandiOSApp: App {
         // safe no-op until the user opts in.
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active {
+                model.coach.reconcileConversationFromApp()
                 // The foreground check, and the one that actually carries wake-triggered mode: a strap
                 // reports its night when it offloads, and the offload rides a foreground sync. Opening
                 // NOOP after getting up is therefore the moment the wake becomes knowable.

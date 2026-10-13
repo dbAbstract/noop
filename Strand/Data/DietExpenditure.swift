@@ -584,11 +584,19 @@ extension Repository {
 
 extension Repository {
     /// Read both sources: yesterday's imported night must not hide today's newly computed night.
-    func coachSleepWindows(now: Date = Date()) async -> [(start: Int, end: Int)] {
+    func coachSleepWindows(now: Date = Date()) async throws -> [(start: Int, end: Int)] {
+        guard let store = await storeHandle() else { throw CocoaError(.fileReadUnknown) }
+        // Startup can precede SourceCoordinator's read-spine adoption. Resolve the registry's ACTIVE
+        // source here so a re-paired strap's night is already visible before publishing Coach history.
+        let active = try DeviceRegistryStore(dbQueue: store.registryWriter).all().first { $0.status == .active }?.id ?? deviceId
+        let ids = Set([active, "my-whoop", active + "-noop", "my-whoop-noop"])
         let to = Int(now.timeIntervalSince1970)
         let from = to - 48 * 3_600
-        let imported = await sleepSessions(from: from, to: to)
-        let computed = await computedSleepSessions(from: from, to: to)
-        return (imported + computed).map { (start: $0.startTs, end: $0.endTs) }
+        var windows: [(start: Int, end: Int)] = []
+        for id in ids {
+            let rows = try await store.sleepSessions(deviceId: id, from: from, to: to, limit: 100)
+            windows += rows.map { (start: $0.startTs, end: $0.endTs) }
+        }
+        return windows
     }
 }

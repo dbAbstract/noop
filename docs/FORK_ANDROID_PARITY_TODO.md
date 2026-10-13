@@ -628,3 +628,22 @@ calorie days between the first and last weigh-ins, formula-only provenance, no r
 slope interval narrower than the relevant change. Otherwise the report names its uncertainty. Calibrated
 or unknown burn must not independently validate the same weight/intake evidence. Port the pure helper
 using the Swift oracle before enabling an Android verdict.
+
+## Apple runtime follow-up: Coach lifecycle and battery diagnostics
+
+The fork resolves the Swift Coach transcript at app startup and foreground, before publishing it to
+screens; screen-owned restoration is removed. Android owns a separate ViewModel/Flow lifecycle, so its
+state-loading behavior must be evaluated separately rather than copying the Apple app-lifetime wiring.
+No Coach schema or conversation-boundary formula changes in this work.
+
+Apple-only battery instrumentation records existing CoreBluetooth observations without adding polls,
+commands, or changing sync/HRV policy. A bounded local trace (14 days / 2048 checkpoints) joins manual,
+scheduled and Test Centre exports. It distinguishes submitted realtime/heavy-stream requests, received
+notifications/bytes, sync triggers/outcomes and observed wall-clock intervals; it excludes unobserved
+process gaps and records the actual battery-reading timestamp separately from the checkpoint. Android
+would need equivalent instrumentation at its own Bluetooth callbacks, not the CoreBluetooth call sites.
+
+The Apple power screen projects the unchanged preference keys as exclusive Standard / Adaptive / Hourly
+sync schedules, with a separate optional low-battery HRV pause. Android retains the same underlying
+behavior and stored settings; its presentation remains a UI follow-up. No backup whitelist or schema
+changes are introduced by the app-local diagnostic trace.

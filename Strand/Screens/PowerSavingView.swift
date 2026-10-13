@@ -1,112 +1,118 @@
 import SwiftUI
 import StrandDesign
 
-// MARK: - Power saving (#477)
-//
-// Lifted out of Settings into its own screen: on iPhone it is a first-class More row (between Test
-// Centre and Settings) and on macOS its own sidebar item, so the strap-battery levers are one tap away
-// instead of buried in the middle of the Settings scroll. The controls, their prefs and their wiring are
-// UNCHANGED — `AppModel.applyPowerSaving()` still reads every value from `PuffinExperiment`, so moving
-// the surface cannot alter behaviour.
-//
-// The master gates the sub-options: the threshold slider, "Pause HRV capture" and "Low refresh" only
-// appear (and only apply) while Power saving is on — `applyPowerSaving` ANDs each one with the master.
+/// Exclusive sync schedules project the existing preferences without changing BLE policy.
 struct PowerSavingView: View {
     @EnvironmentObject var model: AppModel
-
+    @State private var exporting = false
     @AppStorage(PuffinExperiment.powerSavingKey) private var powerSavingEnabled = false
     @AppStorage(PuffinExperiment.powerSavingBatteryPctKey) private var powerSavingPct = 20
-    /// Stored INVERTED so the default (absent = false) reads as "HRV pause on". The toggle shows `!this`.
     @AppStorage(PuffinExperiment.pauseHrvDisabledKey) private var pauseHrvDisabled = false
     @AppStorage(PuffinExperiment.lowRefreshKey) private var lowRefreshEnabled = false
+    @AppStorage(PuffinExperiment.keepRealtimeForDataKey) private var continuousHrv = false
+
+    private enum Schedule: Hashable { case standard, adaptive, hourly }
+    private var schedule: Schedule {
+        !powerSavingEnabled ? .standard : lowRefreshEnabled ? .hourly : .adaptive
+    }
+    private var scheduleBinding: Binding<Schedule> {
+        Binding(get: { schedule }, set: { value in
+            lowRefreshEnabled = value == .hourly
+            powerSavingEnabled = value != .standard
+            model.applyPowerSaving()
+        })
+    }
+    private var thresholdBinding: Binding<Double> {
+        Binding(get: { Double(max(10, min(35, powerSavingPct == 0 ? 20 : powerSavingPct))) },
+                set: { powerSavingPct = Int($0) })
+    }
 
     var body: some View {
-        ScreenScaffold(title: "Power saving",
-                       subtitle: "Ease the load on your strap when its battery is running low.") {
+        ScreenScaffold(title: "Power saving", subtitle: "Choose how often NOOP syncs and when background HRV pauses.") {
             VStack(alignment: .leading, spacing: NoopMetrics.sectionSpacing) {
                 NoopCard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("Power saving").strandOverline()
-                        Text("The strap keeps banking data on its own, so nothing is lost — NOOP just talks to it less often to help it last until you can charge it.")
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        rowDivider
-                        Toggle(isOn: $powerSavingEnabled) {
-                            Text("Power saving mode")
-                                .font(StrandFont.subhead)
-                                .foregroundStyle(StrandPalette.textPrimary)
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        Text("Background sync").font(StrandFont.headline)
+                        Picker("Sync schedule", selection: scheduleBinding) {
+                            Text("Standard — every 15 minutes").tag(Schedule.standard)
+                            Text("Adaptive — 15 or 45 minutes").tag(Schedule.adaptive)
+                            Text("Hourly — every 60 minutes").tag(Schedule.hourly)
+                        }.pickerStyle(.menu)
+                        Text(scheduleExplanation).font(StrandFont.body)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                        Text("These choices change periodic history transfers, not sensor sampling. Pull to sync, reconnects and strap events may sync sooner; empty-history backoff may delay them.")
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                    }
+                }
+                NoopCard {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space3) {
+                        Text("Continuous HRV capture").font(StrandFont.headline)
+                        Text("Hourly sync does not turn off continuous HRV. The live stream and history transfers are separate battery costs.")
+                            .font(StrandFont.body).foregroundStyle(StrandPalette.textSecondary)
+                        if !continuousHrv {
+                            Text("Continuous HRV capture is off. These pause controls do not enable it.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                         }
-                        .toggleStyle(.switch)
-                        .tint(StrandPalette.accent)
-                        .onChangeCompat(of: powerSavingEnabled) { _ in model.applyPowerSaving() }
-                        Text("Slows background strap-sync (every 45 min instead of 15) while your strap's battery is low. No data loss — the strap banks everything, so sync just batches into larger, less frequent pulls.")
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        if powerSavingEnabled {
-                            rowDivider
+                        if schedule != .standard {
+                            Toggle("Pause background HRV at low battery", isOn: Binding(
+                                get: { !pauseHrvDisabled }, set: { pauseHrvDisabled = !$0 }))
+                                .tint(StrandPalette.accent)
+                                .onChangeCompat(of: pauseHrvDisabled) { _ in model.applyPowerSaving() }
+                            Text("Pausing can leave gaps in HRV data. Live screens can still request heart rate. Background capture resumes above the threshold or while charging.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                        } else {
+                            Text("Standard sync leaves continuous HRV unchanged. Choose Adaptive or Hourly to add a low-battery pause.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                        }
+                    }
+                }
+                if schedule == .adaptive || (schedule == .hourly && !pauseHrvDisabled) {
+                    NoopCard {
+                        VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                             HStack {
-                                Text("Kick in at (strap battery)")
-                                    .font(StrandFont.subhead)
-                                    .foregroundStyle(StrandPalette.textPrimary)
+                                Text("Low strap battery threshold").font(StrandFont.headline)
                                 Spacer()
-                                Text(verbatim: "\(powerSavingPct)%")
-                                    .font(StrandFont.subhead)
-                                    .foregroundStyle(StrandPalette.accent)
+                                Text(verbatim: "\(Int(thresholdBinding.wrappedValue))%")
+                                    .font(StrandFont.headline).foregroundStyle(StrandPalette.accent)
                             }
-                            // 10…35 in 5s. 35 buys one more step of strap life than the old 30 ceiling:
-                            // the levers engage ~5% earlier in the discharge, at the cost of a slightly
-                            // longer stretch of quieter syncing.
-                            Slider(
-                                value: Binding(get: { Double(powerSavingPct) }, set: { powerSavingPct = Int($0) }),
-                                in: 10...35, step: 5,
-                                onEditingChanged: { editing in if !editing { model.applyPowerSaving() } }
-                            )
-                            .tint(StrandPalette.accent)
-
-                            rowDivider
-                            // HRV pause: a sub-option, ON by default when the master is on (stored inverted).
-                            Toggle(isOn: Binding(get: { !pauseHrvDisabled }, set: { pauseHrvDisabled = !$0 })) {
-                                Text("Pause HRV capture")
-                                    .font(StrandFont.subhead)
-                                    .foregroundStyle(StrandPalette.textPrimary)
-                            }
-                            .toggleStyle(.switch)
-                            .tint(StrandPalette.accent)
-                            .onChangeCompat(of: pauseHrvDisabled) { _ in model.applyPowerSaving() }
-                            Text("While your strap's battery is low, stop the always-on background HRV stream — the biggest continuous drain on the strap. A Live screen still shows heart rate, and it re-arms automatically once the strap is charged.")
-                                .font(StrandFont.caption)
-                                .foregroundStyle(StrandPalette.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
-
-                            rowDivider
-                            // Low refresh: a sub-option that applies at ANY charge, not just below the threshold.
-                            Toggle(isOn: $lowRefreshEnabled) {
-                                Text("Low refresh")
-                                    .font(StrandFont.subhead)
-                                    .foregroundStyle(StrandPalette.textPrimary)
-                            }
-                            .toggleStyle(.switch)
-                            .tint(StrandPalette.accent)
-                            .onChangeCompat(of: lowRefreshEnabled) { _ in model.applyPowerSaving() }
-                            Text("Sync in the background every hour instead of every 15 minutes, whatever the strap's charge — fewer reconnections is the biggest saving on a WHOOP 4.0. Nothing is lost: the strap banks everything and hands it over in larger batches. Pull to sync still runs straight away, and live heart rate is untouched.")
-                                .font(StrandFont.caption)
-                                .foregroundStyle(StrandPalette.textTertiary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            Slider(value: thresholdBinding, in: 10...35, step: 5,
+                                   onEditingChanged: { editing in if !editing { model.applyPowerSaving() } })
+                                .tint(StrandPalette.accent)
+                                .accessibilityLabel("Low strap battery threshold")
+                            Text(schedule == .hourly
+                                 ? "With Hourly selected, this threshold only controls the optional HRV pause. Sync remains hourly at every battery level."
+                                 : "Adaptive sync uses 45 minutes at or below this threshold while discharging, and 15 minutes otherwise. The optional HRV pause uses the same threshold.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
                         }
+                    }
+                }
+                NoopCard {
+                    VStack(alignment: .leading, spacing: NoopMetrics.space2) {
+                        Text("Battery diagnostics").font(StrandFont.headline)
+                        Text("Battery readings, connection time, traffic and sync activity are kept locally for up to 14 days and included in the strap-log export. Export from More → Test Centre → Report after a day of normal use.")
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                        Button("Export battery diagnostics") {
+                            exporting = true
+                            Task {
+                                defer { exporting = false }
+                                let extra = await DebugDataDiagnostics.dynamicLines(repo: model.repo)
+                                FileExport.exportText(model.live.exportableLogText(extraHeaderLines: extra),
+                                    suggestedName: FileExport.timestampedName("noop-battery-log", ext: "txt"))
+                            }
+                        }.buttonStyle(NoopButtonStyle(.secondary)).disabled(exporting)
                     }
                 }
             }
         }
+        .onChangeCompat(of: powerSavingEnabled) { _ in model.applyPowerSaving() }
+        .onChangeCompat(of: lowRefreshEnabled) { _ in model.applyPowerSaving() }
     }
 
-    private var rowDivider: some View {
-        Rectangle()
-            .fill(StrandPalette.hairline)
-            .frame(height: 1)
-            .padding(.vertical, 4)
+    private var scheduleExplanation: String {
+        switch schedule {
+        case .standard: return String(localized: "Periodic sync every 15 minutes at any battery level. Low-battery protection is off.")
+        case .adaptive: return String(localized: "Periodic sync every 15 minutes normally, or every 45 minutes when the strap is low and not charging.")
+        case .hourly: return String(localized: "Periodic sync every hour at any battery level. Adaptive sync timing is replaced by this schedule.")
+        }
     }
 }

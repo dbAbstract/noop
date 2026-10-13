@@ -614,6 +614,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// high-freq-sync), so each periodic tick just routes through requestSync(.periodic) → beginBackfill
     /// (SEND_HISTORICAL_DATA + watchdog), subject to the BackfillPolicy floor.
     private var backfillTimer: DispatchSourceTimer?
+    private var periodicBackfillDueAt: Int?
     /// User-elected hourly background-sync cadence (Settings → Power saving → "Low refresh"). Default off.
     private var lowRefreshMode = false
     // The timer fires this often, but BackfillPolicy.periodicFloorSeconds is the real floor (a recent
@@ -1468,7 +1469,9 @@ public final class BLEManager: NSObject, ObservableObject {
                 setWhoopIsActiveDevice(false)
                 log("Active device \(activeId) is not a WHOOP — leaving sample attribution on \(deviceId) (#1881)")
             } else {
+                BatteryDiagnostics.shared.note(.association(false), device: deviceId)
                 self.deviceId = activeId
+                BatteryDiagnostics.shared.note(.association(state.connected), device: deviceId)
             }
         }
         // Restore the ECG latch for THIS device now that `deviceId` has settled for the launch. Done
@@ -1681,6 +1684,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // device (registry said B, radio stayed on A). No pin (single-WHOOP) → always true, unchanged.
         if let p = peripheral, p.state == .connected, isPreferredPeripheral(p) {
             state.connected = true
+            BatteryDiagnostics.shared.note(.connection(true), device: deviceId)
             p.delegate = self
             log("Already connected to \(model.displayName) — refreshing services and notifications")
             discoverPrimaryServices(on: p)
@@ -1820,6 +1824,7 @@ public final class BLEManager: NSObject, ObservableObject {
             peripheral = nil
             resetCharacteristics()
             state.connected = false
+            BatteryDiagnostics.shared.note(.connection(false), device: deviceId)
             state.bonded = false
             state.encryptedBond = false
             state.pairingHint = nil
@@ -1848,6 +1853,7 @@ public final class BLEManager: NSObject, ObservableObject {
     public func prepareForModelSwitch() {
         disconnect()
         state.connected = false
+        BatteryDiagnostics.shared.note(.connection(false), device: deviceId)
         state.bonded = false
         state.encryptedBond = false
     }
@@ -2064,7 +2070,9 @@ public final class BLEManager: NSObject, ObservableObject {
     /// path invokes it, so with one WHOOP the id stays "my-whoop" throughout.
     public func setActiveDeviceId(_ id: String) {
         guard !id.isEmpty else { return }
+        if deviceId != id { BatteryDiagnostics.shared.note(.association(false), device: deviceId) }
         deviceId = id
+        BatteryDiagnostics.shared.note(.association(state.connected), device: deviceId)
         collector?.deviceId = id
         backfiller?.deviceId = id
         // #1881: the alarm readback attributes through the router's own copy (#1706), which this used to
@@ -2435,6 +2443,7 @@ public final class BLEManager: NSObject, ObservableObject {
             seq = seq &+ 1
             let frame = puffinCommandFrame(cmd: puffinCmd, seq: seq, payload: puffinPayload)
             p.writeValue(Data(frame), for: ch, type: writeType)
+            noteBatteryDiagnosticWrite(command, payload: payload)
             let cmdNote = isHaptics ? " cmd=0x13" : ""
             if command == .historicalDataResult {
                 historicalAckLogCounter += 1
@@ -2449,7 +2458,16 @@ public final class BLEManager: NSObject, ObservableObject {
         seq = seq &+ 1
         let frame = command.frame(seq: seq, payload: payload)
         p.writeValue(Data(frame), for: ch, type: writeType)
+        noteBatteryDiagnosticWrite(command, payload: payload)
         log("→ \(command.label) payload=\(hex(payload))")
+    }
+
+    private func noteBatteryDiagnosticWrite(_ command: WhoopCommand, payload: [UInt8]) {
+        let name = command == .sendHistoricalData ? "history" : command == .historicalDataResult ? "history_ack"
+            : command == .getBatteryLevel ? "battery" : command == .sendR10R11Realtime
+                ? (payload.first == 0 ? "heavy_realtime_off" : "heavy_realtime_on") : "other"
+        let realtime = command == .toggleRealtimeHR ? payload.first.map { $0 != 0 } : nil
+        BatteryDiagnostics.shared.note(.write(command: name, realtime: realtime), device: deviceId)
     }
 
     /// Point the Collector's live decode at the selected family. For a 5/MG, also install an identity
@@ -2571,6 +2589,7 @@ public final class BLEManager: NSObject, ObservableObject {
         // "no banked history / charge to 100%". A fresh offload (count 0) keeps the honest guidance.
         backfiller.begin(family: selectedModel.deviceFamily, continuedAfterRows: consecutiveAutoContinues > 0)
         backfilling = true
+        BatteryDiagnostics.shared.note(.syncStart, device: deviceId)
         state.backfilling = true
         state.syncChunksThisSession = 0
         state.rejectedFramesThisSession = 0
@@ -2713,6 +2732,7 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private func exitBackfilling(reason: String) {
         guard backfilling else { return }
+        BatteryDiagnostics.shared.note(.syncEnd(reason: reason, rows: backfiller?.sessionRowsPersisted ?? 0), device: deviceId)
         backfilling = false
         state.backfilling = false
         // #174: a backfill just ended. Start (or extend) the deep-packet cooldown from this instant so
@@ -3407,6 +3427,22 @@ public final class BLEManager: NSObject, ObservableObject {
             endMin: d.object(forKey: ContinuousHrvSchedule.quietEndKey) as? Int ?? ContinuousHrvSchedule.defaultEndMinutes)
     }
 
+    /// Read-only diagnostic projection: distinguishes user cadence, current policy and stream intent.
+    var batteryDiagnosticPolicy: String {
+        "model=\(selectedModel.deviceFamily) periodic_policy_seconds=\(nextBackfillInterval()) scheduled_due_t=\(periodicBackfillDueAt.map { String($0) } ?? "none") base_seconds=\(Self.baseBackfillInterval(lowRefresh: lowRefreshMode)) low_threshold=\(lowBatteryOffloadPct) hrv_pause_threshold=\(pauseCaptureBatteryPct) continuous_requested=\(keepRealtimeForData) overnight_only=\(PuffinExperiment.continuousHrvOvernightOnlyEnabled) continuous_wants_now=\(continuousCaptureWantsNow()) live_screen_wants=\(screenWantsRealtime) realtime_requested=\(wantsRealtime)"
+    }
+
+    func recordBatteryDiagnostics(_ pct: Double, charging: Bool?) {
+        // Shared LiveState can also serve another brand. Only attribute samples with our WHOOP link up.
+        guard peripheral?.state == .connected else { return }
+        BatteryDiagnostics.shared.note(.battery(pct: pct, charging: charging, policy: batteryDiagnosticPolicy), device: deviceId)
+    }
+
+    func recordChargingDiagnostics(_ charging: Bool?) {
+        guard peripheral?.state == .connected else { return }
+        BatteryDiagnostics.shared.note(.charging(charging), device: deviceId)
+    }
+
     /// Single reconciler for the realtime-HR TOGGLE. The stream should be armed while EITHER a screen
     /// wants it (`screenWantsRealtime`) OR the continuous-capture preference wants it
     /// (`keepRealtimeForData`, window-gated by #927 overnight-only via `continuousCaptureWantsNow()`).
@@ -3419,6 +3455,7 @@ public final class BLEManager: NSObject, ObservableObject {
     private func reconcileRealtime() {
         let want = screenWantsRealtime || continuousCaptureWantsNow()
         wantsRealtime = want   // keep-alive + post-bond arm-on-connect read this derived value
+        BatteryDiagnostics.shared.note(.policy(batteryDiagnosticPolicy), device: deviceId)
         guard want != realtimeArmed else { return }                      // no edge — nothing to send
         guard selectedModel.deviceFamily == .whoop4 || state.bonded else { return }   // can't reach the strap yet
         realtimeArmed = want
@@ -4936,9 +4973,11 @@ public final class BLEManager: NSObject, ObservableObject {
 
     private func startBackfillTimer() {
         backfillTimer?.cancel()
+        periodicBackfillDueAt = nil
         // #477: one-shot, re-armed by triggerPeriodicBackfill() with a fresh (battery-adaptive) interval
         // each tick — so the cadence can stretch/relax as power state changes (was a fixed repeating timer).
         let interval = nextBackfillInterval()
+        periodicBackfillDueAt = Int(Date().timeIntervalSince1970) + interval
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now() + .seconds(interval),
                    leeway: .seconds(BLEManager.backfillTimerLeewaySeconds))
@@ -4951,6 +4990,7 @@ public final class BLEManager: NSObject, ObservableObject {
     /// gate AND the BackfillPolicy rate-limiter for the trigger. On a go: records the attempt time
     /// (persisted) and starts the offload.
     func requestSync(_ trigger: BackfillTrigger) {
+        BatteryDiagnostics.shared.note(.syncRequest(String(describing: trigger)), device: deviceId)
         guard BLEManager.shouldRunPeriodicBackfill(
             connected: state.connected, bonded: state.bonded, backfilling: backfilling) else { return }
         let now = Date().timeIntervalSince1970
@@ -5990,6 +6030,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         // (the Sync Strap shortcut, a state-restoration relaunch) reconnects by identifier, not by scan.
         UserDefaults.standard.set(peripheral.identifier.uuidString, forKey: Self.lastConnectedPeripheralKey)
         state.connected = true
+        BatteryDiagnostics.shared.note(.connection(true), device: deviceId)
         // A connect succeeded → clear the stale-bond re-pair guide UNLESS we are in a known bond-loop
         // (#617). In that loop the strap "connects" every ~3 s before timing out again, so clearing here
         // wiped the guide on EVERY cycle: it flashed for ~1 s and vanished, so the user could never read it
@@ -6248,6 +6289,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         }
         bondedAt = nil   // cleared after the bond-loop detector above read it (#617)
         state.connected = false
+        BatteryDiagnostics.shared.note(.connection(false), device: deviceId)
         state.encryptedBond = false   // cleared with didBond; next session must re-prove the bond (#69)
         state.charging = nil          // a stale charging flag must not outlive the link
         state.batteryMv = nil         // #592: a stale pack voltage must not outlive the link
@@ -6368,6 +6410,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         backfillFrameQueue.removeAll()
         backfillDraining = false
         backfillTimer?.cancel()
+        periodicBackfillDueAt = nil
         backfillTimer = nil
         keepAliveTimer?.cancel()
         keepAliveTimer = nil
@@ -6539,6 +6582,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
         }
         if p.state == .connected {
             state.connected = true
+            BatteryDiagnostics.shared.note(.connection(true), device: deviceId)
             // #613: the inherited notify subscriptions come back reported-active but dead. Force one real
             // off→on re-subscribe this session (see `requestNotify`) so live HR/R-R resume AND
             // `didUpdateNotificationStateFor` fires → `cmdNotifyConfirmedActive` → `connectSettled` → the
@@ -6548,6 +6592,7 @@ extension BLEManager: @preconcurrency CBCentralManagerDelegate {
             discoverPrimaryServices(on: p)
         } else {
             state.connected = false
+            BatteryDiagnostics.shared.note(.connection(false), device: deviceId)
             log("Restored DISCONNECTED peripheral \(p.identifier) — reconnect on poweredOn")
             if central.state == .poweredOn {
                 connectRestored(p, reason: "willRestoreState")
@@ -7292,6 +7337,7 @@ extension BLEManager: @preconcurrency CBPeripheralDelegate {
         // frame including ones no branch consumes - the epitaph must answer "did anything arrive at all".
         inboundFrames += 1
         inboundBytes += bytes.count
+        BatteryDiagnostics.shared.note(.received(bytes: bytes.count, standardHr: characteristic.uuid == BLEManager.heartRateChar), device: deviceId)
         if characteristic.uuid == BLEManager.cmdNotifyChar { cmdChannelFrames += 1 }
 
         switch characteristic.uuid {

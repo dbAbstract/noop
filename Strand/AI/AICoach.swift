@@ -199,7 +199,16 @@ enum AICoachError: LocalizedError {
 final class AICoachEngine: ObservableObject {
 
     // Published state the UI binds to.
-    @Published var messages: [ChatMessage] = []
+    @Published var messages: [ChatMessage] = [] {
+        didSet { conversationRevision &+= 1 }
+    }
+    @Published private(set) var conversationReady = false
+    @Published private(set) var conversationLoadFailed = false
+    @Published private(set) var initialEntryResolved = false
+    private var conversationRevision = 0
+    private var conversationResolutionTask: Task<Void, Never>?
+    private var initialBriefTask: Task<Void, Never>?
+    private var persistenceTask: Task<Void, Never>?
 
     @Published var sending = false
     private var preparingSend = false
@@ -836,24 +845,74 @@ final class AICoachEngine: ObservableObject {
     /// Coach screen's `.task` re-fires (e.g. a tab re-select).
     private var didLoadPersistedMessages = false
 
-    /// Load the conversation persisted by a PRIOR launch (PRD-K2), so relaunching doesn't lose it.
-    /// Called from the Coach screen's `.task` (mirroring `startBriefIfNeeded`) rather than `init`,
-    /// which is synchronous and runs for every screen the app builds, not just Coach. Best-effort: a
-    /// store failure just leaves the transcript empty, matching pre-K2 behaviour — never crashes.
+    /// App-owned startup resolution. Concurrent callers join one task; no candidate transcript is
+    /// published until its sleep boundary has been checked. Opening a screen never owns restoration.
     func loadPersistedMessagesIfNeeded(now: Date = Date()) async {
-        guard !didLoadPersistedMessages else { return }
-        didLoadPersistedMessages = true
-        guard messages.isEmpty, let store = await repo.storeHandle() else { return }
-        guard let rows = try? await store.coachMessages(), !rows.isEmpty else { return }
-        let newest = rows.map(\.createdAt).max()
-        guard !CoachConversationBoundary.shouldRetire(
-            lastMessage: newest, now: Int(now.timeIntervalSince1970),
-            sleepWindows: await repo.coachSleepWindows(now: now)) else { return }
-        messages = rows
-            .sorted { $0.orderIndex < $1.orderIndex }
-            .map { ChatMessage(id: UUID(uuidString: $0.id) ?? UUID(),
-                                role: ChatMessage.Role(rawValue: $0.role) ?? .user,
-                                text: $0.text, sentAt: $0.createdAt) }
+        await resolveConversation(now: now)
+    }
+
+    func resolveConversation(now: Date = Date(), reconsider: Bool = false, holdDisplay: Bool = true) async {
+        if let task = conversationResolutionTask { await task.value; return }
+        guard !conversationReady || reconsider else { return }
+        if holdDisplay || !didLoadPersistedMessages { conversationReady = false }
+        conversationLoadFailed = false
+        let task = Task { [self] in
+            if !didLoadPersistedMessages {
+                let revision = conversationRevision
+                guard let store = await repo.storeHandle() else { conversationLoadFailed = true; return }
+                do {
+                    let rows = try await store.coachMessages()
+                    let windows = try await repo.coachSleepWindows(now: now)
+                    guard conversationRevision == revision else {
+                        didLoadPersistedMessages = true
+                        conversationReady = true
+                        if !messages.isEmpty { initialEntryResolved = true }
+                        return
+                    }
+                    if messages.isEmpty, !CoachConversationBoundary.shouldRetire(
+                        lastMessage: rows.map(\.createdAt).max(), now: Int(now.timeIntervalSince1970), sleepWindows: windows) {
+                        messages = rows.sorted { $0.orderIndex < $1.orderIndex }.suffix(Self.maxStoredMessages)
+                            .map { ChatMessage(id: UUID(uuidString: $0.id) ?? UUID(),
+                                role: ChatMessage.Role(rawValue: $0.role) ?? .user, text: $0.text, sentAt: $0.createdAt) }
+                    }
+                    didLoadPersistedMessages = true
+                } catch { conversationLoadFailed = true; return }
+            }
+            guard await retireStaleConversationIfNeeded(now: now) else {
+                conversationLoadFailed = true
+                return
+            }
+            if messages.isEmpty, !initialEntryResolved, CoachBriefScheduler.lastRunDay == Repository.localDayKey(now),
+               let stored = CoachBriefScheduler.consumeStoredBrief() {
+                surfaceScheduledBrief(stored)
+            }
+            if !messages.isEmpty { initialEntryResolved = true }
+            conversationReady = true
+        }
+        conversationResolutionTask = task
+        await task.value
+        conversationResolutionTask = nil
+    }
+
+    /// Startup and foreground hold display until resolution. Data refreshes can check in the
+    /// background; a new night may have arrived even while the Coach tab was never opened.
+    func reconcileConversationFromApp(now: Date = Date(), holdDisplay: Bool = true) {
+        guard !sending, !preparingSend else { return }
+        if holdDisplay { conversationReady = false }
+        Task { await resolveConversation(now: now, reconsider: true, holdDisplay: holdDisplay) }
+    }
+
+    /// The engine owns the initial request, so a tab switch cannot cancel its stream mid-brief.
+    func openConversation() async {
+        await resolveConversation()
+        guard conversationReady else { return }
+        guard pendingPrompt == nil else { initialEntryResolved = true; return }
+        guard !initialEntryResolved, initialBriefTask == nil else { return }
+        initialBriefTask = Task { [self] in
+            await startBriefIfNeeded()
+            initialEntryResolved = true
+            initialBriefTask = nil
+        }
     }
 
     /// Replace the ENTIRE persisted conversation with the current in-memory `messages`. Called once
@@ -863,7 +922,9 @@ final class AICoachEngine: ObservableObject {
     private func persistMessages() {
         let snapshot = messages
         let providerId = provider.rawValue
-        Task {
+        let previousWrite = persistenceTask
+        persistenceTask = Task {
+            await previousWrite?.value
             guard let store = await repo.storeHandle() else { return }
             let rows = snapshot.enumerated().map { index, m in
                 // `m.sentAt`, NOT `Date()`. Re-stamping on every save re-dated the whole transcript to
@@ -880,10 +941,13 @@ final class AICoachEngine: ObservableObject {
     /// The Coach toolbar's "Clear conversation" action: wipes both the in-memory transcript and the
     /// persisted table. Fire-and-forget on the store side; the in-memory clear is immediate.
     func clearConversation() {
+        didLoadPersistedMessages = true
+        conversationReady = true
         messages = []
         droppedSummary = nil      // K13: reset the summary cache on clear
         droppedSummaryKey = []
-        Task { try? await repo.storeHandle()?.clearCoachMessages() }
+        initialEntryResolved = true
+        persistMessages()
     }
 
     /// K5: surface a brief generated by the SCHEDULED morning-brief notification as the first Coach
@@ -896,16 +960,20 @@ final class AICoachEngine: ObservableObject {
     }
 
     /// Recheck on opening, foregrounding, sync, and send: sleep may arrive after the first screen load.
-    func retireStaleConversationIfNeeded(now: Date = Date()) async {
-        guard !sending, let newest = messages.map(\.sentAt).max() else { return }
-        let windows = await repo.coachSleepWindows(now: now)
+    @discardableResult
+    func retireStaleConversationIfNeeded(now: Date = Date()) async -> Bool {
+        guard !sending, let newest = messages.map(\.sentAt).max() else { return true }
+        guard let windows = try? await repo.coachSleepWindows(now: now) else { return false }
         // A new turn or a clear during the read must not be erased by an older decision.
         guard !sending, messages.map(\.sentAt).max() == newest,
               CoachConversationBoundary.shouldRetire(lastMessage: newest,
-                  now: Int(now.timeIntervalSince1970), sleepWindows: windows) else { return }
+                  now: Int(now.timeIntervalSince1970), sleepWindows: windows) else { return true }
         messages = []
+        initialEntryResolved = false
         droppedSummary = nil
         droppedSummaryKey = []
+        persistMessages()
+        return true
     }
 
     /// K5: append an explicitly-generated brief (the Coach settings "Generate now" button) as a new
@@ -937,6 +1005,9 @@ final class AICoachEngine: ObservableObject {
         // screen when the switch goes off, and that path passes no tab. Refusing here makes "the AI is off"
         // true however the screen was reached.
         guard CoachBriefScheduler.coachMasterEnabled else { return }
+        await resolveConversation()
+        guard conversationReady else { return }
+        initialEntryResolved = true
         guard let key = resolvedKey else { errorText = AICoachError.noKey.errorDescription; return }
 
         // A transcript from before the latest night is retired before the new turn is appended (#1542,
@@ -1127,6 +1198,9 @@ final class AICoachEngine: ObservableObject {
     /// prescription + one recovery tip, without the user typing. Requires a key + data consent.
     /// K1: streams the brief the same way `send` does.
     func startBriefIfNeeded() async {
+        await resolveConversation()
+        defer { initialEntryResolved = true }
+        guard conversationReady, CoachBriefScheduler.coachMasterEnabled else { return }
         guard isConfigured, dataConsent, messages.isEmpty, !sending, !preparingSend else { return }
         guard let key = resolvedKey else { return }
         errorText = nil

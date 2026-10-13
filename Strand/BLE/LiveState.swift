@@ -948,6 +948,7 @@ public final class LiveState: ObservableObject {
         if !extraHeaderLines.isEmpty {
             header += extraHeaderLines.map { Self.redactPii($0) }.joined(separator: "\n") + "\n"
         }
+        header += BatteryDiagnostics.shared.exportLines().joined(separator: "\n") + "\n"
         header += String(repeating: "-", count: 40) + "\n"
         // Same earlier-runs-then-current shape as `exportableLogText()`: a scheduled drop that fires after a
         // restart reports the runs before it, not only the (possibly empty) current one.
@@ -1200,6 +1201,7 @@ public final class LiveState: ObservableObject {
         if !extraHeaderLines.isEmpty {
             header += extraHeaderLines.map { Self.redactPii($0) }.joined(separator: "\n") + "\n"
         }
+        header += BatteryDiagnostics.shared.exportLines().joined(separator: "\n") + "\n"
         header += String(repeating: "-", count: 40) + "\n"
         // Earlier runs first, so the body stays in chronological order and the log-parsing tools read it
         // unchanged; then this whole run, from disk — not only the newest `maxLogLines` the screen keeps.

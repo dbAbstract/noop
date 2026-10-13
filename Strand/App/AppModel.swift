@@ -304,6 +304,10 @@ final class AppModel: ObservableObject {
             Task { await self.refreshRRTransportFacts() }
         }.store(in: &hrCancellables)
 
+        live.$charging.removeDuplicates().sink { [weak self] charging in
+            self?.ble.recordChargingDiagnostics(charging)
+        }.store(in: &hrCancellables)
+
         // Physical-input + wear hooks (fired live by FrameRouter).
         live.onDoubleTap = { [weak self] in self?.handleDoubleTap() }
         live.onWristChange = { [weak self] worn in self?.handleWristChange(worn) }
@@ -321,6 +325,7 @@ final class AppModel: ObservableObject {
         // crossing state, so feeding it every battery reading is safe.
         live.onBatteryUpdate = { [weak self] pct in
             guard let self else { return }
+            self.ble.recordBatteryDiagnostics(pct, charging: self.live.charging)
             BatteryNotifier.onBatteryUpdate(pct: Int(pct.rounded()),
                                             charging: self.live.charging,
                                             enabled: self.behavior.batteryAlerts)
@@ -434,6 +439,12 @@ final class AppModel: ObservableObject {
         // Rehydrate a manual workout that was in flight when iOS killed the app, so it can still be ended
         // + saved on relaunch (#529). Restored here alongside the other UserDefaults-backed state.
         rehydrateActiveWorkout()
+
+        // Restore and reconcile Coach before any tab can display its transcript.
+        coach.reconcileConversationFromApp()
+        repo.$refreshSeq.dropFirst().sink { [weak self] _ in
+            self?.coach.reconcileConversationFromApp(holdDisplay: false)
+        }.store(in: &hrCancellables)
 
         AppModel.shared = self   // publish for App Intents (Shortcuts) , see the static above (#42)
 

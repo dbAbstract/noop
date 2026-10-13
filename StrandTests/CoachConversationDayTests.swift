@@ -59,4 +59,51 @@ final class CoachConversationDayTests: XCTestCase {
         await coach.retireStaleConversationIfNeeded(now: Date(timeIntervalSince1970: Double(midnight + 12 * hour)))
         XCTAssertEqual(coach.messages.count, 1)
     }
+    @MainActor
+    func testStartupPublishesOnlyResolvedTranscriptAndConcurrentLoadsJoin() async throws {
+        let (store, coach) = try await fixture()
+        let row = CoachMessageRow(id: UUID().uuidString, role: "user", text: "Yesterday",
+            provider: "openAI", createdAt: midnight + hour, orderIndex: 0)
+        try await store.replaceCoachMessages([row])
+        _ = try await store.upsertSleepSessions([night()], deviceId: "my-whoop-noop")
+        var published: [[String]] = []
+        let observation = coach.$messages.sink { published.append($0.map(\.text)) }
+        defer { observation.cancel() }
+        XCTAssertFalse(coach.conversationReady)
+        let now = Date(timeIntervalSince1970: Double(midnight + 12 * hour))
+        async let first: Void = coach.resolveConversation(now: now)
+        async let second: Void = coach.resolveConversation(now: now)
+        _ = await (first, second)
+        XCTAssertTrue(coach.conversationReady)
+        XCTAssertFalse(coach.conversationLoadFailed)
+        XCTAssertFalse(published.contains { $0.contains("Yesterday") }, "Never publish the retired candidate, even momentarily")
+    }
+
+    @MainActor
+    func testClearBeforeStartupCannotRestoreOldRowsOrRestartEntry() async throws {
+        let (store, coach) = try await fixture()
+        try await store.replaceCoachMessages([CoachMessageRow(id: UUID().uuidString, role: "user",
+            text: "Old", provider: "openAI", createdAt: midnight + hour, orderIndex: 0)])
+        coach.clearConversation()
+        await coach.resolveConversation(now: Date(timeIntervalSince1970: Double(midnight + 2 * hour)))
+        XCTAssertTrue(coach.messages.isEmpty)
+        XCTAssertTrue(coach.initialEntryResolved)
+        await coach.resolveConversation(now: Date(timeIntervalSince1970: Double(midnight + 3 * hour)), reconsider: true, holdDisplay: false)
+        XCTAssertTrue(coach.initialEntryResolved, "A data refresh must not create an unsolicited fresh brief after Clear")
+    }
+
+    @MainActor
+    func testStartupReadsActiveRegistryNightBeforeReadSpineAdoption() async throws {
+        let (store, coach) = try await fixture()
+        let registry = DeviceRegistryStore(dbQueue: store.registryWriter)
+        try registry.add(PairedDevice(id: "whoop-repaired", brand: "WHOOP", model: "5.0",
+            sourceKind: .liveBLE, capabilities: [], status: .active, addedAt: midnight, lastSeenAt: midnight))
+        try await store.replaceCoachMessages([CoachMessageRow(id: UUID().uuidString, role: "user",
+            text: "Previous night", provider: "openAI", createdAt: midnight + hour, orderIndex: 0)])
+        _ = try await store.upsertSleepSessions([night()], deviceId: "whoop-repaired-noop")
+        await coach.resolveConversation(now: Date(timeIntervalSince1970: Double(midnight + 12 * hour)))
+        XCTAssertTrue(coach.conversationReady)
+        XCTAssertTrue(coach.messages.isEmpty, "The startup seed id must not hide the actual active strap's night")
+    }
+
 }

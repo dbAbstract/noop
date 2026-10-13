@@ -100,7 +100,17 @@ struct CoachView: View {
         // the composer is a safe-area inset ON it — which is what makes the keyboard lift the composer and
         // shorten the scrollable area in one motion, the behaviour every chat app has.
         Group {
-            if coach.isConfigured {
+            if coach.isConfigured && !coach.conversationReady {
+                VStack(spacing: NoopMetrics.space3) {
+                    if coach.conversationLoadFailed {
+                        Text("Could not load Coach conversation").font(StrandFont.body)
+                        Button("Retry") { Task { await coach.resolveConversation() } }
+                            .buttonStyle(NoopButtonStyle(.secondary))
+                    } else {
+                        ProgressView().tint(StrandPalette.accent)
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if coach.isConfigured {
                 chatLayout
             } else {
                 // Unconfigured is a PAGE, not a chat: a form to fill in, which should scroll normally.
@@ -194,34 +204,26 @@ struct CoachView: View {
         // `startBriefIfNeeded` only ever runs over the network when BOTH of the above left the
         // transcript genuinely empty.
         .task {
-            await coach.loadPersistedMessagesIfNeeded()
-            await coach.retireStaleConversationIfNeeded()
-            // Gated on the transcript BEFORE consuming. `consumeStoredBrief()` clears the unconsumed
-            // flag, and `surfaceScheduledBrief` then drops the text if a transcript exists, so a brief
-            // that arrived on a day with a conversation already open was consumed and thrown away, gone
-            // for good. Android checked first and so only ever failed to SHOW it (#2087).
-            if coach.messages.isEmpty, let stored = CoachBriefScheduler.consumeStoredBrief() {
-                coach.surfaceScheduledBrief(stored)
-            }
+            await coach.resolveConversation()
             CoachBriefScheduler.activateIfEnabled(
                 generateBrief: { await coach.generateBrief() },
                 detectedWake: { await repo.detectedWakeMinuteOfDay() })
             coachEntryReady = true
-            if coach.pendingPrompt == nil { await coach.startBriefIfNeeded() }
+            await coach.openConversation()
         }
-        .task(id: repo.refreshSeq) {
-            await coach.retireStaleConversationIfNeeded()
+        .onChangeCompat(of: coach.conversationReady) { ready in
+            if !ready { didScrollToInitialMessage = false }
         }
-        .task(id: scenePhase) {
-            guard scenePhase == .active else { return }
-            await coach.retireStaleConversationIfNeeded()
+        .task(id: "\(coach.conversationReady)-\(coach.initialEntryResolved)") {
+            guard coach.conversationReady else { return }
+            await coach.openConversation()
         }
         // #1862: a question handed over by the Today launcher sheet. Cleared BEFORE sending so a view
         // rebuild mid-flight cannot send it twice, and gated on `isConfigured` so an unconfigured handoff
         // (which the launcher does not produce, but a future caller might) degrades to showing setup
         // rather than a failed request.
-        .task(id: "\(coachEntryReady)-\(coach.sending)-\(coach.pendingPrompt ?? "")") {
-            guard coachEntryReady, !coach.sending,
+        .task(id: "\(coachEntryReady)-\(coach.conversationReady)-\(coach.sending)-\(coach.pendingPrompt ?? "")") {
+            guard coachEntryReady, coach.conversationReady, !coach.sending,
                   let prompt = coach.pendingPrompt, !prompt.isEmpty else { return }
             coach.pendingPrompt = nil
             guard coach.isConfigured else { return }
@@ -649,7 +651,11 @@ struct CoachView: View {
     private var transcript: some View {
         Group {
             if coach.messages.isEmpty {
-                ScrollView { emptyTranscript.padding(NoopMetrics.screenHPadding) }
+                ScrollView {
+                    if coach.sending || !coach.initialEntryResolved {
+                        typingIndicator.padding(NoopMetrics.screenHPadding)
+                    } else { emptyTranscript.padding(NoopMetrics.screenHPadding) }
+                }
             } else {
                 GeometryReader { viewport in
                     ScrollViewReader { proxy in
@@ -874,7 +880,8 @@ struct CoachView: View {
     /// blank question), and treating one as a placeholder would silently hide a real turn.
     private func isEmptyPlaceholder(_ message: ChatMessage) -> Bool {
         message.role == .assistant
-            && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || message.text == "Today's brief\n\n")
     }
 
     @ViewBuilder
@@ -992,17 +999,14 @@ struct CoachView: View {
     }
 
     private var typingIndicator: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: NoopMetrics.space2) {
             ProgressView().controlSize(.small).tint(StrandPalette.accent)
             Text("Coach is thinking…")
-                .font(StrandFont.subhead)
+                .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textSecondary)
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 11)
-        .frostedCardSurface(tint: StrandPalette.chargeColor, cornerRadius: 16)
-        .frame(maxWidth: 320, alignment: .leading)
+        .padding(.vertical, NoopMetrics.space2)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Coach is thinking")
     }
 
