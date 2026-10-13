@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1052",
-          "buildVersion": "1052",
-          "date": "2026-10-12",
-          "localizedDescription": "Add calendar-week diet reports and Coach reviews",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1052.ipa",
-          "size": 16903233,
+          "version": "12.1.0.1053",
+          "buildVersion": "1053",
+          "date": "2026-10-13",
+          "localizedDescription": "Resolve Coach startup state and add battery diagnostics",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1053.ipa",
+          "size": 16952899,
           "minOSVersion": "17.0"
         }
       ]
