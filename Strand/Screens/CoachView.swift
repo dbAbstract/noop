@@ -452,10 +452,10 @@ struct CoachView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Coach")
                     .font(StrandFont.headline)
-                    .foregroundStyle(StrandPalette.textPrimary)
+                    .foregroundStyle(StrandPalette.onDarkPrimary)
                 Text("powered by \(coach.model)")
                     .font(StrandFont.micro)
-                    .foregroundStyle(StrandPalette.textTertiary)
+                    .foregroundStyle(StrandPalette.onDarkTertiary)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Coach, powered by \(coach.model)")
@@ -514,14 +514,11 @@ struct CoachView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(StrandPalette.textSecondary)
+                .foregroundStyle(StrandPalette.onDarkSecondary)
                 .frame(width: 32, height: 32)
                 .contentShape(Circle())
         }
-        // The one glass element on this bar. A Liquid Glass CONTROL over an opaque bar is what the
-        // platform asks for and what ChatGPT does; glass on the bar itself was the mistake, because a
-        // lens needs something behind it and a bar has the page stopped at its edge.
-        //
+        // The control retains its own glass treatment over the dark material header.
         // The fallback draws a circle rather than nothing: below iOS 26 a bare ellipsis on the page has
         // no target edge, and the tap area stops being visible.
         .nativeLiquidGlassButtonChrome(fallback: {
@@ -609,10 +606,12 @@ struct CoachView: View {
                 .padding(.horizontal, NoopMetrics.screenHPadding)
                 .padding(.top, 4)
                 .padding(.bottom, 10)
-                // OPAQUE, and reaching up through the status bar. Unfilled, it was invisible chrome over a
-                // scrolling transcript: the title sat on top of moving body text and neither could be
-                // read. The fill matches the page exactly because the page is now one flat colour.
-                .background(StrandPalette.surfaceBase.ignoresSafeArea(edges: .top))
+                .background {
+                    Rectangle().fill(.ultraThinMaterial)
+                        .overlay(StrandPalette.chatScrim)
+                        .environment(\.colorScheme, .dark)
+                        .ignoresSafeArea(edges: .top)
+                }
         }
         // On the inset chain rather than inside the content, so the keyboard lifts the composer AND
         // shortens the transcript together. Inside the scroll content, a growing field slides under the keyboard —
@@ -930,7 +929,7 @@ struct CoachView: View {
                     // draws its long-press highlight around this view's bounds, and with the bounds flush
                     // to the glyphs the rounded highlight clipped the corner characters. The card used to
                     // supply this inset; removing the card removed it too.
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, NoopMetrics.chatTextInset)
                     .padding(.vertical, 6)
                     .frame(maxWidth: 620, alignment: .leading)
                     // K8: Copy / Share / Save context menu on assistant replies.
@@ -1000,11 +999,12 @@ struct CoachView: View {
 
     private var typingIndicator: some View {
         HStack(spacing: NoopMetrics.space2) {
-            ProgressView().controlSize(.small).tint(StrandPalette.accent)
             Text("Coach is thinking…")
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textSecondary)
+            ProgressView().controlSize(.small).tint(StrandPalette.accent)
         }
+        .padding(.horizontal, NoopMetrics.chatTextInset)
         .padding(.vertical, NoopMetrics.space2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Coach is thinking")

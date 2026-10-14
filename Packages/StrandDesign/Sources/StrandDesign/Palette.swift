@@ -87,6 +87,8 @@ public enum StrandPalette {
 
     // MARK: Surfaces — deep navy canvas, tinted frosted cards
     // Background is a near-black navy (NOT pure black); cards float just above it.
+    /// Dark translucent chrome over scrolling content.
+    public static let chatScrim = Color.black.opacity(0.45)
     public static let surfaceBase    = NoopVisualStyle.canvas
     public static let surfaceRaised  = NoopVisualStyle.surface
     public static let surfaceOverlay = NoopVisualStyle.surfaceTop

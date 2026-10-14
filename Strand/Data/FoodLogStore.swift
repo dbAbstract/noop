@@ -612,10 +612,13 @@ extension Repository {
         guard kg.isFinite, kg > 0 else { return false }
         let dayKey = day ?? Repository.localDayKey(Date())
         guard let store = await storeHandle() else { return false }
-        _ = try? await store.upsertMetricSeries(
-            [MetricPoint(day: dayKey, key: WeightLogStore.key, value: kg)],
-            deviceId: WeightLogStore.sourceId)
-        profile?.weightKg = kg
+        do {
+            _ = try await store.upsertMetricSeries(
+                [MetricPoint(day: dayKey, key: WeightLogStore.key, value: kg)],
+                deviceId: WeightLogStore.sourceId)
+        } catch { return false }
+        // A historical weigh-in enriches the trend without rolling current calorie inputs backwards.
+        if dayKey >= (await dietDayKey()) { profile?.weightKg = kg }
         // The nudge has done its job; leaving it in Notification Centre asks for something already done.
         // Same treatment the food reminder gets once a meal lands.
         WeighInReminder.clearDeliveredIfAny()

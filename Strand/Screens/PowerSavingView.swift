@@ -3,6 +3,7 @@ import StrandDesign
 
 /// Exclusive sync schedules project the existing preferences without changing BLE policy.
 struct PowerSavingView: View {
+    @EnvironmentObject var live: LiveState
     @EnvironmentObject var model: AppModel
     @State private var exporting = false
     @AppStorage(PuffinExperiment.powerSavingKey) private var powerSavingEnabled = false
@@ -89,6 +90,15 @@ struct PowerSavingView: View {
                 NoopCard {
                     VStack(alignment: .leading, spacing: NoopMetrics.space2) {
                         Text("Battery diagnostics").font(StrandFont.headline)
+                        if let rate = live.batteryPointsPerDay {
+                            LabeledContent("Battery loss", value: String(localized: "\(rate.formatted(.number.precision(.fractionLength(1)))) pts/day"))
+                                .font(StrandFont.body)
+                            Text("Measured from recent battery readings. Percentage points per day, not percent of remaining charge.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                        } else {
+                            Text("Battery loss will appear after enough discharge readings are available. Hidden while charging.")
+                                .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                        }
                         Text("Battery readings, connection time, traffic and sync activity are kept locally for up to 14 days and included in the strap-log export. Export from More → Test Centre → Report after a day of normal use.")
                             .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
                         Button("Export battery diagnostics") {

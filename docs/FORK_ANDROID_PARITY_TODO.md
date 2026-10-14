@@ -647,3 +647,14 @@ The Apple power screen projects the unchanged preference keys as exclusive Stand
 sync schedules, with a separate optional low-battery HRV pause. Android retains the same underlying
 behavior and stored settings; its presentation remains a UI follow-up. No backup whitelist or schema
 changes are introduced by the app-local diagnostic trace.
+
+## Apple Coach polish and measured battery loss
+
+Apple foreground checks preserve the resolved Coach view while checking the wake-day boundary;
+startup still resolves before first display. The Coach header uses dark material and a shared text inset.
+The battery UI exposes points/day from the existing measured runtime estimate, excluding charging and
+rated fallback; no battery estimator or BLE behavior changes. Android UI wiring remains a follow-up.
+Coach weight actions reuse the existing confirmed action and wake-day resolver, including explicit past
+dates within the existing 13-day range. Historical Apple weigh-ins no longer replace the current profile
+weight, and failed storage writes are no longer reported as successful. Android's weight action/profile
+update path requires the same guard when its diet feature is implemented.

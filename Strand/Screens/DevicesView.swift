@@ -198,6 +198,7 @@ private struct DevicesContent: View {
                             activeIsWhoop: SourceCoordinator.isWhoop(device),
                             whoopPct: live.batteryPct, ringPct: live.ouraBatteryPct)
                         : nil,
+                    liveBatteryLoss: device.status == .active && SourceCoordinator.isWhoop(device) ? live.batteryPointsPerDay : nil,
                     liveBatteryMv: (device.status == .active && live.connected) ? live.batteryMv : nil,
                     livePackSocPct: (device.status == .active && live.connected
                                      && DeviceFamily.isWhoop5Registry(model: device.model,
@@ -750,6 +751,8 @@ private struct DeviceCard: View {
     /// for WHOOP, a generic strap, or an FTMS machine. nil when not the active/connected device or
     /// the source hasn't reported a battery (e.g. a strap/machine without the 0x180F service).
     var liveBatteryPct: Int? = nil
+    /// Measured loss for the active WHOOP strap, excluding rated fallback.
+    var liveBatteryLoss: Double? = nil
     /// #592: strap pack voltage (mV) for the active+connected strap; nil otherwise. Shown beside the percent.
     var liveBatteryMv: Int? = nil
     /// The attached WHOOP 5/MG battery pack's own charge. nil before its pushed pack-info event arrives,
@@ -861,6 +864,10 @@ private struct DeviceCard: View {
                 // charge — same surface for WHOOP / strap / FTMS. The tube reads the charge band's colour.
                 if let pct = liveBatteryPct {
                     batteryTube(pct)
+                }
+                if let rate = liveBatteryLoss {
+                    Text("\(rate.formatted(.number.precision(.fractionLength(1)))) pts/day")
+                        .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
                 }
 
                 // #987: strap clock state for the active+connected strap - "clock latched" + frame

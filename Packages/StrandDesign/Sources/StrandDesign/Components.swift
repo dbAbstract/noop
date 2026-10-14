@@ -6,6 +6,8 @@ import SwiftUI
 // the uniform, instrument-grade look from the reference. Do not invent ad-hoc cards.
 
 public enum NoopMetrics {
+    /// Shared inset for assistant prose and its pending-response indicator.
+    public static let chatTextInset: CGFloat = 10
     public static let cardRadius: CGFloat = NoopVisualStyle.cardRadius
     public static let cardPadding: CGFloat = NoopVisualStyle.cardPadding
     public static let gap: CGFloat = NoopVisualStyle.itemGap

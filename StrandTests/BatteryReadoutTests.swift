@@ -23,4 +23,14 @@ final class BatteryReadoutTests: XCTestCase {
         XCTAssertEqual(live.batteryReadout("currentSoc"), "--")
         XCTAssertEqual(live.batteryReadout("nope"), "--")
     }
+    func testPointsPerDayUsesMeasuredSlopeOnlyAndHidesWhileCharging() {
+        let live = LiveState()
+        live.bankBatterySample(100, now: 0)
+        XCTAssertNil(live.batteryPointsPerDay, "Rated life must not look like observed drain")
+        live.bankBatterySample(90, now: 10 * 3600)
+        XCTAssertEqual(live.batteryPointsPerDay ?? 0, 24, accuracy: 0.001)
+        live.charging = true
+        XCTAssertNil(live.batteryPointsPerDay)
+    }
+
 }

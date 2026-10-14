@@ -226,6 +226,14 @@ public final class LiveState: ObservableObject {
         BatteryEstimator.estimate(samples: batterySamples, ratedHours: batteryRatedHours)
     }
 
+    /// Percentage points lost per day, using only the existing measured discharge estimate.
+    /// Rated fallback is not a measurement; charging is not a discharge observation.
+    public var batteryPointsPerDay: Double? {
+        guard charging != true, let estimate = batteryEstimate, estimate.source == .measured,
+              estimate.remainingHours > 0, estimate.currentSoc > 0 else { return nil }
+        return estimate.currentSoc / estimate.remainingHours * 24
+    }
+
     /// The discharge-run / fitted-slope / gate trace for the banked SoC series (#713, Test Centre Battery
     /// mode). Pure: delegates to BatteryEstimator.estimateTrace, which returns the SAME Estimate as
     /// batteryEstimate plus the trace lines, so reading this never changes any displayed number.

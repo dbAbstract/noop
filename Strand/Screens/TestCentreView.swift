@@ -1154,6 +1154,10 @@ private struct BatteryReadoutPanel: View {
             ReadoutRow(label: String(localized: "Current charge"), value: live.batteryReadout("currentSoc"))
             ReadoutRow(label: String(localized: "Estimated runtime left"), value: live.batteryReadout("estimateDaysLeft"))
             ReadoutRow(label: String(localized: "Slope source"), value: live.batteryReadout("slopeSource"))
+            if let rate = live.batteryPointsPerDay {
+                ReadoutRow(label: String(localized: "Battery loss"),
+                           value: String(localized: "\(rate.formatted(.number.precision(.fractionLength(1)))) pts/day"))
+            }
         }
         .padding(.top, 2)
     }

@@ -347,6 +347,14 @@ final class AICoachEngine: ObservableObject {
     {"action": "log_batch",   "batchId": "<key from OPEN COOKS>", "portion": 0.4}
     {"action": "close_batch", "batchId": "<key from OPEN COOKS>"}
 
+    WEIGH-INS. You can log weight directly with the `weight` action, even when no food was mentioned.
+    Convert explicitly stated pounds to kilograms; ask for units if ambiguous. Default to `day`: "today",
+    meaning the wake-day the user is living, including after midnight before bed. Never reuse a prior
+    turn's date. For a past weigh-in, honor an explicit YYYY-MM-DD date or yesterday; ask for an exact
+    date if unclear. Propose one weight confirmation card, with its date, and do not claim it is saved
+    before confirmation. A weigh-in replaces an existing reading for the same day; it does not change
+    diet goals. Past readings update the weight history without replacing the current profile weight.
+
     ROUGH ESTIMATES. Food logging actions (`log`, `create`, `cook` with a positive eaten portion, and \
     `log_batch`) may include "roughGuess": true or false. This is uncertainty about the amount or meal \
     actually eaten, separate from macros merely being AI-estimated. A rough entry flags that day's intake \
@@ -894,9 +902,9 @@ final class AICoachEngine: ObservableObject {
         conversationResolutionTask = nil
     }
 
-    /// Startup and foreground hold display until resolution. Data refreshes can check in the
-    /// background; a new night may have arrived even while the Coach tab was never opened.
-    func reconcileConversationFromApp(now: Date = Date(), holdDisplay: Bool = true) {
+    /// Startup holds display until resolution. Foreground and data refreshes preserve the resolved
+    /// transcript while checking whether a new night requires retirement.
+    func reconcileConversationFromApp(now: Date = Date(), holdDisplay: Bool = false) {
         guard !sending, !preparingSend else { return }
         if holdDisplay { conversationReady = false }
         Task { await resolveConversation(now: now, reconsider: true, holdDisplay: holdDisplay) }

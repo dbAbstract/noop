@@ -184,4 +184,55 @@ final class CoachHistoricalFoodTests: XCTestCase {
             guard case .unresolved = proposal.kind else { return XCTFail("Must refuse unknown or editable history") }
         }
     }
+    @MainActor
+    func testWeightDefaultsToWakeDayAndExplicitPastDateSurvivesConfirmation() async throws {
+        let store = try await WhoopStore.inMemory()
+        let repo = Repository(deviceId: "weight-coach-test")
+        repo.setStoreForTesting(store)
+        let now = Date()
+        let wakeDay = Repository.localDayKey(now.addingTimeInterval(-86400))
+        let requests = try FoodActionParse.actions(fromReply:
+            "{\"noop_food_action\":{\"actions\":[{\"action\":\"weight\",\"kg\":72.4}]}}").get()
+        let proposal = try XCTUnwrap(FoodProposal.resolve(try XCTUnwrap(requests.first),
+            library: [], recipeIds: [], defaultServingLabel: "1 serving", lastKnownWeightKg: nil,
+            now: now, todayKey: wakeDay))
+        XCTAssertEqual(proposal.dayKey, wakeDay, "After midnight before bed, today is still the wake-day")
+        let result = await repo.applyFoodProposal(proposal)
+        XCTAssertTrue(result)
+        let readings = await repo.weightHistory(days: 14)
+        XCTAssertEqual(readings.first?.day, wakeDay)
+        XCTAssertEqual(readings.first?.kg, 72.4)
+        let pastDay = Repository.localDayKey(now.addingTimeInterval(-3 * 86400))
+        let past = try XCTUnwrap(FoodProposal.resolve(
+            FoodActionRequest(action: .weight(kg: 73), day: .explicit(pastDay)),
+            library: [], recipeIds: [], defaultServingLabel: "1 serving", lastKnownWeightKg: 72.4,
+            now: now, todayKey: wakeDay))
+        XCTAssertEqual(past.dayKey, pastDay)
+        let applied = await repo.applyFoodProposal(past)
+        XCTAssertTrue(applied)
+        let all = await repo.weightHistory(days: 14)
+        XCTAssertEqual(all.map(\.day), [pastDay, wakeDay])
+    }
+
+    @MainActor
+    func testHistoricalWeightDoesNotReplaceCurrentProfileWeight() async throws {
+        let store = try await WhoopStore.inMemory()
+        let repo = Repository(deviceId: "weight-profile-test")
+        repo.setStoreForTesting(store)
+        let profile = ProfileStore()
+        let previous = profile.weightKg
+        defer { profile.weightKg = previous }
+        profile.weightKg = 72
+        let day = Repository.localDayKey(Date().addingTimeInterval(-7 * 86400))
+        let saved = await repo.logWeight(kg: 74, day: day, profile: profile)
+        XCTAssertTrue(saved)
+        XCTAssertEqual(profile.weightKg, 72)
+        let rows = await repo.weightHistory(days: 14)
+        XCTAssertEqual(rows.first?.kg, 74)
+        let currentDay = await repo.dietDayKey()
+        let currentSaved = await repo.logWeight(kg: 71.5, day: currentDay, profile: profile)
+        XCTAssertTrue(currentSaved)
+        XCTAssertEqual(profile.weightKg, 71.5)
+    }
+
 }

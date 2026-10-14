@@ -106,4 +106,19 @@ final class CoachConversationDayTests: XCTestCase {
         XCTAssertTrue(coach.messages.isEmpty, "The startup seed id must not hide the actual active strap's night")
     }
 
+    @MainActor
+    func testForegroundCheckKeepsResolvedTranscriptVisible() async throws {
+        let (_, coach) = try await fixture()
+        coach.messages = [ChatMessage(role: .user, text: "Still here", sentAt: midnight + hour)]
+        let now = Date(timeIntervalSince1970: Double(midnight + 2 * hour))
+        await coach.resolveConversation(now: now)
+        var readiness: [Bool] = []
+        let observation = coach.$conversationReady.sink { readiness.append($0) }
+        defer { observation.cancel() }
+        coach.reconcileConversationFromApp(now: now)
+        await coach.resolveConversation(now: now, reconsider: true, holdDisplay: false)
+        XCTAssertFalse(readiness.contains(false), "Foreground checks must not unmount the chat")
+        XCTAssertEqual(coach.messages.first?.text, "Still here")
+    }
+
 }
