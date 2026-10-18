@@ -681,3 +681,22 @@ Coach weight actions reuse the existing confirmed action and wake-day resolver, 
 dates within the existing 13-day range. Historical Apple weigh-ins no longer replace the current profile
 weight, and failed storage writes are no longer reported as successful. Android's weight action/profile
 update path requires the same guard when its diet feature is implemented.
+
+## Workout budget credit and confirmed played time (v55)
+
+The diet budget no longer adds a workout's stored `energyKcal` as-is. `WorkoutBudgetCredit`
+(`Packages/StrandAnalytics`) credits it net of the Mifflin resting energy the baseline already covers
+(gross sources only; Apple Health workout energy is active-only and passes through). Intermittent field
+and court sports are also capped at a Compendium MET for played time plus 2 METs for bench time.
+`PlayedTimeEstimate` suggests played time from per-minute `dynAccel` (3-minute smoothing, > 0.30 = play,
+>= 80 % minute coverage); the user confirms it before it is used. Stored workout kcal, strain and the
+shared Keytel model are unchanged.
+
+Owed on Android when its diet feature lands:
+- Kotlin twins of `WorkoutBudgetCredit` and `PlayedTimeEstimate`, verified by a Swift oracle over the
+  test cases in `WorkoutBudgetCreditTests`.
+- Room twin of `v55-diet-workout-adjustment` (`dietWorkoutAdjustment`: workoutSource TEXT, startTs
+  INTEGER, playedS REAL, updatedAt INTEGER; PK (workoutSource, startTs)). Declared `ios_only` in
+  `schema_oracle.json` until then. It travels inside the SQLite file, so the `.noopbak` settings
+  whitelist is unaffected.
+- The `workout_played_time` Coach action (`FoodActionParse.workoutPlayedTime`) and its confirmation card.

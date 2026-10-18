@@ -528,4 +528,30 @@ final class MigrationTests: XCTestCase {
             XCTAssertEqual(try Double.fetchOne(db, sql: "SELECT efficiency FROM dailyMetric WHERE day = '2026-01-02'"), 0.9)
         }
     }
+
+    // MARK: - v55: confirmed played time for the diet budget
+
+    /// Round-trips, replaces on the (source, startTs) key, and clears — the last returning the workout to
+    /// its unconfirmed credit, which is what the Reset control depends on.
+    func testV55AdjustmentUpsertsReplacesAndClears() async throws {
+        let store = try await WhoopStore.inMemory()
+        let cols = try await store.columnNamesForTest(table: "dietWorkoutAdjustment")
+        XCTAssertEqual(cols, ["workoutSource", "startTs", "playedS", "updatedAt"])
+
+        try await store.upsertDietWorkoutAdjustment(
+            DietWorkoutAdjustmentRow(workoutSource: "manual", startTs: 1_792_058_357, playedS: 4_740, updatedAt: 1))
+        try await store.upsertDietWorkoutAdjustment(
+            DietWorkoutAdjustmentRow(workoutSource: "manual", startTs: 1_792_058_357, playedS: 4_800, updatedAt: 2))
+        // Same start, different source: a distinct workout, not a replacement.
+        try await store.upsertDietWorkoutAdjustment(
+            DietWorkoutAdjustmentRow(workoutSource: "apple-health", startTs: 1_792_058_357, playedS: 60, updatedAt: 3))
+
+        var rows = try await store.dietWorkoutAdjustments(fromTs: 1_792_000_000, toTs: 1_793_000_000)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.first(where: { $0.workoutSource == "manual" })?.playedS, 4_800)
+
+        try await store.deleteDietWorkoutAdjustment(workoutSource: "manual", startTs: 1_792_058_357)
+        rows = try await store.dietWorkoutAdjustments(fromTs: 1_792_000_000, toTs: 1_793_000_000)
+        XCTAssertEqual(rows.map(\.workoutSource), ["apple-health"])
+    }
 }

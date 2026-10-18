@@ -347,6 +347,7 @@ final class AICoachEngine: ObservableObject {
     "protein": 0, "carbs": 0, "fat": 0, "note": "what was different this time", "portion": 0.6, "day": "today"}
     {"action": "log_batch",   "batchId": "<key from OPEN COOKS>", "portion": 0.4}
     {"action": "close_batch", "batchId": "<key from OPEN COOKS>"}
+    {"action": "workout_played_time", "workout": "<key from WORKOUTS IN THE DIET BUDGET>", "playedMinutes": 80}
 
     DOCUMENT NUTRITION. Prefer the matching saved document food via `log` over creating estimated
     macros. Check restaurant, market, item variant and serving size; ask when ambiguous. Do not mix
@@ -362,6 +363,16 @@ final class AICoachEngine: ObservableObject {
     date if unclear. Propose one weight confirmation card, with its date, and do not claim it is saved
     before confirmation. A weigh-in replaces an existing reading for the same day; it does not change
     diet goals. Past readings update the weight history without replacing the current profile weight.
+
+    WORKOUT CALORIES IN THE BUDGET. WORKOUTS IN THE DIET BUDGET shows each recent workout's recorded \
+    kcal and what the budget counts. The budget counts less because the resting share is already in the \
+    baseline, and intermittent sports (soccer, futsal, basketball and similar) are capped by sport and by \
+    time actually PLAYED, with time off the pitch counted at recovery pace. Heart rate stays high on the \
+    bench, so the recorded figure overstates rotation-based sessions. When a session's played time is \
+    UNCONFIRMED, ask how the session ran (teams per pitch, match length, time sitting out) and propose \
+    `workout_played_time` with your best estimate of minutes played; a strap motion suggestion is a good \
+    starting point. Never propose a calorie number for a workout: the app computes the credit and shows \
+    it on the card. Do not claim it is saved before confirmation. Only use keys from the current context.
 
     ROUGH ESTIMATES. Food logging actions (`log`, `create`, `cook` with a positive eaten portion, and \
     `log_batch`) may include "roughGuess": true or false. This is uncertainty about the amount or meal \
@@ -1481,6 +1492,9 @@ final class AICoachEngine: ObservableObject {
         // The pots still in the fridge, so a `log_batch` handle resolves and "the rest" can be read from
         // the CURRENT remainder rather than from whatever the model assumed when it spoke.
         let cooks = await repo.openCooks()
+        // The same window the context listed, so a `workout_played_time` key resolves against what the
+        // coach was shown.
+        let workouts = await repo.recentWorkoutCredits(days: 7, body: DietBody.stored())
         // Everything this conversation has already WRITTEN. Models repeat their own previous structured
         // output — mention an apple after logging a banana and the reply carries both — so the check is
         // against what was applied rather than against what was merely proposed. A proposal the user
@@ -1500,11 +1514,41 @@ final class AICoachEngine: ObservableObject {
                                                       lastKnownWeightKg: lastWeight,
                                                       cooks: cooks,
                                                       recentFoods: recentFoods,
+                                                      workouts: workouts,
                                                       todayKey: dietToday) else { return nil }
             guard let key = resolved.dedupeKey, applied.contains(key) else { return resolved }
             return FoodProposal(kind: .duplicate(of: resolved.displayName),
                                 dayKey: resolved.dayKey, dayLabel: resolved.dayLabel)
         }
+    }
+
+    /// Recent workouts as the diet budget counts them, keyed for `workout_played_time`.
+    ///
+    /// Every figure is the app's: recorded is the stored workout, counted is `WorkoutBudgetCredit`, and the
+    /// motion suggestion is `PlayedTimeEstimate`. The coach is given them to explain and to ask about, not
+    /// to recompute.
+    func workoutCreditBlock(days: Int = 7) async -> String {
+        let credits = await repo.recentWorkoutCredits(days: days, body: DietBody.stored())
+            .filter { $0.credit.recordedKcal > 0 }
+        guard !credits.isEmpty else { return "" }
+        var lines = ["WORKOUTS IN THE DIET BUDGET (last \(days) days; key, day, sport, minutes, avg HR, recorded kcal → kcal the budget counts):"]
+        for c in credits {
+            let minutes = Int(Double(max(0, c.row.endTs - c.row.startTs)) / 60)
+            var line = "  \(DietWorkoutCredit.contextKey(c.row)) \(dateString(c.row.startTs)) \(c.row.sport), \(minutes) min"
+            if let hr = c.row.avgHr { line += ", avg HR \(hr)" }
+            line += ", \(Int(c.credit.recordedKcal.rounded())) → \(Int(c.credit.creditedKcal.rounded()))"
+            if WorkoutBudgetCredit.intermittentSportMET(c.row.sport) != nil {
+                if c.isPlayedTimeConfirmed {
+                    line += ", played time confirmed: \(Int(((c.credit.playedS ?? 0) / 60).rounded())) min"
+                } else if let s = await repo.suggestedPlayedSeconds(for: c.row) {
+                    line += ", played time UNCONFIRMED (strap motion suggests \(Int((s / 60).rounded())) min)"
+                } else {
+                    line += ", played time UNCONFIRMED"
+                }
+            }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Mark a proposal applied (or dismissed) in place, so the card cannot fire twice.
@@ -1621,6 +1665,12 @@ final class AICoachEngine: ObservableObject {
                     remainingMacros: cook.remainingMacros)
             }))
         }
+
+        // What each recent workout adds to the budget, beside what it recorded. Without this the coach
+        // sees "1,720 kcal" in the workout list and the budget's lower figure with no way to reconcile
+        // them, and it cannot propose a played time for a session it cannot name.
+        let workoutBlock = await workoutCreditBlock()
+        if !workoutBlock.isEmpty { blocks.append(workoutBlock) }
 
         // Where the day stands, and the full macro targets rather than protein alone.
         let totals = FoodEntries.total(entries)

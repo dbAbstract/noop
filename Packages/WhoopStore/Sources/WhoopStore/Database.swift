@@ -1408,6 +1408,23 @@ extension WhoopStore {
                 t.add(column: "batchId", .text)
             }
         }
+        // FORK-LOCAL (diet). The time actually spent playing in an intermittent session, as the user
+        // confirmed it, so the diet budget can price bench minutes at recovery rather than at match pace
+        // (`WorkoutBudgetCredit`).
+        //
+        // A SIDE TABLE, not a `workout` column. The workout row is shared with Android and with every
+        // import path, and its `energyKcal` is a measurement this must never rewrite; the adjustment is a
+        // diet-only fact about one row. Keyed by the row's (source, startTs) identity — the read model
+        // carries no deviceId — and `sport` is left out of the key so retitling a session keeps it.
+        migrator.registerMigration("v55-diet-workout-adjustment") { db in
+            try db.create(table: "dietWorkoutAdjustment", options: [.ifNotExists]) { t in
+                t.column("workoutSource", .text).notNull()
+                t.column("startTs", .integer).notNull()
+                t.column("playedS", .double).notNull()
+                t.column("updatedAt", .integer).notNull()
+                t.primaryKey(["workoutSource", "startTs"])
+            }
+        }
         return migrator
     }
 }

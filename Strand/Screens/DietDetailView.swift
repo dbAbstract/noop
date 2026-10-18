@@ -163,7 +163,15 @@ struct DietDetailView: View {
                         line("Steps", int(e.expenditure.stepNeatKcal),
                              note: stepNote(e))
                         line("Training", int(e.expenditure.workoutKcal),
-                             note: "measured from heart rate")
+                             note: e.workoutCredits.isEmpty
+                                 ? "measured from heart rate"
+                                 : "what your workouts add on top of the baseline")
+                        // Recorded beside counted, per workout, so the workout screen's figure and this
+                        // one can be reconciled rather than simply disagreeing.
+                        ForEach(e.workoutCredits.filter { $0.credit.recordedKcal > 0 },
+                                id: \.row.startTs) { item in
+                            WorkoutCreditRow(item: item) { reloadTick += 1 }
+                        }
                         Divider().overlay(StrandPalette.hairline)
                         line("Estimated Spend", int(e.expenditure.totalKcal), emphasis: true)
                         line("Deficit", "−\(int(e.deficitKcal ?? 0))")

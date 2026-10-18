@@ -55,7 +55,8 @@
     "v51-inline-recipe-ingredients",
     "v52-measured-baseline",
     "v53-restaurant-food",
-    "v54-food-batch"
+    "v54-food-batch",
+    "v55-diet-workout-adjustment"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android — the per-row upload flag belongs to an upload path that does not exist there — so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2930,6 +2931,41 @@
           ]
         }
       ]
+    },
+    "dietWorkoutAdjustment": {
+      "platform": "ios_only",
+      "reason": "v55 fork-local diet: the time actually spent playing in an intermittent workout, as the user confirmed it, so the diet budget prices bench minutes at recovery rather than match pace (WorkoutBudgetCredit). A side table rather than a workout column: the workout row is shared with Android and every import path, and its energyKcal is a measurement this never rewrites. Keyed by (source, startTs) because the read model carries no deviceId; sport is left out so retitling a session keeps its adjustment.",
+      "columns": [
+        {
+          "name": "workoutSource",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "startTs",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "playedS",
+          "affinity": "REAL",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "updatedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "workoutSource",
+        "startTs"
+      ],
+      "indices": []
     }
   }
 }

@@ -175,6 +175,7 @@ struct FoodProposalCard: View {
         case .cook: return "flame"
         case .logBatch: return "takeoutbag.and.cup.and.straw"
         case .closeBatch: return "trash"
+        case .playedTime: return "sportscourt"
         case .unresolved, .implausibleWeight: return "questionmark.circle"
         }
     }
@@ -192,6 +193,7 @@ struct FoodProposalCard: View {
         case .cook: return String(localized: "COOKED")
         case .logBatch: return String(localized: "LEFTOVERS")
         case .closeBatch: return String(localized: "BINNED")
+        case .playedTime: return String(localized: "PLAYING TIME")
         }
     }
 
@@ -301,6 +303,19 @@ struct FoodProposalCard: View {
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+            case .playedTime(_, _, _, let durationS, let playedS, let recorded, let before, let after):
+                Text("Played \(Int((playedS / 60).rounded())) of \(Int((durationS / 60).rounded())) min")
+                    .font(StrandFont.subhead)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                // Recorded, then what the budget counts now, then what it would count. The app priced the
+                // last figure, not the coach, from the same inputs the budget uses.
+                Text("Recorded \(Int(recorded.rounded())) kcal · budget counts \(Int(before.rounded())) → \(Int(after.rounded())) kcal")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textSecondary)
+                Text("Time off the pitch is counted at recovery pace. The workout's own record doesn't change.")
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             case .unresolved, .implausibleWeight, .duplicate:
                 EmptyView()
             }
@@ -339,6 +354,9 @@ struct FoodProposalCard: View {
                         .disabled(working)
                 case .weight:
                     NoopButton("Record it", kind: .primary) { apply(save: false) }
+                        .disabled(working)
+                case .playedTime:
+                    NoopButton("Confirm", kind: .primary) { apply(save: false) }
                         .disabled(working)
                 case .create:
                     // Log-only FIRST and primary. Most meals are eaten once, so saving every proposed
@@ -392,6 +410,7 @@ struct FoodProposalCard: View {
         case .edit: return String(localized: "Saved food updated.")
         case .save: return String(localized: "Saved to your foods.")
         case .weight: return String(localized: "Weigh-in recorded.")
+        case .playedTime: return String(localized: "Playing time saved. Your budget has been updated.")
         // Names the DAY once applied, because a card that scrolled back to says only "Logged." leaves the
         // one question worth asking later — logged to when? — unanswerable.
         default: return String(localized: "Logged to \(proposal.dayLabel.lowercased()).")

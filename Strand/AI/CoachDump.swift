@@ -190,6 +190,15 @@ enum CoachDump {
             // Worth carrying: a run of these says the model is repeating its own earlier output, which is a
             // different report from "it proposed something wrong".
             out["duplicateOf"] = name
+        case .playedTime(let source, let startTs, _, let durationS, let playedS, let recorded, let before, let after):
+            out["workoutSource"] = source
+            out["workoutStartTs"] = startTs
+            out["durationS"] = durationS
+            out["playedS"] = playedS
+            // All three, so an export shows what the card promised against what was recorded.
+            out["recordedKcal"] = recorded
+            out["creditBeforeKcal"] = before
+            out["creditAfterKcal"] = after
         }
         return out
     }
@@ -207,6 +216,7 @@ enum CoachDump {
         case .cook: return "cook"
         case .logBatch: return "logBatch"
         case .closeBatch: return "closeBatch"
+        case .playedTime: return "playedTime"
         }
     }
 

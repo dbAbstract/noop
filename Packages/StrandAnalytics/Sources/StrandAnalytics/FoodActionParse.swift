@@ -77,6 +77,13 @@ public enum FoodAction: Equatable, Sendable {
     /// to tell the coach things and have it sort them out, and a weight is the other number this feature
     /// runs on.
     case weight(kg: Double)
+    /// Confirm how long the user actually PLAYED in an intermittent workout (futsal with rotating teams),
+    /// so the diet budget prices bench time at recovery pace (`WorkoutBudgetCredit`).
+    ///
+    /// The model supplies context — "you said three teams on one pitch, so about 80 of 120 minutes" — and
+    /// never a calorie figure. The budget credit is computed by the app from this, deterministically, and
+    /// the card shows the before/after so the user agrees to the number, not to the model's arithmetic.
+    case workoutPlayedTime(workoutKey: String, playedMinutes: Double)
 }
 
 /// One proposed action plus the day it lands on.
@@ -138,6 +145,10 @@ public enum FoodActionParse {
     /// Portion ceiling. Twelve servings of one food is already implausible; past that it is a model
     /// mis-parsing "120 g" as a portion count, which would log a day's calories twelve times over.
     public static let maxPortion = 12.0
+
+    /// Ceiling on a proposed played time. The card clamps to the workout's own duration; this only refuses
+    /// a figure no session could carry, which is a model confusing minutes with seconds or calories.
+    public static let maxPlayedMinutes = 600.0
 
     /// How many actions one reply may carry. Six covers a described meal — a main, two sides, a drink and
     /// a pudding — while stopping a looping model handing over a wall of cards to dismiss.
@@ -305,6 +316,21 @@ public enum FoodActionParse {
                 return .failure(.badPortion)
             }
             return .success(.logBatch(batchId: id, portion: portion))
+        }
+
+        if verb == "workout_played_time" || verb == "workoutplayedtime" {
+            guard let key = nonEmpty(body["workout"]) ?? nonEmpty(body["workoutKey"]) else {
+                return .failure(.missingItemId)
+            }
+            // `number` reads a missing key as 0, and 0 is a legal answer here, so absence must be refused
+            // before it can become "sat the whole session out".
+            guard body["playedMinutes"] != nil || body["minutes"] != nil else { return .failure(.badPortion) }
+            let minutes = MacroEstimateParse.number(body, "playedMinutes", "minutes")
+            // Zero is a real answer (sat the whole session out); past ten hours it is not a session.
+            guard minutes.isFinite, minutes >= 0, minutes <= maxPlayedMinutes else {
+                return .failure(.badPortion)
+            }
+            return .success(.workoutPlayedTime(workoutKey: key, playedMinutes: minutes))
         }
 
         if verb == "close_batch" || verb == "closebatch" {

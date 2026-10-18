@@ -49,6 +49,80 @@ enum DietStore {
     }
 }
 
+/// One workout's contribution to a day's budget, with the recorded figure it came from.
+struct DietWorkoutCredit: Equatable {
+    let row: WorkoutRow
+    let credit: WorkoutBudgetCredit.Credit
+    /// True when the user confirmed the played time the cap was priced on.
+    let isPlayedTimeConfirmed: Bool
+    /// The inputs the credit was priced with, kept so a proposed played time can be re-priced with the
+    /// SAME figures — a card quoting a number the budget would not then produce is two readouts disagreeing.
+    let weightKg: Double
+    let bmrKcalPerDay: Double
+
+    /// How the coach context names this workout, and how a `workout_played_time` action refers back to it.
+    /// The start time is the row's identity within a source; the source is omitted because the coach's
+    /// window never holds two workouts starting the same second.
+    static func contextKey(_ row: WorkoutRow) -> String { "w\(row.startTs)" }
+
+    /// This workout's credit if `playedS` were confirmed (nil = unconfirmed).
+    func recredited(playedS: Double?) -> WorkoutBudgetCredit.Credit {
+        Self.price(row, playedS: playedS, weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay)
+    }
+
+    /// The one place a workout row becomes a credit. Apple Health energy is active-only; every other
+    /// source stores the HR model's (or WHOOP's) gross figure.
+    static func price(_ row: WorkoutRow, playedS: Double?, weightKg: Double,
+                      bmrKcalPerDay: Double) -> WorkoutBudgetCredit.Credit {
+        WorkoutBudgetCredit.credit(recordedKcal: row.energyKcal ?? 0,
+                                   basis: WorkoutSource.classify(row.source) == .apple ? .active : .gross,
+                                   sport: row.sport,
+                                   durationS: Double(max(0, row.endTs - row.startTs)), playedS: playedS,
+                                   weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay)
+    }
+}
+
+/// The body measurements a workout credit is priced with.
+///
+/// A value rather than a `ProfileStore`, so a reader without the environment object — the coach — prices
+/// a workout from the same figures the budget screen does.
+struct DietBody: Equatable {
+    let sex: String
+    let weightKg: Double
+    let heightCm: Double
+    let age: Double
+
+    init(sex: String, weightKg: Double, heightCm: Double, age: Double) {
+        self.sex = sex
+        self.weightKg = weightKg
+        self.heightCm = heightCm
+        self.age = age
+    }
+
+    @MainActor init(profile: ProfileStore) {
+        self.init(sex: profile.sex, weightKg: profile.weightKg, heightCm: profile.heightCm,
+                  age: Double(profile.age))
+    }
+
+    /// From the persisted profile scalars, with `ProfileStore`'s own defaults for an unset field.
+    static func stored(_ d: UserDefaults = .standard) -> DietBody {
+        DietBody(sex: d.string(forKey: "profile.sex") ?? "male",
+                 weightKg: d.object(forKey: "profile.weightKg") as? Double ?? 75,
+                 heightCm: d.object(forKey: "profile.heightCm") as? Double ?? 178,
+                 age: Double(d.object(forKey: "profile.age") as? Int ?? 30))
+    }
+
+    var bmrKcalPerDay: Double {
+        CalorieTarget.mifflinBMR(sex: sex, weightKg: weightKg, heightCm: heightCm, age: age)
+    }
+}
+
+/// A workout's identity for diet-side adjustments: the read model carries no deviceId.
+struct DietWorkoutKey: Hashable {
+    let source: String
+    let startTs: Int
+}
+
 /// One day's expenditure with the step accounting that produced it, so a screen can show its working.
 struct DietDayEnergy: Equatable {
     let expenditure: DayExpenditure
@@ -62,6 +136,9 @@ struct DietDayEnergy: Equatable {
     let neatSteps: Int
     /// nil when no goal is set — there is a burn figure, but nothing to eat toward.
     let deficitKcal: Double?
+    /// Each workout's recorded figure beside what the budget credited, so the card can show the working.
+    /// Their credits sum to `expenditure.workoutKcal`.
+    var workoutCredits: [DietWorkoutCredit] = []
     /// True when the baseline came from the user's own measured expenditure rather than Mifflin-St Jeor.
     /// Drives the label on the Today card's working — two readouts of one fact must not be able to
     /// disagree about which number is in play.
@@ -196,13 +273,93 @@ extension Repository {
         return total
     }
 
-    /// Workout energy for the day, from the same deduped rows the step exclusion used — so the calories
-    /// added and the steps removed always describe the same set of sessions.
-    func workoutKcalForDay(_ dayKey: String) async -> Double {
-        guard let bounds = Self.dayBounds(dayKey) else { return 0 }
-        return await workoutRows(days: 3)
+    /// What each of the day's workouts may add to the budget, from the same deduped rows the step exclusion
+    /// used — so the calories added and the steps removed always describe the same set of sessions.
+    ///
+    /// NOT the stored `energyKcal`. That is the heart-rate model's gross figure; the budget receives it net
+    /// of the resting energy the baseline already pays for, and capped for intermittent sports at a price
+    /// for played and bench time (`WorkoutBudgetCredit`). The stored figure is carried beside the credit so
+    /// the screen can show both rather than one silently replacing the other.
+    func workoutCreditsForDay(_ dayKey: String, body: DietBody) async -> [DietWorkoutCredit] {
+        guard let bounds = Self.dayBounds(dayKey) else { return [] }
+        let rows = await workoutRows(days: 3)
             .filter { $0.startTs < bounds.end && $0.endTs > bounds.start }
-            .reduce(0.0) { $0 + max(0, $1.energyKcal ?? 0) }
+        return await workoutCredits(for: rows, body: body)
+    }
+
+    /// Credits for every workout that started in the last `days` days, newest first — the coach's view.
+    func recentWorkoutCredits(days: Int, body: DietBody) async -> [DietWorkoutCredit] {
+        let since = Int(Date().timeIntervalSince1970) - days * 86_400
+        let rows = await workoutRows(days: days + 1).filter { $0.startTs >= since }
+        return await workoutCredits(for: rows, body: body)
+    }
+
+    private func workoutCredits(for rows: [WorkoutRow], body: DietBody) async -> [DietWorkoutCredit] {
+        guard !rows.isEmpty else { return [] }
+        let adjustments = await dietWorkoutAdjustments(for: rows)
+        // The SAME resting figure the baseline uses, so what is removed is exactly what it counted.
+        let bmr = body.bmrKcalPerDay
+        return rows.map { row in
+            let played = adjustments[DietWorkoutKey(source: row.source, startTs: row.startTs)]
+            return DietWorkoutCredit(row: row,
+                                     credit: DietWorkoutCredit.price(row, playedS: played,
+                                                                     weightKg: body.weightKg, bmrKcalPerDay: bmr),
+                                     isPlayedTimeConfirmed: played != nil,
+                                     weightKg: body.weightKg, bmrKcalPerDay: bmr)
+        }
+    }
+
+    /// Confirmed played time for these rows, keyed by workout identity.
+    private func dietWorkoutAdjustments(for rows: [WorkoutRow]) async -> [DietWorkoutKey: Double] {
+        guard let store = await storeHandle(),
+              let lo = rows.map(\.startTs).min(), let hi = rows.map(\.startTs).max(),
+              let found = try? await store.dietWorkoutAdjustments(fromTs: lo, toTs: hi) else { return [:] }
+        var out: [DietWorkoutKey: Double] = [:]
+        for a in found { out[DietWorkoutKey(source: a.workoutSource, startTs: a.startTs)] = a.playedS }
+        return out
+    }
+
+    /// The strap's suggestion for how much of an intermittent session was actually played, from its motion.
+    ///
+    /// A SUGGESTION for the user to confirm, never applied by itself — see `PlayedTimeEstimate`. nil when the
+    /// sport has no intermittent entry or the strap recorded too little motion to say (a 4.0, a dropout).
+    func suggestedPlayedSeconds(for row: WorkoutRow) async -> Double? {
+        guard WorkoutBudgetCredit.intermittentSportMET(row.sport) != nil, row.endTs > row.startTs else { return nil }
+        let samples = await gravitySamplesUnion(from: row.startTs, to: row.endTs - 1)
+            .compactMap { s in s.dynAccel.map { (ts: s.ts, dynAccel: $0) } }
+        return PlayedTimeEstimate.playedSeconds(samples: samples, startTs: row.startTs, endTs: row.endTs)
+    }
+
+    /// Record the time the user confirmed they actually played. nil clears it, returning the workout to
+    /// the unconfirmed whole-session credit.
+    @discardableResult
+    func setConfirmedPlayedSeconds(_ playedS: Double?, for row: WorkoutRow) async -> Bool {
+        await setConfirmedPlayedSeconds(playedS, workoutSource: row.source, startTs: row.startTs,
+                                        durationS: Double(max(0, row.endTs - row.startTs)))
+    }
+
+    /// The same write by workout identity, for a coach card that carries the identity rather than the row.
+    @discardableResult
+    func setConfirmedPlayedSeconds(_ playedS: Double?, workoutSource: String, startTs: Int,
+                                   durationS: Double) async -> Bool {
+        guard let store = await storeHandle() else { return false }
+        do {
+            if let playedS, playedS.isFinite {
+                let clamped = min(max(0, durationS), max(0, playedS))
+                try await store.upsertDietWorkoutAdjustment(DietWorkoutAdjustmentRow(
+                    workoutSource: workoutSource, startTs: startTs, playedS: clamped,
+                    updatedAt: Int(Date().timeIntervalSince1970)))
+            } else {
+                try await store.deleteDietWorkoutAdjustment(workoutSource: workoutSource, startTs: startTs)
+            }
+        } catch { return false }
+        noteFoodChanged()
+        return true
+    }
+
+    /// The confirmed played time for one workout, or nil when unconfirmed.
+    func confirmedPlayedSeconds(for row: WorkoutRow) async -> Double? {
+        await dietWorkoutAdjustments(for: [row])[DietWorkoutKey(source: row.source, startTs: row.startTs)]
     }
 
     // MARK: - Which diet day it is
@@ -367,7 +524,8 @@ extension Repository {
         // No step answer means no NEAT credit, not a guess. The budget is then baseline + workouts, which
         // under-credits rather than inventing movement — the same direction every other gap here errs in.
         let neatSteps = StepNeat.stepsAboveBaseline(dailySteps: dailySteps ?? 0, workoutSteps: workoutSteps)
-        let workoutKcal = await workoutKcalForDay(dayKey)
+        let workoutCredits = await workoutCreditsForDay(dayKey, body: DietBody(profile: profile))
+        let workoutKcal = workoutCredits.reduce(0.0) { $0 + $1.credit.creditedKcal }
 
         // Weight comes from the profile rather than the goal's stored start weight: expenditure scales
         // with the body doing the spending, and a goal set eight kilos ago would otherwise keep pricing
@@ -389,6 +547,7 @@ extension Repository {
                              workoutSteps: workoutSteps,
                              neatSteps: neatSteps,
                              deficitKcal: goal?.dailyDeficitKcal,
+                             workoutCredits: workoutCredits,
                              // Reported so a screen can label the baseline honestly. Taken from the
                              // EXPENDITURE rather than from the goal, so it reflects what the sanity
                              // floor actually allowed rather than merely what was stored: a sub-BMR

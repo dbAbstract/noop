@@ -456,6 +456,31 @@ extension FoodActionParseTests {
                        .inconsistent)
     }
 
+    // MARK: - Workout played time
+
+    func testWorkoutPlayedTimeIsUnderstood() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "workout_played_time", "workout": "w1792058357", "playedMinutes": 80}}"#))
+        guard case .workoutPlayedTime(let key, let minutes) = items[0].action else {
+            return XCTFail("expected a played-time action")
+        }
+        XCTAssertEqual(key, "w1792058357")
+        XCTAssertEqual(minutes, 80, accuracy: 0.001)
+    }
+
+    /// Zero is a real answer — sat the whole session out — and must not be confused with "not stated".
+    func testZeroPlayedMinutesIsAcceptedButAbsenceIsRefused() throws {
+        let items = try XCTUnwrap(all(#"{"noop_food_action": {"action": "workout_played_time", "workout": "w1", "playedMinutes": 0}}"#))
+        guard case .workoutPlayedTime(_, let minutes) = items[0].action else { return XCTFail() }
+        XCTAssertEqual(minutes, 0)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "workout_played_time", "workout": "w1"}}"#), .badPortion)
+    }
+
+    func testWorkoutPlayedTimeNeedsAKeyAndASaneFigure() {
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "workout_played_time", "playedMinutes": 80}}"#), .missingItemId)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "workout_played_time", "workout": "w1", "playedMinutes": -5}}"#), .badPortion)
+        XCTAssertEqual(allFailed(#"{"noop_food_action": {"action": "workout_played_time", "workout": "w1", "playedMinutes": 4800}}"#), .badPortion)
+    }
+
     // MARK: - Weight
 
     func testWeightIsUnderstood() throws {

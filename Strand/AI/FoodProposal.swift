@@ -59,6 +59,11 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         /// series the entire weight trend is fitted through — and the pure parser cannot catch it, since
         /// 160 kg is a real weight for somebody.
         case implausibleWeight(kg: Double, lastKnownKg: Double)
+        /// Confirm the time actually played in an intermittent workout. Carries the before/after budget
+        /// credit, priced by the app from the same inputs the budget uses, so the card shows the number the
+        /// confirmation will actually produce.
+        case playedTime(workoutSource: String, startTs: Int, sport: String, durationS: Double,
+                        playedS: Double, recordedKcal: Double, creditBefore: Double, creditAfter: Double)
     }
 
     /// Where the card is in its life. Guards against the obvious double-tap: a card that has already
@@ -108,6 +113,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         case .cook(let name, _, _, _, _): return "cook:\(name.lowercased()):\(dayKey)"
         case .logBatch(let cook, _): return "logBatch:\(cook.id.uuidString):\(dayKey)"
         case .closeBatch(let cook): return "closeBatch:\(cook.id.uuidString)"
+        case .playedTime(let source, let startTs, _, _, _, _, _, _): return "playedTime:\(source):\(startTs)"
         // Nothing was written, so there is nothing to duplicate.
         case .unresolved, .implausibleWeight, .duplicate: return nil
         }
@@ -139,7 +145,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         // None of these add to a day. An edit changes a definition, a save only fills the library, a
         // weigh-in is not food — showing "this adds N kcal" on any of them would answer a question the
         // card is not asking.
-        case .edit, .save, .weight, .unresolved, .implausibleWeight, .duplicate, .closeBatch:
+        case .edit, .save, .weight, .unresolved, .implausibleWeight, .duplicate, .closeBatch, .playedTime:
             return nil
         }
     }
@@ -155,6 +161,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         case .cook(let name, _, _, _, _): return name
         case .logBatch(let cook, _), .closeBatch(let cook): return cook.name
         case .duplicate(let name): return name
+        case .playedTime(_, _, let sport, _, _, _, _, _): return WorkoutSource.displaySport(sport)
         case .unresolved: return String(localized: "Unrecognised food")
         }
     }
@@ -230,6 +237,7 @@ extension FoodProposal {
                         lastKnownWeightKg: Double?,
                         cooks: [FoodCook] = [],
                         recentFoods: [String: FoodDigestEntry] = [:],
+                        workouts: [DietWorkoutCredit] = [],
                         now: Date = Date(),
                         todayKey: String? = nil) -> FoodProposal? {
         // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
@@ -335,6 +343,23 @@ extension FoodProposal {
                 return proposal(.implausibleWeight(kg: kg, lastKnownKg: last))
             }
             return proposal(.weight(kg: kg))
+
+        case .workoutPlayedTime(let key, let minutes):
+            // Exact key from the CURRENT context only, like historical food keys: a workout the model
+            // half-remembers is not one to re-price the budget on. Only intermittent sports carry the
+            // played-time cap, so confirming it on anything else would change nothing the card claims.
+            let needle = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let w = workouts.first(where: { DietWorkoutCredit.contextKey($0.row) == needle }),
+                  WorkoutBudgetCredit.intermittentSportMET(w.row.sport) != nil else {
+                return proposal(.unresolved(handle: key))
+            }
+            let duration = Double(max(0, w.row.endTs - w.row.startTs))
+            let played = min(duration, minutes * 60)
+            return proposal(.playedTime(workoutSource: w.row.source, startTs: w.row.startTs,
+                                        sport: w.row.sport, durationS: duration, playedS: played,
+                                        recordedKcal: w.credit.recordedKcal,
+                                        creditBefore: w.credit.creditedKcal,
+                                        creditAfter: w.recredited(playedS: played).creditedKcal))
         }
     }
 }
@@ -423,6 +448,10 @@ extension Repository {
             // the profile has to be handed in rather than left stale. Without it a weigh-in would move the
             // trend while the budget went on pricing an old mass.
             return await logWeight(kg: kg, day: day, profile: profile)
+
+        case .playedTime(let source, let startTs, _, let durationS, let playedS, _, _, _):
+            return await setConfirmedPlayedSeconds(playedS, workoutSource: source, startTs: startTs,
+                                                   durationS: durationS)
 
         case .unresolved, .implausibleWeight, .duplicate:
             // Nothing safe to do. Deliberately not "create it anyway", "store it anyway", or "log it
