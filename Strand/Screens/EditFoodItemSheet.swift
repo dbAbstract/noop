@@ -98,6 +98,10 @@ struct EditFoodItemSheet: View {
                     TextField("One serving is… (e.g. 1 scoop, 100 g)", text: $servingLabel)
                         .textFieldStyle(.roundedBorder)
                     Divider().overlay(StrandPalette.hairline)
+                    if let source = NutritionDocumentSource.decode(item.macroSource) {
+                        Text(source.citation).font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                        Text(source.evidence).font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                    }
                     macroField(String(localized: "Calories (kcal)"), $kcal)
                     macroField(String(localized: "Protein (g)"), $protein)
                     macroField(String(localized: "Carbs (g)"), $carbs)
@@ -183,6 +187,11 @@ struct EditFoodItemSheet: View {
                 let trimmedServing = servingLabel.trimmingCharacters(in: .whitespaces)
                 edited.servingLabel = trimmedServing.isEmpty ? item.servingLabel : trimmedServing
                 edited.macros = draftMacros
+                if var source = NutritionDocumentSource.decode(edited.macroSource),
+                   macrosChanged || name != item.name || servingLabel != item.servingLabel {
+                    source.userAdjusted = true
+                    edited.macroSource = source.stored
+                }
                 Task {
                     await repo.saveFoodItem(edited)
                     onSaved()

@@ -152,6 +152,19 @@ struct FoodEntry: Identifiable, Equatable, Codable {
 /// A deliberately small vocabulary: the absence of a value means the user stated the numbers, which is
 /// the overwhelming case and should not need a marker. Only a guess needs labelling.
 enum FoodMacroSource {
+    static func isRough(_ source: String?) -> Bool {
+        source == roughGuess || NutritionDocumentSource.decode(source)?.roughGuess == true
+    }
+
+    static func forEntry(_ original: String?, rough: Bool?) -> String? {
+        if var document = NutritionDocumentSource.decode(original) {
+            guard let rough, (document.roughGuess == true) != rough else { return original }
+            document.roughGuess = rough
+            return document.stored
+        }
+        return rough == true ? roughGuess : (rough == false && original == roughGuess ? aiEstimate : original)
+    }
+
     /// Stored value for a figure a language model proposed and the user accepted.
     static let aiEstimate = "ai-estimate"
     /// The user's own admitted guess — a restaurant meal, a day out, something with no label to read.
@@ -326,7 +339,7 @@ enum FoodLibrary {
 // belongs to the person, not to the band they happened to be wearing, and keying it to the strap would
 // strand the library behind a remove-and-re-add.
 
-private extension FoodItem {
+extension FoodItem {
     init(row: FoodItemRow) {
         self.init(id: UUID(uuidString: row.id) ?? UUID(),
                   macroSource: row.macroSource,
@@ -440,9 +453,7 @@ extension Repository {
         let resolvedMeal = FoodEntries.mealToStore(dayKey: dayKey, loggedAt: date,
                                                   today: Repository.localDayKey(Date()),
                                                   explicit: mealType)
-        let source = roughGuess == true ? FoodMacroSource.roughGuess
-            : (roughGuess == false && item.macroSource == FoodMacroSource.roughGuess
-                ? FoodMacroSource.aiEstimate : item.macroSource)
+        let source = FoodMacroSource.forEntry(item.macroSource, rough: roughGuess)
         let entry = FoodEntry(macroSource: source,
                               itemId: saveToLibrary ? item.id : nil,
                               nameSnapshot: item.name, macrosSnapshot: item.macros,
@@ -516,7 +527,7 @@ extension Repository {
                 // Re-derived from the day's entries on every write, so deleting the one rough entry
                 // clears the flag rather than leaving the day marked as a guess forever.
                 MetricPoint(day: dayKey, key: FoodLogStore.Keys.roughDay,
-                            value: entries.contains { $0.macroSource == FoodMacroSource.roughGuess } ? 1 : 0),
+                            value: entries.contains { FoodMacroSource.isRough($0.macroSource) } ? 1 : 0),
             ]
             _ = try? await store.upsertMetricSeries(points, deviceId: FoodLogStore.sourceId)
         }

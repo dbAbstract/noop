@@ -29,7 +29,8 @@ enum CoachDump {
     /// — a reader that guesses from the keys present will get a later version subtly wrong.
     /// 2: adds `errorText`, `isSending`, `failedMessageCount` and per-message `failure`.
     /// 3: adds transient diet-goal proposals and their confirmation state.
-    static let formatVersion = 3
+    /// 4: adds local request preparation, first-token and stream timings.
+    static let formatVersion = 4
 
     /// Build the JSON. Returns nil only if encoding fails, which would mean a non-finite number reached a
     /// macro field and is itself worth knowing about.
@@ -42,6 +43,7 @@ enum CoachDump {
                      customPromptMissesFoodProtocol: Bool,
                      errorText: String? = nil,
                      isSending: Bool = false,
+                     requestDiagnostics: [String: String] = [:],
                      generatedAt: Date = Date()) -> String? {
         let payload: [String: Any] = [
             "formatVersion": formatVersion,
@@ -67,6 +69,7 @@ enum CoachDump {
             "isSending": isSending,
             "failedMessageCount": messages.filter { $0.failure != nil }.count,
             "messages": messages.map(dict(for:)),
+            "requestDiagnostics": requestDiagnostics,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload,
                                                      options: [.prettyPrinted, .sortedKeys]),
@@ -233,6 +236,7 @@ struct CoachConversationExport: Transferable {
     let customPromptMissesFoodProtocol: Bool
     let errorText: String?
     let isSending: Bool
+    var requestDiagnostics: [String: String] = [:]
     let generatedAt: Date
 
     static var transferRepresentation: some TransferRepresentation {
@@ -261,7 +265,7 @@ private actor CoachDumpWriter {
             onDeviceSignals: snapshot.onDeviceSignals, hasCustomPrompt: snapshot.hasCustomPrompt,
             customPromptMissesFoodProtocol: snapshot.customPromptMissesFoodProtocol,
             errorText: snapshot.errorText, isSending: snapshot.isSending,
-            generatedAt: snapshot.generatedAt)
+            requestDiagnostics: snapshot.requestDiagnostics, generatedAt: snapshot.generatedAt)
         try (json ?? "{\"error\":\"could not encode the conversation\"}")
             .write(to: url, atomically: true, encoding: .utf8)
         return url
@@ -275,6 +279,6 @@ extension AICoachEngine {
             dataConsent: dataConsent, onDeviceSignals: includeOnDeviceSignals,
             hasCustomPrompt: hasCustomSystemPrompt,
             customPromptMissesFoodProtocol: customPromptMissesFoodProtocol,
-            errorText: errorText, isSending: sending, generatedAt: Date())
+            errorText: errorText, isSending: sending, requestDiagnostics: lastRequestDiagnostics, generatedAt: Date())
     }
 }

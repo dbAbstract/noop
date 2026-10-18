@@ -391,6 +391,7 @@ func performStreamingRequest(
         // Read line-by-line from the SSE byte stream. `URLSession.AsyncBytes` splits on \n.
         for try await line in bytes.0.lines {
             if let payload = SseDeltas.dataPayload(fromLine: line) {
+                if payload == "[DONE]" { break }
                 onLine(payload)
             }
         }

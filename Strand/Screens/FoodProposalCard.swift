@@ -57,6 +57,10 @@ struct FoodProposalCard: View {
                     duplicateBody(name)
                 } else {
                     detail
+                    if case .log(let item, _) = proposal.kind,
+                       let source = NutritionDocumentSource.decode(item.macroSource) {
+                        Text(source.citation).font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                    }
                     if proposal.state == .pending {
                         if logsFood {
                             Toggle("This is a rough guess", isOn: $roughGuess)

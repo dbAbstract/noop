@@ -2,6 +2,15 @@ import Foundation
 import StrandAnalytics
 
 struct OpenAIClient: AIProviderClient {
+    /// Original GPT-5 supports minimal reasoning; later generations have different supported values.
+    /// Restrict this interactive policy to known original-family IDs, preserving other model settings.
+    static func interactiveReasoningEffort(model: String) -> String {
+        let id = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().split(separator: "/").last.map(String.init) ?? ""
+        let original = ["gpt-5", "gpt-5-mini", "gpt-5-nano"].contains(id)
+            || ["gpt-5-20", "gpt-5-mini-20", "gpt-5-nano-20"].contains(where: { id.hasPrefix($0) })
+        return original ? "minimal" : AIModelParams.reasoningEffort
+    }
+
 
     func send(
         key: String,
@@ -32,11 +41,8 @@ struct OpenAIClient: AIProviderClient {
     /// K1: Stream via `stream: true`. Same body as `send`, with `stream: true` added. SSE parsing
     /// via `SseDeltas.openAiDelta`. Byte-parity pin in `SseDeltasTests.openAiReassembleMatchesFullReply`.
     ///
-    /// THE PARAMETER-SHAPE RETRY LIVES HERE TOO, which it did not before. The old comment claimed this path
-    /// "falls back to `send`'s retry" — it does not: streaming is the MAIN chat path, so a gpt-5 user got
-    /// the provider's raw 400 about `max_tokens` and no reply at all. The retry is re-issued as a
-    /// non-streamed `send`, because the first attempt may already have emitted deltas and re-streaming
-    /// would duplicate them on screen.
+    /// Parameter-shape retries preserve streaming. An HTTP 400 rejects the request before any
+    /// successful SSE body, so the corrected request cannot duplicate an earlier response.
     func stream(
         key: String,
         model: String,
@@ -56,12 +62,9 @@ struct OpenAIClient: AIProviderClient {
             guard AIModelParams.isParameterShapeError(detail) else {
                 throw AICoachError.server(code, detail)
             }
-            // Re-issued NON-STREAMED and delivered as one delta. A 400 arrives before any body, so nothing
-            // has been shown yet — but re-streaming would risk duplicating deltas if that ever changed,
-            // and the whole reply in one chunk renders identically.
-            let whole = try await chat(key: key, model: model, wire: wire, modernParams: !modern,
-                                       session: session)
-            onDelta(whole)
+            // A rejected HTTP request emitted no successful stream; keep the retry incremental too.
+            try await streamOnce(key: key, model: model, wire: wire, modernParams: !modern,
+                                 session: session, onDelta: onDelta)
         }
     }
 
@@ -80,7 +83,7 @@ struct OpenAIClient: AIProviderClient {
             body["max_completion_tokens"] = AIModelParams.reasoningMaxTokens
             if AIModelParams.acceptsReasoningEffort(model: model) {
                 // Keeps a food-logging answer from taking minutes. The latency is what reads as a hang.
-                body["reasoning_effort"] = AIModelParams.reasoningEffort
+                body["reasoning_effort"] = Self.interactiveReasoningEffort(model: model)
             }
         } else {
             body["temperature"] = 0.6

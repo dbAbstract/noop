@@ -1,5 +1,28 @@
 # Fork-local Android parity TODO
 
+## October 2026 Apple follow-up: document nutrition, latency and scroll lifecycle
+
+Apple adds user-confirmed PDF nutrition import; details and export boundaries are documented in
+[`FORK_NUTRITION_DOCUMENTS.md`](FORK_NUTRITION_DOCUMENTS.md). Android's food feature remains pending.
+Its eventual implementation must retain the `nutrition-document:` provenance envelope in macro-source
+strings, including on food snapshots and backups, or explicitly migrate it without losing attribution.
+No shared schema, whitelist, decoder, physiological formula or battery policy changes in this work.
+
+Apple's interactive original GPT-5 requests use `minimal` reasoning, leaving non-streamed extraction
+and background calls at the existing `low` setting. Other model generations retain their current
+policy. The Apple client preserves streaming on parameter retries and stops at the SSE done marker.
+The conversation's dropped middle is represented by bounded local excerpts instead of an extra
+provider request before answering. Conversation export v4 includes local preparation/first-token/
+stream timing; it exports no credentials. These are app-client changes; Android's independent provider
+path needs its own latency evaluation before adopting equivalent behavior.
+
+iOS tab swipes now use a native direction-gated recognizer rather than an ancestor SwiftUI drag,
+cancelled at resign-active and disabled on pushed navigation screens. A public-UIKit foreground recovery
+ends scroll interactions left across background suspension without recreating screens or changing
+deceleration rates. The strap log records the observed scroll counts, pre-recovery pan states and
+offset restoration count. Android has no UIKit counterpart; its gesture lifecycle needs separate
+evaluation if the symptom is reported there. Physical-device validation remains required on iOS.
+
 **Read this before touching `android/` on this fork.**
 
 Everything below was built on the Apple side only. `AGENTS.md` normally requires the Kotlin twin in the

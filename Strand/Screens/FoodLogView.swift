@@ -31,6 +31,7 @@ struct FoodLogView: View {
     @State private var reloadTick = 0
 
     @State private var showAddSheet = false
+    @State private var showNutritionImport = false
     /// `.some(nil)` opens the builder for a NEW recipe; `.some(recipe)` edits one. A plain `Recipe?`
     /// could not express "create", since nil would mean "closed".
     @State private var buildingRecipe: RecipeEditTarget?
@@ -91,6 +92,10 @@ struct FoodLogView: View {
             }
         }
         .task(id: "\(reloadTick)-\(dayOffset)") { await reload() }
+        .sheet(isPresented: $showNutritionImport) {
+            NutritionDocumentImportView(onSaved: { reloadTick += 1 })
+                .environmentObject(repo).environmentObject(coach)
+        }
         .sheet(isPresented: $showAddSheet) {
             AddFoodSheet(library: library, recipes: recipes) { item, portion, save in
                 Task {
@@ -277,6 +282,8 @@ struct FoodLogView: View {
                         Spacer()
                         dayStepper
                     }
+                    Button("Import nutrition PDF") { showNutritionImport = true }
+                        .font(StrandFont.subhead)
 
                     if entries.isEmpty {
                         Divider().overlay(StrandPalette.hairline)
@@ -346,6 +353,12 @@ struct FoodLogView: View {
                     // Marks a figure a model guessed at. Small and quiet — it is a caveat on the number,
                     // not a warning about the food — but permanent, because weeks later "was that one
                     // estimated?" is unanswerable without it.
+                    if let source = NutritionDocumentSource.decode(entry.macroSource) {
+                        Image(systemName: "doc.text")
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                            .accessibilityLabel(source.citation)
+                            .help(source.citation)
+                    }
                     if entry.macroSource == FoodMacroSource.aiEstimate {
                         Image(systemName: "sparkles")
                             .font(StrandFont.caption)
@@ -355,7 +368,7 @@ struct FoodLogView: View {
                     // The user's own admitted guess, marked for the same reason and distinctly: weeks
                     // later, "was that the restaurant day I guessed at?" is exactly the question a tight
                     // measured budget sends you back here to answer.
-                    if entry.macroSource == FoodMacroSource.roughGuess {
+                    if FoodMacroSource.isRough(entry.macroSource) {
                         Image(systemName: "questionmark.circle")
                             .font(StrandFont.caption)
                             .foregroundStyle(StrandPalette.textTertiary)

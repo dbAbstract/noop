@@ -267,7 +267,7 @@ extension FoodProposal {
             FoodProposal(kind: kind, dayKey: day.key, dayLabel: day.label,
                          meal: request.meal.flatMap(MealType.fromMeal), roughGuess: request.roughGuess ?? {
                             if case .log(let item, _) = kind {
-                                return item.macroSource == FoodMacroSource.roughGuess
+                                return FoodMacroSource.isRough(item.macroSource)
                             }
                             return false
                          }())

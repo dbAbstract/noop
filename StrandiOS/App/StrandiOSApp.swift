@@ -37,6 +37,7 @@ struct StrandiOSApp: App {
     /// double-tap handler. See `LiftSessionController`.
     @StateObject private var liftSession: LiftSessionController
     @Environment(\.scenePhase) private var scenePhase
+    @State private var backgroundedAt: TimeInterval?
     /// Appearance preference (System/Light/Dark). Default follows the OS; the Settings picker writes it.
     @AppStorage(AppearanceMode.storageKey) private var appearanceRaw = AppearanceMode.system.rawValue
     /// Chart data-colour style (Titanium / Classic throwback). Re-colours gauges + charts.
@@ -360,7 +361,12 @@ struct StrandiOSApp: App {
         // HealthKitBridge.sync guards on `auth == .authorized`, so the scenePhase trigger stays a
         // safe no-op until the user opts in.
         .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .background { backgroundedAt = ProcessInfo.processInfo.systemUptime }
             if phase == .active {
+                if let since = backgroundedAt, ProcessInfo.processInfo.systemUptime - since >= 2 {
+                    DispatchQueue.main.async { ScrollResumeRecovery.recover { model.live.append(log: $0) } }
+                }
+                backgroundedAt = nil
                 model.coach.reconcileConversationFromApp()
                 // The foreground check, and the one that actually carries wake-triggered mode: a strap
                 // reports its night when it offloads, and the offload rides a foreground sync. Opening
