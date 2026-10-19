@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1054",
-          "buildVersion": "1054",
-          "date": "2026-10-14",
-          "localizedDescription": "Show measured battery loss and polish Coach lifecycle and weigh-ins",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1054.ipa",
-          "size": 16966846,
+          "version": "12.1.0.1055",
+          "buildVersion": "1055",
+          "date": "2026-10-19",
+          "localizedDescription": "Improve scroll recovery, nutrition PDF imports, Coach latency; credit diet budget with net, played-time-capped workout energy",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1055.ipa",
+          "size": 17091729,
           "minOSVersion": "17.0"
         }
       ]
