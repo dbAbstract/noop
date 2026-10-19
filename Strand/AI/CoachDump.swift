@@ -199,6 +199,14 @@ enum CoachDump {
             out["recordedKcal"] = recorded
             out["creditBeforeKcal"] = before
             out["creditAfterKcal"] = after
+        case .documentLog(_, let serving, let macros, let portion, let source, let row):
+            out["servingLabel"] = serving
+            out["portion"] = portion
+            out["macros"] = dict(for: macros)
+            // The row and its citation, so an export shows exactly which printed line the figures came from.
+            out["documentRow"] = row.key
+            out["documentCitation"] = source.citation
+            out["documentLine"] = row.text
         }
         return out
     }
@@ -217,6 +225,7 @@ enum CoachDump {
         case .logBatch: return "logBatch"
         case .closeBatch: return "closeBatch"
         case .playedTime: return "playedTime"
+        case .documentLog: return "documentLog"
         }
     }
 

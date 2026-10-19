@@ -4,6 +4,7 @@ import CryptoKit
 import PDFKit
 import Vision
 import StrandAnalytics
+import WhoopStore
 
 /// Document provenance travels with the existing macro-source string through logs and backups.
 /// A reviewed extraction is not a verified publisher identity or an AI macro estimate.
@@ -108,14 +109,11 @@ struct NutritionDocument: Sendable {
     }
 
     enum Failure: LocalizedError {
-        case tooLarge, unreadable, invalidExtraction, noRows, configuration
+        case tooLarge, unreadable
         var errorDescription: String? {
             switch self {
             case .tooLarge: return String(localized: "Use a PDF under 25 MB with up to 60 pages.")
             case .unreadable: return String(localized: "Cannot read this PDF. Choose an unlocked nutrition document.")
-            case .invalidExtraction: return String(localized: "Extraction did not match the source. Nothing saved.")
-            case .noRows: return String(localized: "No complete nutrition rows found. Nothing saved.")
-            case .configuration: return String(localized: "Connect Coach and enable AI data access.")
             }
         }
     }
@@ -150,93 +148,157 @@ enum NutritionDocumentCatalog {
     }
 }
 
-struct NutritionDocumentRow: Identifiable, Sendable {
-    var id = UUID()
-    var selected = true
-    var name: String
-    var serving: String
-    var macros: MacroTotals
-    var source: NutritionDocumentSource
-    let originalMacros: MacroTotals
-    let originalName: String
-    let originalServing: String
+/// One stored document row, resolved for the coach: the line as printed, the table header above it, and
+/// the document it came from. What the context shows and what a `log_document` proposal is checked against
+/// are this same value, so the card cannot cite a row the coach was not shown.
+struct NutritionDocumentRowRef: Equatable, Sendable {
+    let key: String
+    let document: NutritionDocumentRecord
+    let page: Int
+    let line: Int
+    /// The indexed name, or nil for a row matched on its raw text.
+    let name: String?
+    let aliases: [String]
+    let text: String
+    let header: String?
 
-    var food: FoodItem {
-        var provenance = source
-        provenance.userAdjusted = macros != originalMacros || name != originalName || serving != originalServing
-        return FoodItem(macroSource: provenance.stored, name: "\(source.brand) [\(source.market)] · \(name)",
-                        servingLabel: serving, macros: macros)
+    /// The provenance a food logged from this row carries.
+    func source(fiberListed: Bool) -> NutritionDocumentSource {
+        NutritionDocumentSource(title: document.title, brand: document.brand, market: document.market,
+                                documentSHA256: document.sha256, page: page,
+                                evidence: String(([header, text].compactMap { $0 }).joined(separator: "\n").prefix(2000)),
+                                fiberListed: fiberListed, userAdjusted: false)
     }
 
-    var valid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !serving.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && [macros.kcal, macros.protein, macros.carbs, macros.fat, macros.fiber].allSatisfy { $0.isFinite && $0 >= 0 }
-            && macros.kcal <= 10_000 && max(macros.protein, macros.carbs, macros.fat, macros.fiber) <= 1000
-    }
-
-    /// Reject invented evidence and missing values instead of quietly filling unknown macros with zero.
-    static func parse(_ reply: String, page: NutritionDocumentPage, document: NutritionDocument,
-                      brand: String, market: String) throws -> [Self] {
-        let clean = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "```json", with: "").replacingOccurrences(of: "```", with: "")
-        guard let data = clean.data(using: .utf8),
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = object["items"] as? [[String: Any]], items.count <= 200 else { throw NutritionDocument.Failure.invalidExtraction }
-        func normal(_ value: String) -> String { value.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-        func number(_ item: [String: Any], _ key: String) -> Double? {
-            guard let value = item[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
-            return value.doubleValue
-        }
-        var rows: [Self] = []
-        for item in items {
-            guard let name = item["name"] as? String, let serving = item["serving"] as? String,
-                  let evidence = item["evidence"] as? String, normal(evidence).count >= 10,
-                  evidence.count <= 2000, name.count <= 300, serving.count <= 200,
-                  normal(page.text).contains(normal(evidence)),
-                  !name.isEmpty, !serving.isEmpty,
-                  normal(evidence).localizedCaseInsensitiveContains(normal(name)),
-                  normal(page.text).localizedCaseInsensitiveContains(normal(serving)),
-                  let kcal = number(item, "kcal"), let protein = number(item, "protein"),
-                  let carbs = number(item, "carbs"), let fat = number(item, "fat") else { continue }
-            // All required numbers must occur in the quoted evidence. This is a plausibility gate,
-            // not proof of column alignment: the review remains mandatory.
-            let regex = try NSRegularExpression(pattern: #"\d+(?:[.,]\d+)?"#)
-            let ns = evidence as NSString
-            let numbers = regex.matches(in: evidence, range: NSRange(location: 0, length: ns.length))
-                .compactMap { Double(ns.substring(with: $0.range).replacingOccurrences(of: ",", with: ".")) }
-            guard [kcal, protein, carbs, fat].allSatisfy({ value in numbers.contains { abs($0 - value) < 0.001 } }) else { continue }
-            let fiber = number(item, "fiber")
-            guard fiber == nil || numbers.contains(where: { abs($0 - (fiber ?? 0)) < 0.001 }) else { continue }
-            let macros = MacroTotals(kcal: kcal, protein: protein, carbs: carbs, fat: fat, fiber: fiber ?? 0)
-            let source = NutritionDocumentSource(title: document.title, brand: brand, market: market,
-                documentSHA256: document.sha256, page: page.number, evidence: String(evidence.prefix(2000)), fiberListed: fiber != nil, userAdjusted: false)
-            let row = Self(name: name, serving: serving, macros: macros, source: source, originalMacros: macros, originalName: name, originalServing: serving)
-            if row.valid { rows.append(row) }
-        }
-        return rows
+    /// How a food from this row is named in the library: brand and market first, as the eager import named
+    /// them, so a saved document food says whose menu it is wherever it appears.
+    func foodName(_ itemName: String) -> String {
+        "\(document.brand) [\(document.market)] · \(itemName)"
     }
 }
 
+/// Why a page could not be indexed. The document is still stored: raw-line search covers the page.
+enum NutritionDocumentIndexError: LocalizedError {
+    case notConnected
+    var errorDescription: String? {
+        String(localized: "Connect Coach and enable AI data access to index item names.")
+    }
+}
+
+/// One indexed row produced at import, before it is stored.
+struct NutritionDocumentIndexItem: Equatable, Sendable {
+    let page: Int
+    let line: Int
+    let name: String
+    let aliases: [String]
+}
+
 extension Repository {
-    /// One transaction makes the reviewed catalog visible all at once; re-imports upsert stable IDs.
-    func saveNutritionDocumentRows(_ rows: [NutritionDocumentRow]) async throws -> Int {
+
+    /// Store a document read on the device, with the name index built at import (empty when Coach is not
+    /// connected: raw-line search still works for a request in the document's own words). Replaces an earlier
+    /// import of the same file.
+    func storeNutritionDocument(_ document: NutritionDocument, brand: String, market: String,
+                                index: [NutritionDocumentIndexItem]) async throws {
         guard let store = await storeHandle() else { throw CocoaError(.fileWriteUnknown) }
-        let existing = await foodLibrary()
-        var items: [FoodItem] = []
-        for row in rows where row.selected && row.valid {
-            var item = row.food
-            if let old = existing.first(where: { $0.name == item.name && $0.servingLabel == item.servingLabel
-                && NutritionDocumentSource.decode($0.macroSource) != nil }) {
-                item = FoodItem(id: old.id, macroSource: item.macroSource, name: item.name,
-                    servingLabel: item.servingLabel, macros: item.macros, createdAt: old.createdAt, lastUsedAt: old.lastUsedAt)
-            }
-            if let index = items.firstIndex(where: { $0.name == item.name && $0.servingLabel == item.servingLabel }) { items[index] = item }
-            else { items.append(item) }
-        }
-        guard !items.isEmpty else { throw NutritionDocument.Failure.noRows }
-        _ = try await store.upsertFoodItems(items.map(\.row))
+        let id = UUID().uuidString
+        try await store.replaceNutritionDocument(
+            NutritionDocumentRecord(id: id, title: document.title, sha256: document.sha256, brand: brand,
+                                    market: market, pageCount: document.pages.count,
+                                    importedAt: Int(Date().timeIntervalSince1970)),
+            pages: document.pages.map { NutritionDocumentPageRecord(documentId: id, page: $0.number, text: $0.text) },
+            index: index.map { NutritionDocumentIndexRecord(documentId: id, page: $0.page, line: $0.line,
+                                                            name: $0.name, aliases: $0.aliases) })
         noteFoodChanged()
-        return items.count
+    }
+
+    func nutritionDocuments() async -> [NutritionDocumentRecord] {
+        guard let store = await storeHandle() else { return [] }
+        return (try? await store.nutritionDocuments()) ?? []
+    }
+
+    /// Index entries per document, for the list's "N items indexed" line.
+    func nutritionDocumentIndexCounts() async -> [String: Int] {
+        guard let store = await storeHandle() else { return [:] }
+        let index = (try? await store.nutritionDocumentIndex()) ?? []
+        return Dictionary(grouping: index, by: \.documentId).mapValues(\.count)
+    }
+
+    func deleteNutritionDocument(id: String) async {
+        guard let store = await storeHandle() else { return }
+        try? await store.deleteNutritionDocument(id: id)
+        noteFoodChanged()
+    }
+
+    /// Rows of the stored documents that match `query`, best first, resolved with their header line.
+    func nutritionDocumentMatches(query: String, limit: Int = 8) async -> [NutritionDocumentRowRef] {
+        guard let store = await storeHandle(),
+              let documents = try? await store.nutritionDocuments(), !documents.isEmpty,
+              let pages = try? await store.nutritionDocumentPages(),
+              let index = try? await store.nutritionDocumentIndex() else { return [] }
+        // Raw-line search covers every PAGE with no index entries — a document stored without Coach, or a
+        // page whose indexing failed — so a gap in the index never hides a row typed in the menu's own words.
+        let indexed = Set(index.map { "\($0.documentId)|\($0.page)" })
+        let matches = NutritionDocumentLookup.match(
+            query: query,
+            entries: index.map { .init(documentId: $0.documentId, page: $0.page, line: $0.line, name: $0.name,
+                                       aliases: $0.aliases) },
+            unindexedPages: pages.filter { !indexed.contains("\($0.documentId)|\($0.page)") }
+                .map { ($0.documentId, $0.page, $0.text) },
+            limit: limit)
+        return matches.compactMap { m in
+            ref(documentId: m.documentId, page: m.page, line: m.line, documents: documents, pages: pages, index: index)
+        }
+    }
+
+    /// The rows named by these keys, for checking a proposal. A key matching no stored row, or matching two
+    /// documents' prefixes, is left out — the proposal then resolves to nothing rather than to a guess.
+    func nutritionDocumentRows(keys: [String]) async -> [String: NutritionDocumentRowRef] {
+        let parsed = keys.compactMap { key in NutritionDocumentLookup.parseRowKey(key).map { (key, $0) } }
+        guard !parsed.isEmpty, let store = await storeHandle(),
+              let documents = try? await store.nutritionDocuments(),
+              let pages = try? await store.nutritionDocumentPages(),
+              let index = try? await store.nutritionDocumentIndex() else { return [:] }
+        var out: [String: NutritionDocumentRowRef] = [:]
+        for (key, p) in parsed {
+            let owners = documents.filter { NutritionDocumentLookup.key(p, names: $0.id) }
+            guard owners.count == 1, let doc = owners.first,
+                  let r = ref(documentId: doc.id, page: p.page, line: p.line, documents: documents, pages: pages,
+                              index: index) else { continue }
+            out[Self.normalisedRowKey(key)] = r
+        }
+        return out
+    }
+
+    /// The lookup form of a row key, so "DA1B2C3D4P3L2 " and "da1b2c3d4p3l2" are one key.
+    nonisolated static func normalisedRowKey(_ key: String) -> String {
+        key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func ref(documentId: String, page: Int, line: Int, documents: [NutritionDocumentRecord],
+                     pages: [NutritionDocumentPageRecord], index: [NutritionDocumentIndexRecord]) -> NutritionDocumentRowRef? {
+        guard let doc = documents.first(where: { $0.id == documentId }),
+              let text = pages.first(where: { $0.documentId == documentId && $0.page == page })?.text,
+              let row = NutritionDocumentLookup.line(line, inPage: text) else { return nil }
+        let entry = index.first { $0.documentId == documentId && $0.page == page && $0.line == line }
+        return NutritionDocumentRowRef(key: NutritionDocumentLookup.rowKey(documentId: documentId, page: page, line: line),
+                                       document: doc, page: page, line: line, name: entry?.name,
+                                       aliases: entry?.aliases ?? [], text: row,
+                                       header: NutritionDocumentLookup.header(forLine: line, inPage: text))
+    }
+
+    /// The library food a document row is logged as: an existing one with the same name, serving and a
+    /// document source keeps its id (so repeat logs build one food's history), with its figures and
+    /// citation refreshed from the row.
+    func documentFood(name: String, servingLabel: String, macros: MacroTotals,
+                      source: NutritionDocumentSource) async -> FoodItem {
+        let existing = await foodLibrary().first {
+            $0.name == name && $0.servingLabel == servingLabel && NutritionDocumentSource.decode($0.macroSource) != nil
+        }
+        guard let old = existing else {
+            return FoodItem(macroSource: source.stored, name: name, servingLabel: servingLabel, macros: macros)
+        }
+        return FoodItem(id: old.id, macroSource: source.stored, name: name, servingLabel: servingLabel,
+                        macros: macros, createdAt: old.createdAt, lastUsedAt: old.lastUsedAt)
     }
 }

@@ -1,45 +1,57 @@
-# Nutrition document import (Apple fork)
+# Nutrition documents (Apple fork)
 
-Food → Import nutrition PDF imports a user-selected nutrition document into the personal food library.
-The user supplies the restaurant/brand and market/country because similarly named products can have
-different serving sizes and formulations across markets. There is no built-in restaurant database,
-automatic web lookup, publisher authentication, subscription, hosted service or new account.
+Food → Nutrition PDFs stores a user-selected nutrition document for Coach to look foods up in. The user
+supplies the restaurant/brand and market/country because similarly named products can have different
+serving sizes and formulations across markets. There is no built-in restaurant database, automatic web
+lookup, publisher authentication, subscription, hosted service or new account.
 
-PDFKit extracts text locally, reconstructing visual table rows. Pages without sufficient embedded text
-use local Vision OCR (English/Japanese). Documents are limited to 25 MB, 60 pages and 30,000 characters
-per readable page. The source PDF is not uploaded or retained by NOOP. Reading is cancellable and runs
-off the UI actor.
+## Lazy lookup
 
-Extraction is an explicit export: **Extract with AI** sends each readable page's text plus brand/market
-metadata to the existing configured provider. It requires Coach configuration and its existing data
-consent. It does not send chat history, health data or the PDF binary. The extraction persona treats
-document contents as untrusted data and requests only explicitly printed nutrition rows. This is a
-user-requested extension of the fork's existing optional AI export boundary, not a dependency of strap
-sync or ordinary food logging.
+Nothing is extracted into the food library at import, and there is no review of a whole menu. The app keeps
+the document's page text (v56 `nutritionDocument` / `nutritionDocumentPage`) and, optionally, a name index
+(`nutritionDocumentIndex`). When the user asks Coach to log something:
 
-The parser requires kcal, protein, carbohydrate and fat, an explicit serving basis, and a source quote
-containing the numbers and item name. Missing required nutrients are not silently zero-filled. Missing
-fibre is labelled as unlisted in review; the existing macro model stores zero for unavailable fibre.
-Source evidence is a plausibility check, not proof of column assignment or authenticity. **User review
-is mandatory**, and selected values/servings can be corrected before saving. No meal is logged by an
-import. A failed extraction or cancellation saves nothing. The completed catalog saves in one database
-transaction; re-importing matching document foods preserves food IDs. Unrelated manual foods and past
-meal snapshots are not overwritten.
+1. The app matches what the user said (their last three messages, not Coach's replies) against the index
+   and, for pages without one, against the raw lines (`NutritionDocumentLookup.match`).
+2. The matched rows go into Coach's context verbatim, each with its key, its source and the nearest header
+   line above it on the page, so Coach can read which column is which.
+3. Coach proposes `log_document` with the row key and the figures as printed. The app re-reads the row from
+   the store and refuses the proposal unless kcal, protein, carbohydrate and fat (and fibre, when given) are
+   all printed on that line (`NutritionDocumentLookup.figuresArePrinted`).
+4. The confirmation card shows the citation, the header and the row. That card is the review, for the one
+   item actually eaten. Confirming logs it and saves it to the food library with its document provenance, so
+   the next request is a plain pick from saved foods.
 
-The existing `macroSource` string carries a `nutrition-document:` JSON/base64 provenance envelope:
-document filename, SHA-256, source page/quote, supplied brand/market, whether fibre was listed and
-whether the user adjusted values. A rough-portion flag can coexist in the envelope, preserving both
-source attribution and the existing daily intake-uncertainty calculation. Existing food rows and meal snapshots already preserve this field,
-including through backups; no migration or backup whitelist change is needed. The original PDF is not
-part of the backup. Editing a document food marks it user-adjusted. AI macro edits retain the existing
-AI-estimate provenance instead of continuing to claim document values.
+With no document for the restaurant, Coach estimates from its own knowledge with `create`. With a document
+but no matching row, Coach says so and asks for the name as printed on the menu before offering an estimate.
 
-Coach ranks the saved library against recent conversation text before building its bounded food
-context, includes document citations, and is instructed to prefer matching source foods and ask about
-ambiguous markets/sizes. A `log` action resolves to the saved food ID and stored macros, including when
-the model emits a different prose estimate. The confirmation card displays the source citation.
+## Reading and indexing
 
-Validation covers local PDF reading, unsupported/missing extraction values, serving/provenance
-round-trips, idempotent catalog persistence, authoritative Coach logging and relevant-food retrieval
-beyond the normal 60-entry context limit. A live provider extraction and on-device OCR review remain
-manual checks; no paid API request is required by the tests.
+PDFKit extracts text locally, reconstructing visual table rows. Pages without sufficient embedded text use
+local Vision OCR (English/Japanese). Documents are limited to 25 MB, 60 pages and 30,000 characters per
+readable page. The PDF binary is not retained; the page text is, so a logged figure can always be checked
+against the line it came from. Re-importing the same file (same SHA-256) replaces it.
+
+The name index is the only AI use at import and is optional. When Coach is connected with data consent,
+each page's text (lines numbered) plus the typed brand and market is sent to the configured provider once,
+asking for each menu row's printed name and up to three aliases (an English name, a romanisation, a short
+name). The reply carries no figures and none are read from it. An entry is kept only when its line exists,
+prints a number, is not a header, and contains the name as printed. Without an index, or for a page whose
+indexing failed, raw-line search still finds an item requested by the name as printed.
+
+## Limits
+
+The figure check stops invented or misremembered numbers, not swapped columns: if Coach puts the fat value
+in carbohydrate and both are printed on the row, the check passes. The header shown on the card is how the
+user catches that. Source evidence is a plausibility check, not proof of publisher authenticity.
+
+## Provenance
+
+The existing `macroSource` string carries a `nutrition-document:` JSON/base64 envelope: document filename,
+SHA-256, page, the header and row as evidence, supplied brand/market, whether fibre was listed and whether
+the user adjusted values. A rough-portion flag can coexist in the envelope. Food rows and meal snapshots
+already preserve this field through backups. The stored documents travel inside the SQLite file, so the
+`.noopbak` settings whitelist is unaffected. Deleting a document keeps everything logged or saved from it.
+
+Foods saved by the earlier eager import keep working unchanged: they are ordinary library foods with a
+document citation, and Coach prefers them via `log`.

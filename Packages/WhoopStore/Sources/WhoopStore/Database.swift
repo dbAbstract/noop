@@ -1425,6 +1425,43 @@ extension WhoopStore {
                 t.primaryKey(["workoutSource", "startTs"])
             }
         }
+        // FORK-LOCAL (diet). Nutrition PDFs kept as DOCUMENTS, read lazily: the coach looks a food up in
+        // them when the user asks to log it, rather than the whole menu being extracted into the library at
+        // import. Three tables, all keyed by the document id:
+        //   - `nutritionDocument`: what the file is and whose menu it is (brand, market), by content hash so
+        //     re-importing the same file replaces it rather than duplicating it;
+        //   - `nutritionDocumentPage`: the page text as read on the device (PDFKit rows, or OCR), which is
+        //     what a logged figure is checked against — the PDF binary itself is never kept;
+        //   - `nutritionDocumentIndex`: per menu row, its printed name and aliases ("Big Mac" for
+        //     ビッグマック), so an English request finds a Japanese row. Names only: no figure is ever taken
+        //     from the index, only from the page line it points at.
+        // No foreign keys, matching the rest of the fork's diet tables; the store deletes all three together.
+        migrator.registerMigration("v56-nutrition-documents") { db in
+            try db.create(table: "nutritionDocument", options: [.ifNotExists]) { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text).notNull()
+                t.column("sha256", .text).notNull().unique()
+                t.column("brand", .text).notNull()
+                t.column("market", .text).notNull()
+                t.column("pageCount", .integer).notNull()
+                t.column("importedAt", .integer).notNull()
+            }
+            try db.create(table: "nutritionDocumentPage", options: [.ifNotExists]) { t in
+                t.column("documentId", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("text", .text).notNull()
+                t.primaryKey(["documentId", "page"])
+            }
+            try db.create(table: "nutritionDocumentIndex", options: [.ifNotExists]) { t in
+                t.column("documentId", .text).notNull()
+                t.column("page", .integer).notNull()
+                t.column("line", .integer).notNull()
+                t.column("name", .text).notNull()
+                // Newline-separated; a name never contains one.
+                t.column("aliases", .text).notNull()
+                t.primaryKey(["documentId", "page", "line"])
+            }
+        }
         return migrator
     }
 }

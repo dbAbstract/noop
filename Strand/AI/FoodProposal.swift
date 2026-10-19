@@ -64,6 +64,11 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         /// confirmation will actually produce.
         case playedTime(workoutSource: String, startTs: Int, sport: String, durationS: Double,
                         playedS: Double, recordedKcal: Double, creditBefore: Double, creditAfter: Double)
+        /// Log a food read off a row of a stored nutrition document. Every figure was checked against the
+        /// row before this was built; `row` rides along so the card shows the line itself under its header,
+        /// which is the user's review. Saved to the library on confirm, so the next log is a plain pick.
+        case documentLog(name: String, servingLabel: String, macros: MacroTotals, portion: Double,
+                         source: NutritionDocumentSource, row: NutritionDocumentRowRef)
     }
 
     /// Where the card is in its life. Guards against the obvious double-tap: a card that has already
@@ -114,6 +119,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         case .logBatch(let cook, _): return "logBatch:\(cook.id.uuidString):\(dayKey)"
         case .closeBatch(let cook): return "closeBatch:\(cook.id.uuidString)"
         case .playedTime(let source, let startTs, _, _, _, _, _, _): return "playedTime:\(source):\(startTs)"
+        case .documentLog(let name, _, _, _, _, let row): return "documentLog:\(row.key):\(name.lowercased()):\(dayKey)"
         // Nothing was written, so there is nothing to duplicate.
         case .unresolved, .implausibleWeight, .duplicate: return nil
         }
@@ -133,7 +139,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         switch kind {
         case .log(let item, let portion):
             return NutritionMath.scaled(item.macros, portion: portion)
-        case .create(_, _, let macros, let portion):
+        case .create(_, _, let macros, let portion), .documentLog(_, _, let macros, let portion, _, _):
             return NutritionMath.scaled(macros, portion: portion)
         // The cook's macros are the WHOLE pot, so the portion is a fraction of them — the same scaling,
         // with a different meaning for the multiplier. A cook with portion 0 adds nothing, which the
@@ -162,6 +168,7 @@ struct FoodProposal: Identifiable, Equatable, Sendable {
         case .logBatch(let cook, _), .closeBatch(let cook): return cook.name
         case .duplicate(let name): return name
         case .playedTime(_, _, let sport, _, _, _, _, _): return WorkoutSource.displaySport(sport)
+        case .documentLog(let name, _, _, _, _, _): return name
         case .unresolved: return String(localized: "Unrecognised food")
         }
     }
@@ -238,6 +245,7 @@ extension FoodProposal {
                         cooks: [FoodCook] = [],
                         recentFoods: [String: FoodDigestEntry] = [:],
                         workouts: [DietWorkoutCredit] = [],
+                        documentRows: [String: NutritionDocumentRowRef] = [:],
                         now: Date = Date(),
                         todayKey: String? = nil) -> FoodProposal? {
         // An unresolvable day drops the whole proposal rather than silently landing on today. "Log this
@@ -360,6 +368,22 @@ extension FoodProposal {
                                         recordedKcal: w.credit.recordedKcal,
                                         creditBefore: w.credit.creditedKcal,
                                         creditAfter: w.recredited(playedS: played).creditedKcal))
+
+        case .documentLog(let key, let name, let serving, let kcal, let protein, let carbs, let fat, let fiber,
+                          let portion):
+            // The row must be one the app resolved (a stored document, a line that exists), and every figure
+            // the model states must be PRINTED on that line. A misremembered kcal, or numbers from a row the
+            // coach was not shown, become a refusal rather than a log.
+            guard let row = documentRows[Repository.normalisedRowKey(key)],
+                  NutritionDocumentLookup.figuresArePrinted(kcal: kcal, protein: protein, carbs: carbs, fat: fat,
+                                                            fiber: fiber, in: row.text) else {
+                return proposal(.unresolved(handle: name))
+            }
+            return proposal(.documentLog(name: row.foodName(name),
+                                         servingLabel: serving.isEmpty ? defaultServingLabel : serving,
+                                         macros: MacroTotals(kcal: kcal, protein: protein, carbs: carbs, fat: fat,
+                                                             fiber: fiber ?? 0),
+                                         portion: portion, source: row.source(fiberListed: fiber != nil), row: row))
         }
     }
 }
@@ -448,6 +472,14 @@ extension Repository {
             // the profile has to be handed in rather than left stale. Without it a weigh-in would move the
             // trend while the budget went on pricing an old mass.
             return await logWeight(kg: kg, day: day, profile: profile)
+
+        case .documentLog(let name, let serving, let macros, let portion, let source, _):
+            // Saved to the library as it is logged (the user's choice for document foods): the next "Big Mac"
+            // is then a plain pick from SAVED FOODS with its citation, no lookup needed.
+            let item = await documentFood(name: name, servingLabel: serving, macros: macros, source: source)
+            await logFood(item: item, portion: portion, day: day, at: date,
+                          mealType: proposal.meal, roughGuess: proposal.roughGuess, saveToLibrary: true)
+            return true
 
         case .playedTime(let source, let startTs, _, let durationS, let playedS, _, _, _):
             // The body the re-priced row is written with: the live profile when the card has it, else the

@@ -84,6 +84,13 @@ public enum FoodAction: Equatable, Sendable {
     /// never a calorie figure. The budget credit is computed by the app from this, deterministically, and
     /// the card shows the before/after so the user agrees to the number, not to the model's arithmetic.
     case workoutPlayedTime(workoutKey: String, playedMinutes: Double)
+    /// Log a food read off a row of one of the user's stored nutrition documents (`NutritionDocumentLookup`).
+    ///
+    /// The model names the row by its key and states the figures as it read them from that row; the CALLER
+    /// checks every figure is printed on the row before offering anything, so a misread column or a
+    /// half-remembered number is refused rather than logged. `fiber` is nil when the row does not print it.
+    case documentLog(rowKey: String, name: String, servingLabel: String, kcal: Double, protein: Double,
+                     carbs: Double, fat: Double, fiber: Double?, portion: Double)
 }
 
 /// One proposed action plus the day it lands on.
@@ -331,6 +338,28 @@ public enum FoodActionParse {
                 return .failure(.badPortion)
             }
             return .success(.workoutPlayedTime(workoutKey: key, playedMinutes: minutes))
+        }
+
+        if verb == "log_document" || verb == "logdocument" {
+            guard let key = nonEmpty(body["row"]) ?? nonEmpty(body["rowKey"]) else { return .failure(.missingItemId) }
+            guard let name = nonEmpty(body["name"]) else { return .failure(.missingName) }
+            guard portion.isFinite, portion > 0, portion <= maxPortion else { return .failure(.badPortion) }
+            // Present, numeric and finite — `number` reads a missing key as 0, and 0 g of fat is a claim the
+            // row would then have to print, so absence is refused here rather than checked later.
+            func figure(_ k: String) -> Double? {
+                guard let v = body[k] as? NSNumber, CFGetTypeID(v) != CFBooleanGetTypeID(),
+                      v.doubleValue.isFinite, v.doubleValue >= 0 else { return nil }
+                return v.doubleValue
+            }
+            guard let kcal = figure("kcal") else { return .failure(.noCalories) }
+            guard let protein = figure("protein"), let carbs = figure("carbs"), let fat = figure("fat") else {
+                return .failure(.inconsistent)
+            }
+            return .success(.documentLog(rowKey: key, name: name,
+                                         servingLabel: nonEmpty(body["servingLabel"])
+                                             ?? nonEmpty(body["serving_label"]) ?? nonEmpty(body["serving"]) ?? "",
+                                         kcal: kcal, protein: protein, carbs: carbs, fat: fat,
+                                         fiber: figure("fiber"), portion: portion))
         }
 
         if verb == "close_batch" || verb == "closebatch" {

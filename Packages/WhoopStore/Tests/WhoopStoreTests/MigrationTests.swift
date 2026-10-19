@@ -554,4 +554,46 @@ final class MigrationTests: XCTestCase {
         rows = try await store.dietWorkoutAdjustments(fromTs: 1_792_000_000, toTs: 1_793_000_000)
         XCTAssertEqual(rows.map(\.workoutSource), ["apple-health"])
     }
+
+    func testV56DocumentReplacesByHashAndDeletesWhole() async throws {
+        let store = try await WhoopStore.inMemory()
+        let docCols = try await store.columnNamesForTest(table: "nutritionDocument")
+        XCTAssertEqual(docCols, ["id", "title", "sha256", "brand", "market", "pageCount", "importedAt"])
+        let pageCols = try await store.columnNamesForTest(table: "nutritionDocumentPage")
+        XCTAssertEqual(pageCols, ["documentId", "page", "text"])
+        let indexCols = try await store.columnNamesForTest(table: "nutritionDocumentIndex")
+        XCTAssertEqual(indexCols, ["documentId", "page", "line", "name", "aliases"])
+
+        func doc(_ id: String, sha: String, at t: Int) -> NutritionDocumentRecord {
+            NutritionDocumentRecord(id: id, title: "menu.pdf", sha256: sha, brand: "McDonald's", market: "Japan",
+                                    pageCount: 1, importedAt: t)
+        }
+        try await store.replaceNutritionDocument(
+            doc("a", sha: "h1", at: 1),
+            pages: [NutritionDocumentPageRecord(documentId: "a", page: 1, text: "商品名\tkcal\nビッグマック\t525")],
+            index: [NutritionDocumentIndexRecord(documentId: "a", page: 1, line: 1, name: "ビッグマック",
+                                                 aliases: ["Big Mac", "biggu makku"])])
+        // The same file again under a new id: one document, the new one.
+        try await store.replaceNutritionDocument(
+            doc("b", sha: "h1", at: 2),
+            pages: [NutritionDocumentPageRecord(documentId: "b", page: 1, text: "ビッグマック\t525")],
+            index: [NutritionDocumentIndexRecord(documentId: "b", page: 1, line: 0, name: "ビッグマック", aliases: ["Big Mac"])])
+        try await store.replaceNutritionDocument(doc("c", sha: "h2", at: 3), pages: [], index: [])
+
+        let docs = try await store.nutritionDocuments()
+        XCTAssertEqual(docs.map(\.id), ["c", "b"])
+        let pages = try await store.nutritionDocumentPages()
+        XCTAssertEqual(pages.map(\.documentId), ["b"])
+        let index = try await store.nutritionDocumentIndex()
+        XCTAssertEqual(index.count, 1)
+        XCTAssertEqual(index.first?.aliases, ["Big Mac"])
+
+        try await store.deleteNutritionDocument(id: "b")
+        let remaining = try await store.nutritionDocuments()
+        XCTAssertEqual(remaining.map(\.id), ["c"])
+        let pagesAfter = try await store.nutritionDocumentPages()
+        XCTAssertTrue(pagesAfter.isEmpty)
+        let indexAfter = try await store.nutritionDocumentIndex()
+        XCTAssertTrue(indexAfter.isEmpty)
+    }
 }

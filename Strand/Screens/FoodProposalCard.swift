@@ -39,7 +39,7 @@ struct FoodProposalCard: View {
 
     private var logsFood: Bool {
         switch proposal.kind {
-        case .log, .create, .logBatch: return true
+        case .log, .create, .logBatch, .documentLog: return true
         case .cook(_, _, _, _, let portion): return portion > 0
         default: return false
         }
@@ -60,6 +60,9 @@ struct FoodProposalCard: View {
                     if case .log(let item, _) = proposal.kind,
                        let source = NutritionDocumentSource.decode(item.macroSource) {
                         Text(source.citation).font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
+                    }
+                    if case .documentLog(_, _, _, _, let source, let row) = proposal.kind {
+                        documentEvidence(source: source, row: row)
                     }
                     if proposal.state == .pending {
                         if logsFood {
@@ -176,6 +179,7 @@ struct FoodProposalCard: View {
         case .logBatch: return "takeoutbag.and.cup.and.straw"
         case .closeBatch: return "trash"
         case .playedTime: return "sportscourt"
+        case .documentLog: return "doc.text.magnifyingglass"
         case .unresolved, .implausibleWeight: return "questionmark.circle"
         }
     }
@@ -194,6 +198,7 @@ struct FoodProposalCard: View {
         case .logBatch: return String(localized: "LEFTOVERS")
         case .closeBatch: return String(localized: "BINNED")
         case .playedTime: return String(localized: "PLAYING TIME")
+        case .documentLog: return String(localized: "FROM YOUR PDF")
         }
     }
 
@@ -210,6 +215,38 @@ struct FoodProposalCard: View {
             .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// The printed row under its header, which IS the review for a document log: the app has checked every
+    /// figure is on this line, and the header is how the user checks the figures sit in the right columns.
+    @ViewBuilder
+    private func documentEvidence(source: NutritionDocumentSource, row: NutritionDocumentRowRef) -> some View {
+        VStack(alignment: .leading, spacing: NoopMetrics.space1) {
+            Text(source.citation)
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textSecondary)
+            if let header = row.header {
+                Text(verbatim: Self.cells(header))
+                    .font(StrandFont.caption)
+                    .foregroundStyle(StrandPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(verbatim: Self.cells(row.text))
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Text("Every figure above is printed on this row. Check they sit in the right columns before logging; it will also be saved to your foods.")
+                .font(StrandFont.caption)
+                .foregroundStyle(StrandPalette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A document line as printed, with its tab-separated cells spaced for reading. Never localized: it is
+    /// the menu's own text.
+    private static func cells(_ line: String) -> String {
+        line.replacingOccurrences(of: "\t", with: "  ·  ")
+    }
+
     @ViewBuilder
     private var detail: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -223,7 +260,7 @@ struct FoodProposalCard: View {
                 Text(portionLine(servingLabel: item.servingLabel, portion: portion))
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
-            case .create(_, let serving, _, let portion):
+            case .create(_, let serving, _, let portion), .documentLog(_, let serving, _, let portion, _, _):
                 Text(portionLine(servingLabel: serving, portion: portion))
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)

@@ -56,7 +56,8 @@
     "v52-measured-baseline",
     "v53-restaurant-food",
     "v54-food-batch",
-    "v55-diet-workout-adjustment"
+    "v55-diet-workout-adjustment",
+    "v56-nutrition-documents"
   ],
   "divergenceReasons": {
     "android-orphan-synced-column": "REAL COLUMN DRIFT: `synced` exists on Android only. GRDB's v10 note is explicit that stepSample gets no `synced` column ('unused; see StreamStore'), and v12's ppgHrSample never had one either; the Room entities copied the flag from the older per-second entities. Nothing reads it on Android — the per-row upload flag belongs to an upload path that does not exist there — so it is dead width, not divergent data. Removing it needs a Room table rebuild.",
@@ -2964,6 +2965,129 @@
       "primaryKey": [
         "workoutSource",
         "startTs"
+      ],
+      "indices": []
+    },
+    "nutritionDocument": {
+      "platform": "ios_only",
+      "reason": "v56 fork-local diet: a nutrition PDF the user imported, kept as a document so the coach looks a food up in it when asked to log one (lazy), instead of extracting the whole menu into the library at import. Unique by content hash so re-importing the same file replaces it. The PDF binary is never stored.",
+      "columns": [
+        {
+          "name": "id",
+          "affinity": "TEXT",
+          "notNull": false,
+          "default": null
+        },
+        {
+          "name": "title",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "sha256",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "brand",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "market",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "pageCount",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "importedAt",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "indices": []
+    },
+    "nutritionDocumentPage": {
+      "platform": "ios_only",
+      "reason": "v56 fork-local diet: the page text of a stored nutrition document as read on the device (PDFKit rows or OCR). A logged figure is checked against these lines, so a coach proposal cannot log numbers the document does not print.",
+      "columns": [
+        {
+          "name": "documentId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "page",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "text",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "documentId",
+        "page"
+      ],
+      "indices": []
+    },
+    "nutritionDocumentIndex": {
+      "platform": "ios_only",
+      "reason": "v56 fork-local diet: per menu row of a stored nutrition document, the printed item name and its aliases (an English name for a Japanese row), so an English request finds the row. Names only; no figure is ever read from the index, only from the page line it points at.",
+      "columns": [
+        {
+          "name": "documentId",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "page",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "line",
+          "affinity": "INTEGER",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "name",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        },
+        {
+          "name": "aliases",
+          "affinity": "TEXT",
+          "notNull": true,
+          "default": null
+        }
+      ],
+      "primaryKey": [
+        "documentId",
+        "page",
+        "line"
       ],
       "indices": []
     }

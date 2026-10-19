@@ -741,3 +741,23 @@ Follow-ups (not done anywhere yet):
 - `Calories.estimateDayEnergy` (daily active kcal) still uses Keytel; it does not feed the budget.
 - Per-user VO₂max from `vo2max_est` (#1391) instead of Uth.
 
+## Lazy nutrition documents (v56)
+
+Nutrition PDFs are no longer extracted into the food library at import (`docs/FORK_NUTRITION_DOCUMENTS.md`).
+The page text is stored (`v56-nutrition-documents`: `nutritionDocument`, `nutritionDocumentPage`,
+`nutritionDocumentIndex`), an optional AI name index maps each menu row to its printed name and aliases,
+and Coach looks a food up when asked: matched rows go into its context with their header, it proposes
+`log_document` with a row key and the printed figures, and the app refuses any figure not printed on that
+row. Confirming logs the food and saves it to the library with its document provenance. The eager
+`NutritionDocumentRow` extraction and review screen are gone.
+
+Owed on Android when its diet feature lands:
+- Kotlin twin of `NutritionDocumentLookup` (normalisation, `match`, `isHeader`/`header`, `numbers`,
+  `figuresArePrinted`, row keys, `parseIndexReply`), verified by a Swift oracle over
+  `NutritionDocumentLookupTests`.
+- Room twins of the three v56 tables (columns, PKs and the unique `sha256` as in `schema_oracle.json`,
+  declared `ios_only` until then). They travel inside the SQLite file, so the `.noopbak` settings
+  whitelist is unaffected.
+- The `log_document` Coach action (`FoodActionParse.documentLog`), the NUTRITION DOCUMENTS context block
+  and its prompt section, the document confirmation card, and the store/list/delete screen.
+

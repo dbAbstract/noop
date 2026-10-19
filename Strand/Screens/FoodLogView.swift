@@ -282,7 +282,7 @@ struct FoodLogView: View {
                         Spacer()
                         dayStepper
                     }
-                    Button("Import nutrition PDF") { showNutritionImport = true }
+                    Button("Nutrition PDFs") { showNutritionImport = true }
                         .font(StrandFont.subhead)
 
                     if entries.isEmpty {

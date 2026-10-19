@@ -35,14 +35,14 @@ struct WorkoutEnergyBreakdownView: View {
     @ViewBuilder private func traced(_ b: SportEnergy.Breakdown) -> some View {
         let i = b.inputs
         // What the curve was drawn with.
-        line("Heart rate", "\(Int(i.flexHRBPM.rounded()))–\(Int(i.hrmax.rounded())) bpm",
+        line(String(localized: "Heart rate"), "\(Int(i.flexHRBPM.rounded()))–\(Int(i.hrmax.rounded())) bpm",
              note: i.restingHRWasDefaulted
                 ? String(localized: "From resting \(Int(i.restingHR)) bpm (default, no measured resting HR) to your HRmax; below the lower figure a minute costs resting energy")
                 : String(localized: "From resting \(Int(i.restingHR)) bpm to your HRmax; below the lower figure a minute costs resting energy"))
-        line("Fitness", String(localized: "VO₂max ≈ \(Int(i.vo2max.rounded())) · \(String(format: "%.1f", i.metMax)) METs at HRmax"),
+        line(String(localized: "Fitness"), String(localized: "VO₂max ≈ \(Int(i.vo2max.rounded())) · \(String(format: "%.1f", i.metMax)) METs at HRmax"),
              note: String(localized: "Estimated from HRmax and resting HR, for \(Int(i.weightKg.rounded())) kg"))
         if let ceiling = i.traits.ceilingMET {
-            line("Sport ceiling", String(localized: "\(String(format: "%.0f", ceiling)) METs per minute"),
+            line(String(localized: "Sport ceiling"), String(localized: "\(String(format: "%.0f", ceiling)) METs per minute"),
                  note: b.ceilingHitMinutes > 0
                     ? String(localized: "Held \(b.ceilingHitMinutes) min at the most \(WorkoutSource.displaySport(item.row.sport)) can plausibly cost")
                     : String(localized: "The most \(WorkoutSource.displaySport(item.row.sport)) can plausibly cost; not reached"))
@@ -62,21 +62,21 @@ struct WorkoutEnergyBreakdownView: View {
                  note: String(localized: "\(String(format: "%.1f", b.meanOnMET)) METs on average from heart rate"))
         }
         if b.uncoveredOnMinutes > 0 || covered < durationMinutes {
-            line("Heart rate coverage", String(localized: "\(min(covered, durationMinutes)) of \(durationMinutes) min"),
+            line(String(localized: "Heart rate coverage"), String(localized: "\(min(covered, durationMinutes)) of \(durationMinutes) min"),
                  note: b.uncoveredOnMinutes > 0
                     ? String(localized: "\(b.uncoveredOnMinutes) min without a reading, counted at resting")
                     : nil)
         }
-        line("Total", "\(kcal(b.grossKcal)) kcal", emphasis: true,
+        line(String(localized: "Total"), "\(kcal(b.grossKcal)) kcal", emphasis: true,
              note: String(localized: "Includes \(kcal(b.restingKcal)) kcal of resting energy over the session"))
 
         Divider().overlay(StrandPalette.hairline)
 
         // What the budget takes, and why it differs from the tile above.
-        line("Diet budget counts", "\(kcal(item.credit.creditedKcal)) kcal", emphasis: true,
+        line(String(localized: "Diet budget counts"), "\(kcal(item.credit.creditedKcal)) kcal", emphasis: true,
              note: budgetNote)
         if item.credit.isRepriced {
-            line("Recorded", "\(kcal(item.credit.recordedKcal)) kcal",
+            line(String(localized: "Recorded"), "\(kcal(item.credit.recordedKcal)) kcal",
                  note: item.row.energyKcal == nil
                     ? String(localized: "No figure stored yet; the strap's next sync scores it")
                     : String(localized: "Saved with the model in use at the time. Confirming your playing time rewrites it with the figure above"))
@@ -104,9 +104,9 @@ struct WorkoutEnergyBreakdownView: View {
     // MARK: - An import
 
     @ViewBuilder private var imported: some View {
-        line("Recorded", "\(kcal(item.credit.recordedKcal)) kcal",
+        line(String(localized: "Recorded"), "\(kcal(item.credit.recordedKcal)) kcal",
              note: String(localized: "An imported figure from \(WorkoutSource.sourceLabel(item.row)); the app does not re-price it"))
-        line("Diet budget counts", "\(kcal(item.credit.creditedKcal)) kcal", emphasis: true,
+        line(String(localized: "Diet budget counts"), "\(kcal(item.credit.creditedKcal)) kcal", emphasis: true,
              note: budgetNote)
     }
 
