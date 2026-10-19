@@ -69,6 +69,9 @@ struct WorkoutDetailView: View {
     /// import). nil = not an on-foot sport, or no step source had data for the window.
     private struct StepReadout { let count: Int; let fromStrap: Bool }
     @State private var steps: StepReadout?
+    /// How the calorie figure was estimated and what the diet budget counts from it — the same credit the
+    /// budget screen prices (`Repository.workoutCredit`). nil until loaded.
+    @State private var energyCredit: DietWorkoutCredit?
 
     var body: some View {
         ScreenScaffold(title: "\(WorkoutSource.displaySport(row.sport))",
@@ -85,6 +88,9 @@ struct WorkoutDetailView: View {
                        topBackground: liquidScaffoldSky()) {
             headerCard
             statStrip
+            if let energyCredit, energyCredit.credit.recordedKcal > 0 || energyCredit.breakdown != nil {
+                WorkoutEnergyBreakdownView(item: energyCredit)
+            }
             routeCard
             hrCurveCard
             zonesCard
@@ -157,7 +163,10 @@ struct WorkoutDetailView: View {
             }
         }
 
+        let credit = await repo.workoutCredit(for: row, body: DietBody(profile: profile))
+
         await MainActor.run {
+            self.energyCredit = credit
             self.route = routePoints
             self.hrPoints = points
             self.zoneMinutes = minutes

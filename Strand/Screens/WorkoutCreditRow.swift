@@ -15,7 +15,6 @@ struct WorkoutCreditRow: View {
     /// Called after the played time is confirmed, edited or reset, so the parent recomputes its budget.
     let onChange: () -> Void
 
-    @State private var suggestion: Double?
     @State private var editing = false
     @State private var draftMinutes = 0
     @State private var saving = false
@@ -23,6 +22,9 @@ struct WorkoutCreditRow: View {
     private var durationMinutes: Int { max(0, (item.row.endTs - item.row.startTs) / 60) }
     private var playedMinutes: Int { Int(((item.credit.playedS ?? 0) / 60).rounded()) }
     private var sport: String { WorkoutSource.displaySport(item.row.sport) }
+    /// The strap's own split, from the trace the credit was priced with — no second read, so the control
+    /// offers exactly the minutes the budget is already counting.
+    private var suggestion: Double? { item.isPlayedTimeConfirmed ? nil : item.trace?.suggestedPlayedSeconds }
 
     var body: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.space1) {
@@ -41,13 +43,21 @@ struct WorkoutCreditRow: View {
                 .fixedSize(horizontal: false, vertical: true)
             if item.credit.capKcal != nil { playedTimeControl }
         }
-        .task(id: item.row.startTs) {
-            suggestion = item.isPlayedTimeConfirmed ? nil : await repo.suggestedPlayedSeconds(for: item.row)
-        }
     }
 
-    /// Why counted differs from recorded. Only claims a cap when the cap actually set the figure.
+    /// Why counted differs from recorded. Only claims a cap when the cap actually set the figure, and only
+    /// claims a re-pricing when the trace, not the stored figure, is what the budget took.
     private var reason: String {
+        if item.credit.isRepriced, let b = item.breakdown {
+            switch b.maskSource {
+            case .confirmedPlayedTime:
+                return String(localized: "Re-priced from your heart-rate trace: \(b.onMinutes) of \(durationMinutes) min played, time off the pitch counted at recovery pace")
+            case .motionThreshold:
+                return String(localized: "Re-priced from your heart-rate trace and strap movement: \(b.onMinutes) of \(durationMinutes) min played (unconfirmed), time off counted at recovery pace")
+            case .none:
+                return String(localized: "Re-priced from your heart-rate trace with the current model; resting energy during the session is already in your baseline")
+            }
+        }
         if item.credit.isCapped {
             return item.isPlayedTimeConfirmed
                 ? String(localized: "Capped for \(sport): \(playedMinutes) of \(durationMinutes) min played, time off the pitch counted at recovery pace")
@@ -107,7 +117,8 @@ struct WorkoutCreditRow: View {
     private func save(_ seconds: Double?) {
         saving = true
         Task {
-            _ = await repo.setConfirmedPlayedSeconds(seconds, for: item.row)
+            _ = await repo.setConfirmedPlayedSeconds(seconds, for: item.row,
+                                                     body: DietBody(energyProfile: item.profile))
             saving = false
             editing = false
             onChange()

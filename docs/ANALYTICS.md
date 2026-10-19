@@ -437,6 +437,10 @@ Active samples are grouped into runs (merging gaps < `mergeGapS = 150 s`), then 
 
 Per-second blend of **Keytel (2005)** active expenditure and **revised Harris–Benedict** BMR (resting), with sex-specific coefficients (`male` / `female` / `nonbinary`). Below a `RHR + 0.30 × HRR` threshold the resting rate is used; above it, the HR-driven active rate. Returns `(kcal, kJ)`. **Approximate** — not laboratory calorimetry.
 
+### Sport-aware bout energy (fork, Apple only — `SportEnergy`)
+
+This fork prices strap-recorded workouts on Apple with `SportEnergy` instead: a flex-HR / heart-rate-reserve curve (1 MET up to `RHR + 0.25 × HRR`, then linear to the Uth VO₂max at HRmax), capped per minute at a Compendium ceiling for the sport (soccer/futsal 10, weights 6, cycling 12, snowboarding 8, …). For intermittent sports, minutes the strap's motion (or the wearer's confirmed played time) marks as off the pitch are priced at 2 METs whatever the heart rate. Keytel stays for the day path, the detector and Android. Checked against one wearer's 312 WHOOP-exported sessions: within ±6 % of WHOOP's per-bpm curve from 130 bpm up and 10–20 % above it at 90–120 bpm, where Keytel ran 1.4–1.9× WHOOP. See `docs/FORK_ANDROID_PARITY_TODO.md` for the Android debt.
+
 ---
 
 ## Interactive engines (wired into screens)

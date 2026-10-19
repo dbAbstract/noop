@@ -1047,23 +1047,18 @@ final class AppModel: ObservableObject {
             ? StrainScorer.strain(samples, maxHR: Double(profile.hrMax),
                                   restingHR: restingHR,
                                   method: PuffinExperiment.effortMethod, sex: profile.sex) : nil
-        // Estimate calories from the captured HR window (same Keytel/Harris–Benedict model the
-        // auto-detector uses) so a manual session shows energy too, not just duration/strain. (#117)
-        let up = UserProfile(weightKg: profile.weightKg, heightCm: profile.heightCm,
-                             age: Double(profile.age), sex: profile.sex)
-        let kcal = samples.count >= 2
-            // #983: same measured resting HR as the strain above, not nil. The calories model's
-            // active-vs-resting threshold sits at resting + 30% HRR, so the default silently shifts what
-            // counts as active — and #972 already threads it in the rescore path, so leaving it nil here
-            // meant a saved workout's kcal disagreed with its own re-score just as its Effort did.
-            ? Calories.estimateBoutCalories(samples, profile: up, hrmax: Double(profile.hrMax),
-                                            restingHR: restingHR).0
-            : 0
+        // Calories are priced below, in the save task, by the SAME funnel the rescore and the diet budget
+        // use (`Repository.workoutEnergyTrace`: the sport-aware heart-rate-reserve model, #117 made
+        // sport-aware). The captured window is handed in as the HR source, since the strap has offloaded
+        // nothing yet; the strap's motion is not available at save either, so an intermittent session is
+        // priced with every minute on until the next sync lands its split, or the wearer confirms a played
+        // time. The resting HR is the funnel's own resolution (#983): one resolver, so the saved figure and
+        // its re-score cannot disagree about it.
         let startTs = Int(w.start.timeIntervalSince1970)
-        let row = WorkoutRow(
+        let draft = WorkoutRow(
             startTs: startTs, endTs: Int(end.timeIntervalSince1970),
             sport: w.sport, source: "manual", durationS: w.elapsed(at: end),
-            energyKcal: kcal > 0 ? kcal : nil, avgHr: avg, maxHr: peak, strain: strain,
+            energyKcal: nil, avgHr: avg, maxHr: peak, strain: strain,
             // GPS distance rides the shared row so the Workouts list / detail show it like any other
             // distance workout; the polyline itself is persisted alongside in RouteStore (the shared
             // WorkoutRow has no route column on Apple). Only a real route sets distance , honest ",".
@@ -1071,7 +1066,7 @@ final class AppModel: ObservableObject {
         // Persist the route polyline under the row's natural key so WorkoutDetailView can draw it. On
         // device only; mirrors the moments / sleepMarks UserDefaults persistence. (#524)
         if let route { RouteStore.store(route, startTs: startTs, sport: w.sport) }
-        lastWorkout = row
+        lastWorkout = draft
         // Workouts & GPS test mode: one session-end summary tagged `.workouts` (the lastSessionSummary readout
         // source) carrying the captured HR window size, the duration, and the accepted GPS point count, so the
         // lifecycle of a saved session is visible end to end. `pointCount` is the recorder's accepted-fix tally
@@ -1081,8 +1076,19 @@ final class AppModel: ObservableObject {
             durationSec: Int(w.elapsed(at: end)),
             gpsPoints: wasGps ? gpsRecorder.pointCount : nil))
         buzz(loops: 2, gate: HapticPrefs.workout)
+        let pricing = WorkoutEnergyProfile(profile)
         Task { [weak self] in
             guard let self else { return }
+            let kcal = samples.count >= 2
+                ? await self.repo.workoutEnergyTrace(for: draft, profile: pricing, hrOverride: samples)?
+                    .breakdown(playedS: nil).grossKcal
+                : nil
+            let row = WorkoutRow(
+                startTs: draft.startTs, endTs: draft.endTs, sport: draft.sport, source: draft.source,
+                durationS: draft.durationS, energyKcal: (kcal ?? 0) > 0 ? kcal : nil,
+                avgHr: draft.avgHr, maxHr: draft.maxHr, strain: draft.strain, distanceM: draft.distanceM,
+                zonesJSON: draft.zonesJSON, notes: draft.notes, steps: draft.steps)
+            self.lastWorkout = row
             if let store = await self.repo.storeHandle() {
                 _ = try? await store.upsertWorkouts([row], deviceId: self.deviceId)
                 await self.repo.refresh()

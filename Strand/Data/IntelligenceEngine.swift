@@ -2369,8 +2369,15 @@ final class IntelligenceEngine: ObservableObject {
                     // thin, silently showing no HR/calories). Same natural key (deviceId, startTs,
                     // sport), so the upsert below updates the existing row in place rather than
                     // duplicating it.
+                    // FORK-LOCAL: a strap-recorded row's calories come from `Repository.workoutEnergyTrace`
+                    // (the sport-aware model), never from the detector's Keytel figure. This backfill runs
+                    // BEFORE `rescoreManualWorkouts` below, and that pass only touches a row at ≤ 5 kcal —
+                    // so a sparse live save filled here with Keytel would be frozen on it. Hand it nil and
+                    // the rescore prices it. Imports keep the backfill: they have no trace of their own.
                     let backfilled = WorkoutDetector.backfillWorkout(
-                        hit, avgBpm: avgBpm, peakHR: s.peakHR, caloriesKcal: s.caloriesKcal, strain: s.strain)
+                        hit, avgBpm: avgBpm, peakHR: s.peakHR,
+                        caloriesKcal: Repository.isStrapRecorded(hit.source) ? nil : s.caloriesKcal,
+                        strain: s.strain)
                     let didBackfill = backfilled != hit
                     if didBackfill {
                         // realWorkouts merges TWO device groups (see above): the strap's own `deviceId`
@@ -3189,18 +3196,28 @@ final class IntelligenceEngine: ObservableObject {
         guard let rows = try? await store.workouts(deviceId: deviceId, from: since, to: now, limit: 200)
         else { return }
         let hrMax = Double(profile.hrMax)
+        let pricing = WorkoutEnergyProfile(profile)
         var updated: [WorkoutRow] = []
         // A manual row is eligible when it looks under-scored (negligible kcal, #137) OR it's missing
         // strain (the merged-workout case, where kcal is the SUM of inputs so it never looks under-scored
         // yet Effort stays blank forever). `improves` then accepts a strain-only gain for the latter.
         for row in rows where row.source == "manual"
             && (ManualWorkoutRescore.looksUnderScored(currentKcal: row.energyKcal) || row.strain == nil) {
+            // FORK-LOCAL: avg/peak/strain from the shared scorer; CALORIES from the same funnel the live
+            // save and the diet budget price with (`workoutEnergyTrace`: sport-aware, motion split, the
+            // wearer's confirmed played time). The shared Keytel figure would out-bid the model on an
+            // intermittent session and `improves` would then write it, which is the trap this closes.
             guard let samples = try? await store.hrSamples(deviceId: deviceId, from: row.startTs,
                                                            to: row.endTs, limit: 20_000),
-                  let s = ManualWorkoutRescore.scored(windowSamples: samples, profile: up, hrMax: hrMax,
-                                                      restingHR: restingHR,
-                                                      effortMethod: effortMethod),
-                  ManualWorkoutRescore.improves(s, over: row.energyKcal, currentStrain: row.strain,
+                  let shared = ManualWorkoutRescore.scored(windowSamples: samples, profile: up, hrMax: hrMax,
+                                                           restingHR: restingHR,
+                                                           effortMethod: effortMethod)
+            else { continue }
+            let playedS = await repo.confirmedPlayedSeconds(for: row)
+            let priced = await repo.workoutEnergy(for: row, playedS: playedS, profile: pricing)?.grossKcal
+            let s = ManualWorkoutRescore.Scored(avgHr: shared.avgHr, maxHr: shared.maxHr, strain: shared.strain,
+                                                kcal: (priced ?? 0) > 0 ? priced : nil)
+            guard ManualWorkoutRescore.improves(s, over: row.energyKcal, currentStrain: row.strain,
                                                 allowStrainOnlyFill: true)
             else { continue }
             // Never lower a summed kcal: only take the recomputed kcal when it genuinely beats the stored

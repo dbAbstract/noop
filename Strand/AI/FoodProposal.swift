@@ -450,8 +450,11 @@ extension Repository {
             return await logWeight(kg: kg, day: day, profile: profile)
 
         case .playedTime(let source, let startTs, _, let durationS, let playedS, _, _, _):
+            // The body the re-priced row is written with: the live profile when the card has it, else the
+            // persisted scalars — the same pair the context block was priced from.
+            let body = profile.map { DietBody(profile: $0) } ?? DietBody.stored()
             return await setConfirmedPlayedSeconds(playedS, workoutSource: source, startTs: startTs,
-                                                   durationS: durationS)
+                                                   durationS: durationS, body: body)
 
         case .unresolved, .implausibleWeight, .duplicate:
             // Nothing safe to do. Deliberately not "create it anyway", "store it anyway", or "log it

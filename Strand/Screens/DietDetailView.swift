@@ -168,7 +168,7 @@ struct DietDetailView: View {
                                  : "what your workouts add on top of the baseline")
                         // Recorded beside counted, per workout, so the workout screen's figure and this
                         // one can be reconciled rather than simply disagreeing.
-                        ForEach(e.workoutCredits.filter { $0.credit.recordedKcal > 0 },
+                        ForEach(e.workoutCredits.filter { $0.credit.recordedKcal > 0 || $0.credit.creditedKcal > 0 },
                                 id: \.row.startTs) { item in
                             WorkoutCreditRow(item: item) { reloadTick += 1 }
                         }

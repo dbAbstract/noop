@@ -49,36 +49,47 @@ enum DietStore {
     }
 }
 
-/// One workout's contribution to a day's budget, with the recorded figure it came from.
+/// One workout's contribution to a day's budget, with the recorded figure it came from and — for a
+/// strap-recorded session — the priced trace that figure is reconciled against.
 struct DietWorkoutCredit: Equatable {
     let row: WorkoutRow
     let credit: WorkoutBudgetCredit.Credit
-    /// True when the user confirmed the played time the cap was priced on.
+    /// True when the user confirmed the played time the credit was priced on.
     let isPlayedTimeConfirmed: Bool
+    /// The session's heart-rate ledger and motion (`Repository.workoutEnergyTrace`); nil for an import or a
+    /// window the strap did not record.
+    let trace: WorkoutEnergyTrace?
+    /// `trace` priced for the played time in force — what the budget took its figure from.
+    let breakdown: SportEnergy.Breakdown?
     /// The inputs the credit was priced with, kept so a proposed played time can be re-priced with the
     /// SAME figures — a card quoting a number the budget would not then produce is two readouts disagreeing.
-    let weightKg: Double
+    let profile: WorkoutEnergyProfile
     let bmrKcalPerDay: Double
+
+    var weightKg: Double { profile.weightKg }
 
     /// How the coach context names this workout, and how a `workout_played_time` action refers back to it.
     /// The start time is the row's identity within a source; the source is omitted because the coach's
     /// window never holds two workouts starting the same second.
     static func contextKey(_ row: WorkoutRow) -> String { "w\(row.startTs)" }
 
-    /// This workout's credit if `playedS` were confirmed (nil = unconfirmed).
+    /// This workout's credit if `playedS` were confirmed (nil = unconfirmed). Pure: the ledger is already
+    /// in hand, so the card's "after" figure is exactly what the budget will show once the write lands.
     func recredited(playedS: Double?) -> WorkoutBudgetCredit.Credit {
-        Self.price(row, playedS: playedS, weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay)
+        Self.price(row, trace: trace, playedS: playedS, weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay)
     }
 
-    /// The one place a workout row becomes a credit. Apple Health energy is active-only; every other
-    /// source stores the HR model's (or WHOOP's) gross figure.
-    static func price(_ row: WorkoutRow, playedS: Double?, weightKg: Double,
+    /// The one place a workout row becomes a credit. A strap-recorded row with a trace is priced from the
+    /// trace (`SportEnergy`), its stored figure carried beside for display; an import is priced from what
+    /// it stores. Apple Health energy is active-only; every other source stores a gross figure.
+    static func price(_ row: WorkoutRow, trace: WorkoutEnergyTrace?, playedS: Double?, weightKg: Double,
                       bmrKcalPerDay: Double) -> WorkoutBudgetCredit.Credit {
         WorkoutBudgetCredit.credit(recordedKcal: row.energyKcal ?? 0,
                                    basis: WorkoutSource.classify(row.source) == .apple ? .active : .gross,
                                    sport: row.sport,
                                    durationS: Double(max(0, row.endTs - row.startTs)), playedS: playedS,
-                                   weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay)
+                                   weightKg: weightKg, bmrKcalPerDay: bmrKcalPerDay,
+                                   pricedKcal: trace?.breakdown(playedS: playedS).grossKcal)
     }
 }
 
@@ -91,25 +102,37 @@ struct DietBody: Equatable {
     let weightKg: Double
     let heightCm: Double
     let age: Double
+    /// The HRmax the trace is priced against — `ProfileStore.hrMax`, resolved by the one formula.
+    let hrMax: Double
 
-    init(sex: String, weightKg: Double, heightCm: Double, age: Double) {
+    init(sex: String, weightKg: Double, heightCm: Double, age: Double, hrMax: Double? = nil) {
         self.sex = sex
         self.weightKg = weightKg
         self.heightCm = heightCm
         self.age = age
+        self.hrMax = hrMax ?? Double(ProfileStore.resolveHRMax(override: 0, age: Int(age)))
     }
 
     @MainActor init(profile: ProfileStore) {
         self.init(sex: profile.sex, weightKg: profile.weightKg, heightCm: profile.heightCm,
-                  age: Double(profile.age))
+                  age: Double(profile.age), hrMax: Double(profile.hrMax))
+    }
+
+    /// Back from the pricing profile a credit carries, so a control on that credit writes with the figures
+    /// the credit was priced with.
+    init(energyProfile p: WorkoutEnergyProfile) {
+        self.init(sex: p.sex, weightKg: p.weightKg, heightCm: p.heightCm, age: p.age, hrMax: p.hrMax)
     }
 
     /// From the persisted profile scalars, with `ProfileStore`'s own defaults for an unset field.
     static func stored(_ d: UserDefaults = .standard) -> DietBody {
-        DietBody(sex: d.string(forKey: "profile.sex") ?? "male",
-                 weightKg: d.object(forKey: "profile.weightKg") as? Double ?? 75,
-                 heightCm: d.object(forKey: "profile.heightCm") as? Double ?? 178,
-                 age: Double(d.object(forKey: "profile.age") as? Int ?? 30))
+        let age = d.object(forKey: "profile.age") as? Int ?? 30
+        return DietBody(sex: d.string(forKey: "profile.sex") ?? "male",
+                        weightKg: d.object(forKey: "profile.weightKg") as? Double ?? 75,
+                        heightCm: d.object(forKey: "profile.heightCm") as? Double ?? 178,
+                        age: Double(age),
+                        hrMax: Double(ProfileStore.resolveHRMax(override: d.object(forKey: "profile.hrMaxOverride") as? Int ?? 0,
+                                                                age: age)))
     }
 
     var bmrKcalPerDay: Double {
@@ -282,8 +305,11 @@ extension Repository {
     /// the screen can show both rather than one silently replacing the other.
     func workoutCreditsForDay(_ dayKey: String, body: DietBody) async -> [DietWorkoutCredit] {
         guard let bounds = Self.dayBounds(dayKey) else { return [] }
+        // A workout belongs to the day it STARTED. Overlap would credit a session that crosses midnight in
+        // full on both days — twice the energy for one session — and splitting it would price half a
+        // session against a baseline that already covers the whole of each day.
         let rows = await workoutRows(days: 3)
-            .filter { $0.startTs < bounds.end && $0.endTs > bounds.start }
+            .filter { bounds.start <= $0.startTs && $0.startTs < bounds.end }
         return await workoutCredits(for: rows, body: body)
     }
 
@@ -294,19 +320,35 @@ extension Repository {
         return await workoutCredits(for: rows, body: body)
     }
 
+    /// One workout's credit, as the budget prices it — the detail screen's card reads this same function,
+    /// so the card and the budget cannot resolve the figure differently.
+    func workoutCredit(for row: WorkoutRow, body: DietBody) async -> DietWorkoutCredit {
+        let played = await confirmedPlayedSeconds(for: row)
+        return await workoutCredit(for: row, playedS: played, body: body)
+    }
+
     private func workoutCredits(for rows: [WorkoutRow], body: DietBody) async -> [DietWorkoutCredit] {
         guard !rows.isEmpty else { return [] }
         let adjustments = await dietWorkoutAdjustments(for: rows)
+        var out: [DietWorkoutCredit] = []
+        for row in rows {
+            let played = adjustments[DietWorkoutKey(source: row.source, startTs: row.startTs)]
+            out.append(await workoutCredit(for: row, playedS: played, body: body))
+        }
+        return out
+    }
+
+    private func workoutCredit(for row: WorkoutRow, playedS played: Double?, body: DietBody) async -> DietWorkoutCredit {
+        let profile = WorkoutEnergyProfile(body: body)
         // The SAME resting figure the baseline uses, so what is removed is exactly what it counted.
         let bmr = body.bmrKcalPerDay
-        return rows.map { row in
-            let played = adjustments[DietWorkoutKey(source: row.source, startTs: row.startTs)]
-            return DietWorkoutCredit(row: row,
-                                     credit: DietWorkoutCredit.price(row, playedS: played,
-                                                                     weightKg: body.weightKg, bmrKcalPerDay: bmr),
-                                     isPlayedTimeConfirmed: played != nil,
-                                     weightKg: body.weightKg, bmrKcalPerDay: bmr)
-        }
+        let trace = await workoutEnergyTrace(for: row, profile: profile)
+        return DietWorkoutCredit(row: row,
+                                 credit: DietWorkoutCredit.price(row, trace: trace, playedS: played,
+                                                                 weightKg: body.weightKg, bmrKcalPerDay: bmr),
+                                 isPlayedTimeConfirmed: played != nil,
+                                 trace: trace, breakdown: trace?.breakdown(playedS: played),
+                                 profile: profile, bmrKcalPerDay: bmr)
     }
 
     /// Confirmed played time for these rows, keyed by workout identity.
@@ -321,27 +363,44 @@ extension Repository {
 
     /// The strap's suggestion for how much of an intermittent session was actually played, from its motion.
     ///
-    /// A SUGGESTION for the user to confirm, never applied by itself — see `PlayedTimeEstimate`. nil when the
-    /// sport has no intermittent entry or the strap recorded too little motion to say (a 4.0, a dropout).
-    func suggestedPlayedSeconds(for row: WorkoutRow) async -> Double? {
-        guard WorkoutBudgetCredit.intermittentSportMET(row.sport) != nil, row.endTs > row.startTs else { return nil }
-        let samples = await gravitySamplesUnion(from: row.startTs, to: row.endTs - 1)
-            .compactMap { s in s.dynAccel.map { (ts: s.ts, dynAccel: $0) } }
-        return PlayedTimeEstimate.playedSeconds(samples: samples, startTs: row.startTs, endTs: row.endTs)
+    /// The budget already applies this split, labelled unconfirmed; the control offers it so the wearer can
+    /// make it their number. nil when the sport has no intermittent entry or the strap recorded too little
+    /// motion to say (a 4.0, a dropout, a session not yet offloaded).
+    func suggestedPlayedSeconds(for row: WorkoutRow, body: DietBody) async -> Double? {
+        guard WorkoutBudgetCredit.intermittentSportMET(row.sport) != nil else { return nil }
+        return await workoutEnergyTrace(for: row, profile: WorkoutEnergyProfile(body: body))?.suggestedPlayedSeconds
     }
 
     /// Record the time the user confirmed they actually played. nil clears it, returning the workout to
-    /// the unconfirmed whole-session credit.
+    /// the strap's own split (or the whole session, without one).
+    ///
+    /// For a strap-recorded row this ALSO rewrites the stored `energyKcal` from the trace: the wearer has
+    /// just stated how the session ran, and the workout screen should say what the budget says. This is the
+    /// only way a past workout's figure changes; nothing re-prices history on its own.
     @discardableResult
-    func setConfirmedPlayedSeconds(_ playedS: Double?, for row: WorkoutRow) async -> Bool {
-        await setConfirmedPlayedSeconds(playedS, workoutSource: row.source, startTs: row.startTs,
-                                        durationS: Double(max(0, row.endTs - row.startTs)))
+    func setConfirmedPlayedSeconds(_ playedS: Double?, for row: WorkoutRow, body: DietBody) async -> Bool {
+        guard await writeConfirmedPlayedSeconds(playedS, workoutSource: row.source, startTs: row.startTs,
+                                                durationS: Double(max(0, row.endTs - row.startTs))) else { return false }
+        await repriceStoredEnergy(for: row, playedS: playedS, body: body)
+        noteFoodChanged()
+        return true
     }
 
     /// The same write by workout identity, for a coach card that carries the identity rather than the row.
     @discardableResult
     func setConfirmedPlayedSeconds(_ playedS: Double?, workoutSource: String, startTs: Int,
-                                   durationS: Double) async -> Bool {
+                                   durationS: Double, body: DietBody) async -> Bool {
+        guard await writeConfirmedPlayedSeconds(playedS, workoutSource: workoutSource, startTs: startTs,
+                                                durationS: durationS) else { return false }
+        if let row = await workoutRows(days: 30).first(where: { $0.source == workoutSource && $0.startTs == startTs }) {
+            await repriceStoredEnergy(for: row, playedS: playedS, body: body)
+        }
+        noteFoodChanged()
+        return true
+    }
+
+    private func writeConfirmedPlayedSeconds(_ playedS: Double?, workoutSource: String, startTs: Int,
+                                             durationS: Double) async -> Bool {
         guard let store = await storeHandle() else { return false }
         do {
             if let playedS, playedS.isFinite {
@@ -353,8 +412,22 @@ extension Repository {
                 try await store.deleteDietWorkoutAdjustment(workoutSource: workoutSource, startTs: startTs)
             }
         } catch { return false }
-        noteFoodChanged()
         return true
+    }
+
+    /// Write the trace's gross for the played time into the row's `energyKcal`. Manual rows only: they live
+    /// under the strap's own id (`saveManualWorkout`), which is the one id this can address.
+    private func repriceStoredEnergy(for row: WorkoutRow, playedS: Double?, body: DietBody) async {
+        guard row.source == "manual", let store = await storeHandle(),
+              let gross = await workoutEnergy(for: row, playedS: playedS,
+                                              profile: WorkoutEnergyProfile(body: body))?.grossKcal,
+              gross > 0 else { return }
+        let updated = WorkoutRow(startTs: row.startTs, endTs: row.endTs, sport: row.sport, source: row.source,
+                                 durationS: row.durationS, energyKcal: gross, avgHr: row.avgHr, maxHr: row.maxHr,
+                                 strain: row.strain, distanceM: row.distanceM, zonesJSON: row.zonesJSON,
+                                 notes: row.notes, steps: row.steps)
+        _ = try? await store.upsertWorkouts([updated], deviceId: deviceId)
+        await refresh()
     }
 
     /// The confirmed played time for one workout, or nil when unconfirmed.

@@ -35,6 +35,32 @@ final class WorkoutBudgetCreditTests: XCTestCase {
         XCTAssertEqual(c.playedS ?? .nan, 7_200, accuracy: 0.001)
     }
 
+    /// The budget re-priced the trace at 1,022 gross: net = 1022 − 140.46 = 881.54, under the 78-minute cap,
+    /// so the model's figure is what the budget takes; the stored 1,720 is still reported beside it.
+    func testPricedFigureReplacesTheRecordedOneForTheNet() {
+        let c = WorkoutBudgetCredit.credit(recordedKcal: 1_720, basis: .gross, sport: "Soccer",
+                                           durationS: 7_200, playedS: 78 * 60,
+                                           weightKg: weight, bmrKcalPerDay: bmr, pricedKcal: 1_022)
+        XCTAssertEqual(c.recordedKcal, 1_720)
+        XCTAssertEqual(c.pricedKcal, 1_022)
+        XCTAssertEqual(c.netKcal, 881.54, accuracy: 0.01)
+        XCTAssertEqual(c.creditedKcal, 881.54, accuracy: 0.01)
+        XCTAssertFalse(c.isCapped)
+        XCTAssertTrue(c.isRepriced)
+    }
+
+    func testNoPricedFigureMeansTheRecordedOneAndNotRepriced() {
+        let c = WorkoutBudgetCredit.credit(recordedKcal: 500, basis: .gross, sport: "Cycling",
+                                           durationS: 3_600, playedS: nil,
+                                           weightKg: weight, bmrKcalPerDay: bmr)
+        XCTAssertEqual(c.pricedKcal, 500)
+        XCTAssertFalse(c.isRepriced)
+        let same = WorkoutBudgetCredit.credit(recordedKcal: 500, basis: .gross, sport: "Cycling",
+                                              durationS: 3_600, playedS: nil,
+                                              weightKg: weight, bmrKcalPerDay: bmr, pricedKcal: 500.2)
+        XCTAssertFalse(same.isRepriced, "a rounding-size difference is not a re-pricing")
+    }
+
     // MARK: - Where the cap must not bite
 
     /// A sport with no entry is only made net of resting: 45 min, 600 recorded → 600 − 1685.5/86400 × 2700.

@@ -203,6 +203,11 @@ final class Repository: ObservableObject {
     /// data load on this so they reload when fresh strap data lands , `today?.day` alone is a stable
     /// date string within a day and would freeze e.g. the Today HR trend until the date rolls over.
     @Published private(set) var refreshSeq = 0
+    /// Priced workout traces, keyed by row identity, pricing profile and resting HR, valid for one
+    /// `refreshSeq` (see `workoutEnergyTrace`, which clears them when it moves). Declared here because an
+    /// extension cannot hold storage; nothing outside `WorkoutEnergy.swift` reads or writes them.
+    var workoutEnergyMemo: [String: WorkoutEnergyTrace] = [:]
+    var workoutEnergyMemoSeq = -1
 
     /// #989: bumped by every hydration mutation (log / edit / delete). Today's hydration card re-reads on
     /// this instead of waiting for a full `refreshSeq` data refresh, which a hydration write never causes,

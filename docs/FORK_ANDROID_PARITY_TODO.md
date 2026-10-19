@@ -700,3 +700,44 @@ Owed on Android when its diet feature lands:
   `schema_oracle.json` until then. It travels inside the SQLite file, so the `.noopbak` settings
   whitelist is unaffected.
 - The `workout_played_time` Coach action (`FoodActionParse.workoutPlayedTime`) and its confirmation card.
+
+## Sport-aware workout energy and transparent budget pricing (Apple-only)
+
+Strap-recorded workouts (`manual`, legacy `-noop`) are now priced on Apple by `SportEnergy`
+(`Packages/StrandAnalytics/Sources/StrandAnalytics/SportEnergy.swift`): a flex-HR / heart-rate-reserve
+curve (1 MET up to `RHR + 0.25 × HRR`, linear to the Uth VO₂max at HRmax), a per-minute Compendium
+ceiling per sport class (`SportEnergy.Traits.resolve`), and, for intermittent sports, "off" minutes
+priced at 2 METs from the strap's motion or the wearer's confirmed played time. `PlayedTimeEstimate`
+gained `minuteActivity` and `offMask` (top-N most-active minutes for a confirmed total);
+`playedSeconds` is now a wrapper and returns the same values. `WorkoutBudgetCredit.credit` gained
+`pricedKcal:` (defaulted, existing goldens unchanged).
+
+App side: one funnel, `Repository.workoutEnergyTrace` (`Strand/Data/WorkoutEnergy.swift`), returns a
+per-minute ledger the live save (`AppModel.endWorkout`), the manual rescore (kcal only; avg/peak/strain
+still from the shared `ManualWorkoutRescore`), the diet budget and the workout screen's "How this was
+estimated" card all price from. The detector backfill no longer hands Keytel kcal to strap-recorded rows
+(it ran before the rescore and froze sparse saves on Keytel). A workout is credited to the day it STARTED
+(it was credited in full on both days when it crossed midnight). Confirming or editing played time rewrites
+a manual row's `energyKcal`; nothing else re-prices stored history. `Calories.estimateBoutCalories`,
+`WorkoutDetector.detect` and the day path are unchanged.
+
+Oracle vectors (male, 72.8 kg, 27, HRmax 189.1, RHR 52 → VO₂max 55.64, METmax 15.90, flex 86.3 bpm):
+kcal/min at 100/110/120/130/140/150/160 bpm = 3.626 / 5.384 / 7.142 / 8.899 / 10.657 / 12.415 / 14.173
+(before any ceiling). The 2026-10-15 fixture (`SportEnergyFutsalFixtureTests`): 79 on / 42 off,
+≈ 1,023 kcal gross.
+
+Owed on Android when its diet feature lands:
+- Kotlin `SportEnergy` (traits, curve, ledger, price) and `PlayedTimeEstimate.minuteActivity` /
+  `offMask`, verified by a Swift oracle over `SportEnergyTests` and the futsal fixture.
+- `WorkoutBudgetCredit.credit(pricedKcal:)` and the diet re-pricing of strap-recorded rows.
+- The live-save, rescore-kcal and backfill-gate changes in `AppViewModel` / `IntelligenceEngine.kt`, and
+  the start-day rule in the diet day's workout filter.
+- The workout screen's breakdown card and the re-pricing reasons on the budget's workout rows.
+
+Follow-ups (not done anywhere yet):
+- Snowboarding lift/ride split: priced as steady with an 8-MET ceiling until a day of strap data exists.
+- Relabelling a workout's sport does not re-price its stored kcal (the budget re-prices it).
+- `ManualWorkoutRescore.looksUnderScored` gates on ≤ 5 kcal; a coverage-based gate would be more honest.
+- `Calories.estimateDayEnergy` (daily active kcal) still uses Keytel; it does not feed the budget.
+- Per-user VO₂max from `vo2max_est` (#1391) instead of Uth.
+

@@ -366,8 +366,11 @@ final class AICoachEngine: ObservableObject {
 
     WORKOUT CALORIES IN THE BUDGET. WORKOUTS IN THE DIET BUDGET shows each recent workout's recorded \
     kcal and what the budget counts. The budget counts less because the resting share is already in the \
-    baseline, and intermittent sports (soccer, futsal, basketball and similar) are capped by sport and by \
-    time actually PLAYED, with time off the pitch counted at recovery pace. Heart rate stays high on the \
+    baseline, and because a strap-recorded session is re-priced from its heart-rate trace with the app's \
+    current model (a heart-rate-reserve curve with a per-sport ceiling; older sessions were recorded with \
+    a model that ran high at easy heart rates), so recorded and counted can differ for any sport. For \
+    intermittent sports (soccer, futsal, basketball and similar) minutes off the pitch are counted at \
+    recovery pace, from the strap's motion or the confirmed played time. Heart rate stays high on the \
     bench, so the recorded figure overstates rotation-based sessions. When a session's played time is \
     UNCONFIRMED, ask how the session ran (teams per pitch, match length, time sitting out) and propose \
     `workout_played_time` with your best estimate of minutes played; a strap motion suggestion is a good \
@@ -1529,7 +1532,9 @@ final class AICoachEngine: ObservableObject {
     /// to recompute.
     func workoutCreditBlock(days: Int = 7) async -> String {
         let credits = await repo.recentWorkoutCredits(days: days, body: DietBody.stored())
-            .filter { $0.credit.recordedKcal > 0 }
+            // A priced trace with no stored figure (a sparse live save not yet rescored) still counts; hiding
+            // it would credit the budget invisibly.
+            .filter { $0.credit.recordedKcal > 0 || $0.credit.creditedKcal > 0 }
         guard !credits.isEmpty else { return "" }
         var lines = ["WORKOUTS IN THE DIET BUDGET (last \(days) days; key, day, sport, minutes, avg HR, recorded kcal → kcal the budget counts):"]
         for c in credits {
@@ -1537,10 +1542,24 @@ final class AICoachEngine: ObservableObject {
             var line = "  \(DietWorkoutCredit.contextKey(c.row)) \(dateString(c.row.startTs)) \(c.row.sport), \(minutes) min"
             if let hr = c.row.avgHr { line += ", avg HR \(hr)" }
             line += ", \(Int(c.credit.recordedKcal.rounded())) → \(Int(c.credit.creditedKcal.rounded()))"
+            if let b = c.breakdown {
+                // The trace's own pricing, so the coach can explain a gap rather than guess at it.
+                line += ", priced from HR trace \(Int(b.grossKcal.rounded())) gross"
+                if b.offMinutes > 0 {
+                    line += " (\(b.onMinutes) min on at \(String(format: "%.1f", b.meanOnMET)) MET, \(b.offMinutes) min off at recovery pace"
+                    switch b.maskSource {
+                    case .confirmedPlayedTime: line += ", played time confirmed)"
+                    case .motionThreshold: line += ", from strap motion, UNCONFIRMED)"
+                    case .none: line += ")"
+                    }
+                } else {
+                    line += " (\(b.onMinutes) min at \(String(format: "%.1f", b.meanOnMET)) MET)"
+                }
+            }
             if WorkoutBudgetCredit.intermittentSportMET(c.row.sport) != nil {
                 if c.isPlayedTimeConfirmed {
                     line += ", played time confirmed: \(Int(((c.credit.playedS ?? 0) / 60).rounded())) min"
-                } else if let s = await repo.suggestedPlayedSeconds(for: c.row) {
+                } else if let s = c.trace?.suggestedPlayedSeconds {
                     line += ", played time UNCONFIRMED (strap motion suggests \(Int((s / 60).rounded())) min)"
                 } else {
                     line += ", played time UNCONFIRMED"

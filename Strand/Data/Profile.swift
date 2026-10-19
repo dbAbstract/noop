@@ -204,7 +204,13 @@ final class ProfileStore: ObservableObject {
     }
 
     /// Tanaka estimate unless overridden.
-    var hrMax: Int { hrMaxOverride > 0 ? hrMaxOverride : Int((208 - 0.7 * Double(age)).rounded()) }
+    var hrMax: Int { Self.resolveHRMax(override: hrMaxOverride, age: age) }
+
+    /// The one formula behind `hrMax`, for a reader that holds the persisted scalars rather than the store
+    /// (`DietBody.stored()`): the override when set, else Tanaka rounded to a whole beat.
+    nonisolated static func resolveHRMax(override: Int, age: Int) -> Int {
+        override > 0 ? override : Int((208 - 0.7 * Double(age)).rounded())
+    }
 
     /// Personalized zone starts after enforcing the same five-value invariant as `HRZones`.
     var customHRZoneLowerBounds: [Double]? {
