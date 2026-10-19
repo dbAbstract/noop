@@ -401,7 +401,9 @@ struct LiveWorkoutView: View {
 
     private var endWorkoutGlassButton: some View {
         Button { showEndConfirm = true } label: {
-            Image(systemName: "xmark")
+            // A stop square, not a cross: ending SAVES the session, and a cross reads as "cancel" — the
+            // opposite. Discarding has its own button (the trash beside it). Matches the play/pause glyphs.
+            Image(systemName: "stop.fill")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(StrandPalette.textPrimary)
                 .frame(width: Self.bottomControlDiameter, height: Self.bottomControlDiameter)
