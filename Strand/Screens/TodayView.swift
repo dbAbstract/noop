@@ -4212,6 +4212,18 @@ struct TodayView: View {
                         .buttonStyle(LiquidPressStyle())
                     }
                 }
+                #if os(iOS)
+                // The way to the full history, which this section only samples. iOS only: the tab's
+                // NavigationStack resolves `TabRoute`; the macOS sidebar has its own Workouts row.
+                NavigationLink(value: TabRoute.workouts) {
+                    HStack(spacing: 3) {
+                        Text("See all workouts").font(StrandFont.caption)
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(StrandPalette.accent)
+                }
+                .buttonStyle(.plain)
+                #endif
             }
         }
     }

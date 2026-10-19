@@ -48,3 +48,27 @@ struct WorkoutStartControl: View {
         }
     }
 }
+
+/// The "Start workout" quick action as one sheet: the sport picker, then the in-exercise view in its place.
+/// With a workout already running it opens straight on that workout.
+///
+/// A leaf that owns `AppModel` for the same reason `WorkoutStartControl` does: the shell must not subscribe
+/// to the live HR tick. Before this, the quick action opened the whole Workouts screen and made the user
+/// find the Start button on it — the action said "Start workout" and did not.
+struct QuickStartWorkoutFlow: View {
+    @EnvironmentObject var model: AppModel
+    let onClose: () -> Void
+    @State private var started = false
+
+    var body: some View {
+        if model.activeWorkout != nil || started {
+            LiveWorkoutView(onClose: onClose)
+                .environmentObject(model.live)
+        } else {
+            StartWorkoutSheet(dismissesOnStart: false) { name in
+                model.startWorkout(sport: name)
+                started = true
+            }
+        }
+    }
+}

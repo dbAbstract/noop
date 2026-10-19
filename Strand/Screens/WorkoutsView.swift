@@ -20,7 +20,7 @@ private struct WorkoutRecoveryTrendPoint: Identifiable, Equatable {
 //  • a range pill (7D / 30D / 90D / 1Y / All) that filters the loaded sessions,
 //  • a LazyVGrid of summary StatTiles (count / time / calories / distance / most-active),
 //  • an "ACTIVITY BREAKDOWN" LazyVGrid of per-sport NoopCards — identical internal layout,
-//  • an "ALL SESSIONS" NoopCard containing fixed-height rows (date · sport · dur · HR · kcal · dist · source).
+//  • a "PAST WORKOUTS" NoopCard containing fixed-height rows (date · sport · dur · HR · kcal · dist · source).
 //
 // No custom card heights, paddings, colours or surfaces — uniformity is the bar.
 
@@ -127,6 +127,11 @@ struct WorkoutsView: View {
     /// `selected` holds the natural keys ("startTs|sport") of the chosen rows. Only MANUAL / DETECTED rows
     /// are selectable (imported history is read-only and can never be merged or bulk-deleted).
     @State private var selectionMode = false
+    /// The compact history shows `historyPreviewCount` rows until "Show all" is tapped, so the stats below
+    /// stay within reach on a long Archived history. Selection mode shows everything, since a hidden row
+    /// cannot be selected.
+    @State private var showAllHistory = false
+    private static let historyPreviewCount = 15
     @State private var selected: Set<String> = []
     /// When every selected row is a bare detected bout, the merge has no sport to keep — this drives a
     /// small confirm sheet asking the user to name the merged session.
@@ -177,10 +182,10 @@ struct WorkoutsView: View {
         let resolved = effectiveRange
         let unscopedRows = sessions(for: resolved)
         let trendRows = recoveryTrendRows(from: unscopedRows)
-        return ScreenScaffold(title: "Workouts", subtitle: "Every session, threaded together.",
+        return ScreenScaffold(title: "Workouts", subtitle: "Your workout history, newest first.",
                        onRefresh: { await repo.refresh() },
-                       // PERF: the column ends in the full "All Sessions" log (the breakdown grid, the
-                       // zones card, and a row-per-session table). On a large imported history the eager
+                       // PERF: the column holds the full workout history (a row per workout), the breakdown
+                       // grid and the zones card. On a large imported history the eager
                        // VStack built every section + the whole table up-front; the LazyVStack path (which
                        // is byte-identical layout) builds the off-screen sections/rows on demand instead.
                        lazy: true,
@@ -191,7 +196,7 @@ struct WorkoutsView: View {
                 VStack(alignment: .leading, spacing: NoopMetrics.space4) {
                     ComingSoon(what: loaded
                         ? "No workouts yet. They come from your WHOOP and Apple Health history. Import in Data Sources to bring them in, or add one you tracked elsewhere."
-                        : "Loading your sessions…")
+                        : "Loading your workouts…")
                     if loaded {
                         workoutActionRow
                     }
@@ -211,6 +216,10 @@ struct WorkoutsView: View {
                 scopeBar
                 rangeBar(rows: windowRows, effectiveRange: resolved)
                 if let postLogNote { postLogBanner(postLogNote) }
+                // HISTORY FIRST. The list used to sit under eleven stats cards, so reaching last Tuesday's
+                // session meant scrolling past every chart; the stats now follow the thing people open
+                // this screen for.
+                sessionsSection(rows: windowRows)
                 effortHero(rows: windowRows, effectiveRange: resolved, groups: groups)
                 summarySection(rows: windowRows, effectiveRange: resolved, groups: groups)
                 heatmapSection()
@@ -219,7 +228,6 @@ struct WorkoutsView: View {
                     zonesSection(z, totalSessions: windowRows.count)
                 }
                 recoveryTrendSection
-                sessionsSection(rows: windowRows)
             }
         }
         .task(id: repo.refreshSeq) {
@@ -296,8 +304,8 @@ struct WorkoutsView: View {
         // #64: name the merged session when every selected row is a bare detected bout (there's no sport
         // to inherit). Reuses the "Start a workout" named-sport picker.
         .workoutSelectionCover(item: $mergeSportPrompt) { target in
-            StartWorkoutSheet(title: String(localized: "Name the merged session"),
-                              subtitle: String(localized: "These sessions have no sport label yet. Pick one for the merged session."),
+            StartWorkoutSheet(title: String(localized: "Name the merged workout"),
+                              subtitle: String(localized: "These workouts have no sport label yet. Pick one for the merged workout."),
                               actionVerb: String(localized: "Merge")) { name in
                 performMerge(target.rows, sport: name)
             }
@@ -724,12 +732,12 @@ struct WorkoutsView: View {
         let suffix = filter.isActive ? String(localized: " · filtered") : ""
         if fellBack {
             return (n == 1
-                ? String(localized: "1 session · sparse, widened to \(effectiveRange.caption)")
-                : String(localized: "\(n) sessions · sparse, widened to \(effectiveRange.caption)")) + suffix
+                ? String(localized: "1 workout · sparse, widened to \(effectiveRange.caption)")
+                : String(localized: "\(n) workouts · sparse, widened to \(effectiveRange.caption)")) + suffix
         }
         return (n == 1
-            ? String(localized: "1 session · \(effectiveRange.caption)")
-            : String(localized: "\(n) sessions · \(effectiveRange.caption)")) + suffix
+            ? String(localized: "1 workout · \(effectiveRange.caption)")
+            : String(localized: "\(n) workouts · \(effectiveRange.caption)")) + suffix
     }
 
     /// Pick the tightest range that still holds ≥2 sessions; otherwise show All.
@@ -839,7 +847,7 @@ struct WorkoutsView: View {
                 .font(StrandFont.headline)
                 .foregroundStyle(StrandPalette.textPrimary)
             HStack(spacing: NoopMetrics.gap) {
-                heroCountStat(String(localized: "Sessions"), value: Double(rows.count),
+                heroCountStat(String(localized: "Workouts"), value: Double(rows.count),
                               format: { "\(Int($0.rounded()))" }, tint: StrandPalette.effortColor)
                 heroStat(String(localized: "Active"), String(localized: "\(oneDecimal(totalTimeH))h"), tint: StrandPalette.textPrimary)
                 heroStat(String(localized: "Top sport"), modal.count > 0 ? "\(modal.count)×" : "—",
@@ -847,7 +855,7 @@ struct WorkoutsView: View {
             }
             Text(modal.count > 0
                  ? "Mostly \(WorkoutSource.displaySport(modal.sport)) (\(effectiveRange.caption))."
-                 : "Logged sessions across \(effectiveRange.caption).")
+                 : "Logged workouts across \(effectiveRange.caption).")
                 .font(StrandFont.footnote)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1033,7 +1041,7 @@ struct WorkoutsView: View {
             StatTile(label: "Most Active",
                      value: modal.sport,
                      caption: modal.count > 0
-                         ? (modal.count == 1 ? String(localized: "1 session") : String(localized: "\(modal.count) sessions"))
+                         ? (modal.count == 1 ? String(localized: "1 workout") : String(localized: "\(modal.count) workouts"))
                          : nil,
                      accent: StrandPalette.textPrimary)
         }
@@ -1081,10 +1089,10 @@ struct WorkoutsView: View {
                 Divider().overlay(StrandPalette.hairline)
                 // Identical 4-up stat strip for every card.
                 HStack(spacing: 0) {
-                    miniStat(String(localized: "SESSIONS"), "\(g.count)")
+                    miniStat(String(localized: "WORKOUTS"), "\(g.count)")
                     miniStat(String(localized: "TIME"), String(localized: "\(oneDecimal(g.totalTimeH))h"))
                     miniStat(String(localized: "KCAL"), grouped(g.totalKcal), tint: StrandPalette.metricAmber)
-                    miniStat(String(localized: "AVG/SESS"), String(localized: "\(Int(g.avgTimePerSessionMin.rounded()))m"))
+                    miniStat(String(localized: "AVG TIME"), String(localized: "\(Int(g.avgTimePerSessionMin.rounded()))m"))
                 }
             }
         }
@@ -1134,8 +1142,8 @@ struct WorkoutsView: View {
             SectionHeader("HR Zones",
                           overline: "Whoop import",
                           trailing: totalSessions == 1
-                              ? String(localized: "\(z.sessionsWithZones) of 1 session")
-                              : String(localized: "\(z.sessionsWithZones) of \(totalSessions) sessions"))
+                              ? String(localized: "\(z.sessionsWithZones) of 1 workout")
+                              : String(localized: "\(z.sessionsWithZones) of \(totalSessions) workouts"))
             NoopCard(tint: StrandPalette.effortColor) {
                 VStack(alignment: .leading, spacing: 12) {
                     // Proportional stacked bar — same construction as SleepView's stage bar, with the
@@ -1167,7 +1175,7 @@ struct WorkoutsView: View {
                             zoneStat(i + 1, minutes: z.minutes[i], total: z.totalMinutes)
                         }
                     }
-                    Text("Share of imported zone time, duration-weighted across sessions (approximate).")
+                    Text("Share of imported zone time, duration-weighted across workouts (approximate).")
                         .font(StrandFont.footnote)
                         .foregroundStyle(StrandPalette.textTertiary)
                 }
@@ -1208,8 +1216,8 @@ struct WorkoutsView: View {
     private func sessionsSection(rows: [WorkoutRow]) -> some View {
         VStack(alignment: .leading, spacing: NoopMetrics.gap) {
             HStack(alignment: .firstTextBaseline) {
-                SectionHeader("All Sessions",
-                              overline: "Log",
+                SectionHeader("Past workouts",
+                              overline: "History",
                               trailing: String(localized: "\(rows.count) total"))
                 selectPill(rows: rows)
             }
@@ -1263,7 +1271,7 @@ struct WorkoutsView: View {
             }
             .accessibilityLabel(selectionMode
                 ? String(localized: "Finish selecting")
-                : String(localized: "Select sessions to merge or delete"))
+                : String(localized: "Select workouts to merge or delete"))
         }
     }
 
@@ -1334,15 +1342,28 @@ struct WorkoutsView: View {
     /// existing ••• menu, and (in selection mode) a leading checkmark / lock glyph.
     @ViewBuilder
     private func compactSessionsList(rows: [WorkoutRow]) -> some View {
-        LazyVStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+        let capped = !showAllHistory && !selectionMode && rows.count > Self.historyPreviewCount
+        let shown = capped ? Array(rows.prefix(Self.historyPreviewCount)) : rows
+        return LazyVStack(spacing: 0) {
+            ForEach(Array(shown.enumerated()), id: \.offset) { idx, row in
                 compactSessionRow(row)
                     .background(idx % 2 == 1
                                 ? StrandPalette.surfaceInset.opacity(0.4)
                                 : Color.clear)
-                if idx != rows.count - 1 {
+                if idx != shown.count - 1 {
                     Divider().overlay(StrandPalette.hairline.opacity(0.5))
                 }
+            }
+            if capped {
+                Divider().overlay(StrandPalette.hairline.opacity(0.5))
+                Button { showAllHistory = true } label: {
+                    Text("Show all \(rows.count) workouts")
+                        .font(StrandFont.subhead)
+                        .foregroundStyle(StrandPalette.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, NoopMetrics.space3)
+                }
+                .buttonStyle(.plain)
             }
         }
     }

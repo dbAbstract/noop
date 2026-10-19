@@ -14,10 +14,15 @@ struct StartWorkoutSheet: View {
     private let heading: String
     private let explainer: String
     private let actionVerb: String
+    /// False when the picker is the ROOT of a sheet that goes on to show the live workout (the quick
+    /// action): dismissing there would close the whole sheet before the workout screen appears.
+    private let dismissesOnStart: Bool
 
     init(title: String? = nil, subtitle: String? = nil, actionVerb: String? = nil,
+         dismissesOnStart: Bool = true,
          onStart: @escaping (_ sport: String) -> Void) {
         self.onStart = onStart
+        self.dismissesOnStart = dismissesOnStart
         self.heading = title ?? String(localized: "Choose a workout")
         self.explainer = subtitle
             ?? String(localized: "Pick an activity to begin recording heart rate, effort, peak, and average.")
@@ -26,7 +31,7 @@ struct StartWorkoutSheet: View {
 
     var body: some View {
         WorkoutSelectionScreen(heading: heading, explainer: explainer, actionVerb: actionVerb,
-                               onStart: onStart)
+                               dismissesOnStart: dismissesOnStart, onStart: onStart)
     }
 }
 
@@ -36,6 +41,7 @@ struct WorkoutSelectionScreen: View {
     let heading: String
     let explainer: String
     let actionVerb: String
+    var dismissesOnStart = true
     let onStart: (_ sport: String) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -157,7 +163,7 @@ struct WorkoutSelectionScreen: View {
         searchFocused = false
         RecentSportsPrefs.recordSelection(name)
         onStart(name)
-        dismiss()
+        if dismissesOnStart { dismiss() }
     }
 }
 

@@ -373,6 +373,9 @@ struct RootTabView: View {
         case .live:
             quickScreen(LiveView())
         case .workout:
+            // Straight to the sport picker, then the live workout. The history has its own row.
+            QuickStartWorkoutFlow(onClose: { quickAction = nil })
+        case .workouts:
             quickScreen(WorkoutsView())
         case .journal:
             quickScreen(InsightsView())
@@ -477,7 +480,7 @@ struct RootTabView: View {
         MoreSearchEntry(title: "Explore", icon: "square.grid.2x2.fill", route: .explore, keywords: ""),
         MoreSearchEntry(title: "Compare", icon: "rectangle.split.2x1.fill", route: .compare, keywords: ""),
         MoreSearchEntry(title: "Live", icon: "waveform.path.ecg", route: .live, keywords: ""),
-        MoreSearchEntry(title: "Workouts", icon: "figure.run", route: .workouts, keywords: ""),
+        MoreSearchEntry(title: "Workouts", icon: "figure.run", route: .workouts, keywords: "history past workouts sessions log"),
         MoreSearchEntry(title: "Lift Log", icon: "dumbbell.fill", route: .liftLog, keywords: ""),
         MoreSearchEntry(title: "Health", icon: "heart.text.square.fill", route: .health, keywords: ""),
         MoreSearchEntry(title: "Lab Book", icon: "books.vertical.fill", route: .labBook, keywords: ""),
@@ -764,15 +767,15 @@ private struct MoreRow: View {
 /// The destinations the centre FAB can present. `.menu` is the action sheet itself; the rest
 /// route to existing screens. `Identifiable` so it drives `.sheet(item:)`.
 private enum QuickAction: Int, Identifiable {
-    case menu, live, workout, journal, breathe, food, weight, addFood
+    case menu, live, workout, workouts, journal, breathe, food, weight, addFood
     var id: Int { rawValue }
 }
 
 /// Sheet geometry for the quick-action menu. The detent is a fixed height rather than `.medium`, so it
 /// has to be told when a row appears or the last row sits under the sheet's edge.
 private enum QuickActionSheetMetrics {
-    /// Four always-present rows (Live / Workout / Journal / Breathe).
-    static let baseHeight: CGFloat = 344
+    /// Five always-present rows (Live / Start workout / Workouts / Journal / Breathe).
+    static let baseHeight: CGFloat = 344 + rowHeight
     /// One row: 38pt tile + 10pt vertical padding either side, plus the 8pt VStack spacing above it.
     static let rowHeight: CGFloat = 66
 
@@ -813,6 +816,8 @@ private struct QuickActionSheet: View {
             VStack(spacing: 8) {
                 row("Live HR", icon: "waveform.path.ecg", tint: StrandPalette.metricRose) { onPick(.live) }
                 row("Start workout", icon: "figure.run", tint: StrandPalette.effortColor) { onPick(.workout) }
+                // The history, one tap from the same menu — the twin of "Open diet" below.
+                row("Workouts", icon: "list.bullet.rectangle", tint: StrandPalette.effortColor) { onPick(.workouts) }
                 // Sits with the other log-something actions rather than at the top: Live and Workout are
                 // the time-critical ones (a strap reading you want NOW), while logging a meal is not.
                 // Hidden entirely when the feature is off, matching how its Today card is gated — an

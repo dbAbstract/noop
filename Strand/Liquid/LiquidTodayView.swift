@@ -93,6 +93,11 @@ struct LiquidTodayView: View {
     /// strap whose history never offloads, where heart rate exists ONLY for the windows it was connected.
     @State private var hrSegments: [String] = []
     @State private var workouts: [WorkoutRow] = [] // newest-first
+    /// The newest workout that started BEFORE the selected day, so a rest day's card still says when the
+    /// last one was rather than "No workouts yet" with nowhere to go.
+    @State private var lastWorkoutBefore: WorkoutRow?
+    /// A tapped Today workout row, presented as its detail sheet.
+    @State private var workoutDetail: TodayWorkoutTarget?
     /// #today-hosted-cards: the shared SleepModel that backs every SleepModel-derived hosted sleep card
     /// (Stages vs typical today; more to follow). Built ONCE in `load()` from the SAME inputs the Sleep tab
     /// uses (`SleepModel.build`), and only when a sleep-origin card is actually hosted — so a Today with no
@@ -108,6 +113,10 @@ struct LiquidTodayView: View {
 
     // sheets / expanders
     @State private var guideSection: ScoreSection?
+    private struct TodayWorkoutTarget: Identifiable {
+        let row: WorkoutRow
+        let id = UUID()
+    }
     @State private var customizationDestination: TodayCustomizationDestination?
     /// #1862: the optional Coach launcher sheet. Presentation state only — opening it requests nothing.
     @State private var showCoachLauncher = false
@@ -485,6 +494,17 @@ struct LiquidTodayView: View {
         .task(id: "\(repo.refreshSeq)-\(selectedDayOffset)-\(repo.hydrationSeq)-\(hydrationEnabled)-\(repo.foodSeq)-\(foodEnabled)-\(dayCycleModeRaw)") {
             DashboardCardPrefs.migrateLegacyStepsAverage()
             await load()
+        }
+        .sheet(item: $workoutDetail) { target in
+            NavigationStack {
+                WorkoutDetailView(row: target.row)
+                    .environmentObject(repo)
+            }
+            #if os(iOS)
+            .noopSheetPresentation(largeFirst: true)
+            #else
+            .frame(width: 620, height: 720)
+            #endif
         }
         .sheet(item: $guideSection) { section in
             NavigationStack { ScoringGuideView(initialSection: section, onClose: { guideSection = nil }) }
@@ -1572,21 +1592,67 @@ struct LiquidTodayView: View {
 
     // MARK: - Last workouts
 
+    /// The day's workouts, each opening its own detail, and a "See all" that is ALWAYS there — the same
+    /// shape as the Diet card, which is why diet was one tap away and past workouts were four. A day with
+    /// none says when the last one was, and the whole card opens the history instead of being a dead end.
     private var lastWorkoutsSection: some View {
         VStack(spacing: 8) {
-            sectionHead("LAST WORKOUTS", trailing: "\(workouts.count) total")
-            if let w = workouts.first {
-                NavigationLink(value: TabRoute.workouts) { workoutCard(w) }
+            HStack(alignment: .firstTextBaseline) {
+                Text("WORKOUTS").font(StrandFont.overline).tracking(1.6).foregroundStyle(StrandPalette.textTertiary)
+                Spacer()
+                NavigationLink(value: TabRoute.workouts) {
+                    HStack(spacing: 3) {
+                        Text("See all").font(StrandFont.caption)
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(StrandPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("See all workouts"))
+            }
+            .padding(.horizontal, 2)
+            if workouts.isEmpty {
+                NavigationLink(value: TabRoute.workouts) { restDayWorkoutCard }
                     .buttonStyle(LiquidPressStyle())
             } else {
-                card {
-                    Text("No workouts yet")
-                        .font(StrandFont.subhead)
-                        .foregroundStyle(StrandPalette.textTertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                ForEach(workouts.prefix(4), id: \.startTs) { w in
+                    Button { workoutDetail = TodayWorkoutTarget(row: w) } label: { workoutCard(w) }
+                        .buttonStyle(LiquidPressStyle())
+                }
+                if workouts.count > 4 {
+                    NavigationLink(value: TabRoute.workouts) {
+                        Text("\(workouts.count - 4) more this day")
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 2)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
+    }
+
+    private var restDayWorkoutCard: some View {
+        card {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(selectedDayOffset == 0 ? "No workouts today" : "No workouts this day")
+                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.textSecondary)
+                    if let last = lastWorkoutBefore {
+                        Text(String(localized: "Last: \(WorkoutSource.displaySport(last.sport)), \(Self.shortDay(last.startTs))"))
+                            .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(StrandPalette.textTertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private static func shortDay(_ ts: Int) -> String {
+        Date(timeIntervalSince1970: TimeInterval(ts))
+            .formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).locale(AppLanguage.activeLocale))
     }
 
     private func workoutCard(_ w: WorkoutRow) -> some View {
@@ -1879,7 +1945,9 @@ struct LiquidTodayView: View {
         let hrBuckets = await hrA
         hrValues = hrBuckets.map { $0.bpm }
         hrSegments = hrGapSegments(bucketTs: hrBuckets.map { $0.ts }, bucketSeconds: 300)
-        workouts = (await wkA).filter { $0.startTs >= from && $0.startTs < to }
+        let allWorkouts = await wkA
+        workouts = allWorkouts.filter { $0.startTs >= from && $0.startTs < to }
+        lastWorkoutBefore = allWorkouts.filter { $0.startTs < from }.max(by: { $0.startTs < $1.startTs })
 
         let (chargeSource, effortSource, restSource) = await (chargeSourceA, effortSourceA, restSourceA)
         let sourceResolutions = [
