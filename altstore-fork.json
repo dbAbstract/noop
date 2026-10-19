@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1058",
-          "buildVersion": "1058",
+          "version": "12.1.0.1059",
+          "buildVersion": "1059",
           "date": "2026-10-19",
-          "localizedDescription": "Look foods up lazily in stored nutrition PDFs",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1058.ipa",
-          "size": 17202828,
+          "localizedDescription": "Make past workouts one tap away on iOS",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1059.ipa",
+          "size": 17227408,
           "minOSVersion": "17.0"
         }
       ]
