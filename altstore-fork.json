@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1056",
-          "buildVersion": "1056",
+          "version": "12.1.0.1057",
+          "buildVersion": "1057",
           "date": "2026-10-19",
-          "localizedDescription": "Price strap workouts with a sport-aware heart-rate-reserve model",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1056.ipa",
-          "size": 17134602,
+          "localizedDescription": "Use a stop glyph for the live workout's End button",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1057.ipa",
+          "size": 17134110,
           "minOSVersion": "17.0"
         }
       ]
