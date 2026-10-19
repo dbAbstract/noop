@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1057",
-          "buildVersion": "1057",
+          "version": "12.1.0.1058",
+          "buildVersion": "1058",
           "date": "2026-10-19",
-          "localizedDescription": "Use a stop glyph for the live workout's End button",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1057.ipa",
-          "size": 17134110,
+          "localizedDescription": "Look foods up lazily in stored nutrition PDFs",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1058.ipa",
+          "size": 17202828,
           "minOSVersion": "17.0"
         }
       ]
