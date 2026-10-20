@@ -231,7 +231,9 @@ extension Repository {
     }
 
     /// Rows of the stored documents that match `query`, best first, resolved with their header line.
-    func nutritionDocumentMatches(query: String, limit: Int = 8) async -> [NutritionDocumentRowRef] {
+    /// `search` marks a term Coach chose to look up rather than what the user said
+    /// (`NutritionDocumentLookup.match`).
+    func nutritionDocumentMatches(query: String, search: Bool = false, limit: Int = 8) async -> [NutritionDocumentRowRef] {
         guard let store = await storeHandle(),
               let documents = try? await store.nutritionDocuments(), !documents.isEmpty,
               let pages = try? await store.nutritionDocumentPages(),
@@ -245,7 +247,7 @@ extension Repository {
                                        aliases: $0.aliases) },
             unindexedPages: pages.filter { !indexed.contains("\($0.documentId)|\($0.page)") }
                 .map { ($0.documentId, $0.page, $0.text) },
-            limit: limit)
+            search: search, limit: limit)
         return matches.compactMap { m in
             ref(documentId: m.documentId, page: m.page, line: m.line, documents: documents, pages: pages, index: index)
         }

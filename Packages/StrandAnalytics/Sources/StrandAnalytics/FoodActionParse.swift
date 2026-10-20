@@ -221,6 +221,41 @@ public enum FoodActionParse {
         return .success(parsed)
     }
 
+    /// How many search terms one `search_document` may carry, and how long each may be. Enough for a
+    /// spelling, a script variant, a shorter core word and an English name per item of a meal.
+    public static let maxSearchQueries = 8
+    public static let maxSearchQueryLength = 80
+
+    /// The terms of every `search_document` in a reply, in order and de-duplicated, or empty for none.
+    ///
+    /// Not a `FoodAction`: a search proposes nothing to the user. The app runs it against the stored
+    /// nutrition documents and asks the model again with the rows it found, before the user sees a reply.
+    /// Accepts `queries` as a list or a single `query` string.
+    public static func documentSearchQueries(fromReply reply: String) -> [String] {
+        guard reply.contains(sentinel), let objectText = objectContainingSentinel(in: reply),
+              let data = objectText.data(using: .utf8),
+              let outer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let body = outer[sentinel] else { return [] }
+        let bodies: [[String: Any]]
+        if let dict = body as? [String: Any] {
+            bodies = (dict["actions"] as? [[String: Any]]) ?? [dict]
+        } else {
+            bodies = (body as? [[String: Any]]) ?? []
+        }
+        var out: [String] = []
+        for b in bodies {
+            let verb = (b["action"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+            guard verb == "search_document" || verb == "searchdocument" else { continue }
+            let raw = ((b["queries"] as? [Any]) ?? []) + [b["query"] as Any]
+            for case let q as String in raw {
+                let t = q.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard t.count >= 2, t.count <= maxSearchQueryLength, !out.contains(t) else { continue }
+                out.append(t)
+            }
+        }
+        return Array(out.prefix(maxSearchQueries))
+    }
+
     /// The original single-action entry point, kept as the convenience it now is.
     ///
     /// Returns the FIRST action. Callers that can render several should use `actions(fromReply:)`.

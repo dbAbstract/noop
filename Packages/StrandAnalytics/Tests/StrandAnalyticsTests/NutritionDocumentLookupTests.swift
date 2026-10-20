@@ -52,6 +52,71 @@ final class NutritionDocumentLookupTests: XCTestCase {
         XCTAssertNil(hit.first?.name)
     }
 
+    // A conveyor-belt sushi page: one row per plate, the piece count printed after the name.
+    private let sushi = """
+    商品名\tエネルギー(kcal)\tたんぱく質(g)\t脂質(g)\t炭水化物(g)
+    ノルウェーサーモン 1貫\t52\t2.6\t1.9\t6.1
+    炙りサーモン 1貫\t55\t2.7\t2.2\t6.0
+    とろサーモン 1貫\t61\t2.4\t3.0\t6.0
+    うなぎ 1貫\t68\t2.9\t2.8\t7.5
+    えび天 2貫\t140\t4.1\t5.2\t18.9
+    大とろ 1貫\t70\t2.5\t4.1\t6.0
+    宮崎牛 2貫\t150\t5.0\t7.1\t15.2
+    """
+
+    private var sushiEntries: [NutritionDocumentLookup.Entry] {
+        [("ノルウェーサーモン", ["Norwegian salmon"]), ("炙りサーモン", ["Seared salmon"]), ("とろサーモン", ["Fatty salmon"]),
+         ("うなぎ", ["Eel", "unagi"]), ("えび天", ["Shrimp tempura"]), ("大とろ", ["Fatty tuna", "otoro"]),
+         ("宮崎牛", ["Miyazaki beef"])].enumerated().map {
+            .init(documentId: "kura", page: 1, line: $0.offset + 1, name: $0.element.0, aliases: $0.element.1)
+        }
+    }
+
+    private func names(_ m: [NutritionDocumentLookup.Match]) -> [String] {
+        m.compactMap { match in sushiEntries.first { $0.line == match.line }?.name }
+    }
+
+    /// A short word finds every row it is part of — "サーモン" is a request to pick among the salmon plates.
+    func testAShortJapaneseWordFindsEveryRowItIsPartOf() {
+        let m = NutritionDocumentLookup.match(query: "check for サーモン", entries: sushiEntries)
+        XCTAssertEqual(Set(names(m)), ["ノルウェーサーモン", "炙りサーモン", "とろサーモン"])
+    }
+
+    /// Katakana and hiragana are one spelling, and a near transliteration still lands on the right row.
+    func testKanaAndNearSpellingsMatch() {
+        XCTAssertEqual(names(NutritionDocumentLookup.match(query: "ウナギ", entries: sushiEntries)), ["うなぎ"])
+        XCTAssertEqual(names(NutritionDocumentLookup.match(query: "ノールウェイサーモン", entries: sushiEntries)),
+                       ["ノルウェーサーモン"], "a typo finds its row, not the other salmon plates")
+        XCTAssertEqual(NutritionDocumentLookup.searchFold("ノルウェーサーモン"), "のるうぇさもん")
+        XCTAssertEqual(NutritionDocumentLookup.similarity("炙りさもん", "のるうぇいさもん"), 4.0 / 11.0, accuracy: 1e-9)
+    }
+
+    /// The meal as one user typed it, from an exported conversation where nothing was found: every item
+    /// whose name is recognisable now finds its row, with or without an index. 天ぷら for えび天 is left to
+    /// Coach's own search, which can guess the printed name.
+    func testAMultiItemMessageFindsEachItem() {
+        let said = "finished eating\n\nhad 8 ノールウェイサーモン\n1 ウナギ\n1 天ぷら2貫\n2大トロマグロ\n1宮崎牛"
+        let indexed = NutritionDocumentLookup.match(query: said, entries: sushiEntries)
+        XCTAssertEqual(Set(names(indexed)), ["ノルウェーサーモン", "うなぎ", "大とろ", "宮崎牛"])
+        let raw = NutritionDocumentLookup.match(query: said, entries: [], unindexedPages: [("kura", 1, sushi)])
+        XCTAssertEqual(Set(raw.map(\.line)), [1, 4, 6, 7])
+    }
+
+    /// A term Coach chose is the food alone, so an English word inside a longer alias is a match there,
+    /// and only there.
+    func testSearchTermsMatchWordsInsideLongerNames() {
+        let searched = NutritionDocumentLookup.match(query: "salmon", entries: sushiEntries, search: true)
+        XCTAssertEqual(Set(names(searched)), ["ノルウェーサーモン", "炙りサーモン", "とろサーモン"])
+        XCTAssertTrue(NutritionDocumentLookup.match(query: "salmon", entries: sushiEntries).isEmpty)
+        XCTAssertEqual(NutritionDocumentLookup.match(query: "teriyaki", entries: entries, search: true).map(\.line), [4])
+    }
+
+    func testFillerWordsAloneMatchNothing() {
+        XCTAssertTrue(NutritionDocumentLookup.match(query: "今日食べた", entries: sushiEntries).isEmpty)
+        XCTAssertTrue(NutritionDocumentLookup.match(query: "do it then", entries: sushiEntries,
+                                                    unindexedPages: [("kura", 1, sushi)]).isEmpty)
+    }
+
     // MARK: - Header and figures
 
     func testHeaderIsTheNearestOneAbove() {
@@ -129,6 +194,21 @@ final class NutritionDocumentLookupTests: XCTestCase {
     }
 
     // MARK: - The action
+
+    func testSearchDocumentTermsAreReadAndCapped() {
+        let reply = """
+        {"noop_food_action": {"actions": [{"action": "search_document", "queries": ["サーモン一貫", "サーモン", " サーモン ", "x", 7]}, \
+        {"action": "search_document", "query": "えび天"}]}}
+        """
+        XCTAssertEqual(FoodActionParse.documentSearchQueries(fromReply: reply), ["サーモン一貫", "サーモン", "えび天"])
+        XCTAssertTrue(FoodActionParse.documentSearchQueries(fromReply: "Salmon is popular.").isEmpty)
+        let many = (0..<20).map { "\"q\($0)\"" }.joined(separator: ",")
+        let capped = "{\"noop_food_action\": {\"action\": \"search_document\", \"queries\": [\(many)]}}"
+        XCTAssertEqual(FoodActionParse.documentSearchQueries(fromReply: capped).count, FoodActionParse.maxSearchQueries)
+        guard case .failure = FoodActionParse.actions(fromReply: reply) else {
+            return XCTFail("a search proposes nothing to log")
+        }
+    }
 
     func testLogDocumentActionParsesAndRefusesMissingFigures() throws {
         let ok = """
