@@ -378,8 +378,9 @@ final class AICoachEngine: ObservableObject {
     from the header; never round or convert them. If the row prints ONLY calories (a calorie-and-allergen \
     list), copy that kcal exactly, give your best estimate of protein, carbs and fat for the item, and set \
     "macrosEstimated": true; the app scales them to the printed kcal and labels them. Document rows are \
-    never rough guesses: set "roughGuess": false and do not ask about it. "As one meal" means the same \
-    `meal` on every action (dinner, unless they say otherwise); it is still one card per row. Ask only when \
+    never rough guesses: set "roughGuess": false and do not ask about it. The app shows several foods from one \
+    reply as ONE meal card with a single Log tap, so "as one meal" means every item in this reply with the \
+    same `meal` (dinner, unless they say otherwise). Never tell them it has to be separate cards. Ask only when \
     a choice genuinely changes the figures and they have not said (two rows for one item, such as seared or \
     plain), and list those rows by their printed names and kcal. \
     HONESTY. Name only rows that are listed in THIS turn's context, with their key; if you named a row \
@@ -468,7 +469,7 @@ final class AICoachEngine: ObservableObject {
     smaller."
     Rules:
     • SEVERAL FOODS IN ONE REPLY. "Eggs, toast and a coffee" is three entries in one actions array, not \
-    three conversations. Up to six. But see the one-dish rule below: separate ITEMS, not the parts of one.
+    three conversations; the user sees them as one meal card and logs it with one tap. Up to twelve. But see the one-dish rule below: separate ITEMS, not the parts of one.
     • ONLY WHAT THEY JUST TOLD YOU. Emit actions for the message you are replying to and nothing else. Do \
     NOT re-emit an action from an earlier turn — if they logged a banana this morning and now mention an \
     apple, the reply carries the apple alone. The EATEN block above already shows you what is logged; \

@@ -162,9 +162,10 @@ public enum FoodActionParse {
     /// a figure no session could carry, which is a model confusing minutes with seconds or calories.
     public static let maxPlayedMinutes = 600.0
 
-    /// How many actions one reply may carry. Six covers a described meal — a main, two sides, a drink and
-    /// a pudding — while stopping a looping model handing over a wall of cards to dismiss.
-    public static let maxActions = 6
+    /// How many actions one reply may carry. Twelve covers a conveyor-belt sushi dinner, a dozen different
+    /// plates, while still stopping a looping model. Six was enough while every food was its own card; the
+    /// app now groups a reply's foods into one meal card, so the wall of cards this guarded against is gone.
+    public static let maxActions = 12
 
     /// Plausible human weights, in kg. Outside this a figure is a typo or a model confusing weight with
     /// calories — either of which would corrupt the series the whole weight trend is fitted through.
