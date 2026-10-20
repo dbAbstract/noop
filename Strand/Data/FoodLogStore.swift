@@ -413,7 +413,7 @@ extension Repository {
     /// genuinely different food relabels its history too. That cannot be told apart automatically, so the
     /// edit sheet says the rename applies everywhere and offers saving a new food instead.
     func foodEntries(day: String? = nil) async -> [FoodEntry] {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle() else { return [] }
         let rows = (try? await store.foodEntries(deviceId: FoodLogStore.sourceId, day: dayKey)) ?? []
         guard !rows.isEmpty else { return [] }
@@ -451,7 +451,7 @@ extension Repository {
         // again by every reader. A caller that states one is honoured; otherwise it comes from the clock for
         // a same-day log and stays nil for a backfill.
         let resolvedMeal = FoodEntries.mealToStore(dayKey: dayKey, loggedAt: date,
-                                                  today: Repository.localDayKey(Date()),
+                                                  today: await dietDayKey(),
                                                   explicit: mealType)
         let source = FoodMacroSource.forEntry(item.macroSource, rough: roughGuess)
         let entry = FoodEntry(macroSource: source,
@@ -470,7 +470,7 @@ extension Repository {
         // Gated on the entry landing on TODAY: backfilling last Tuesday says nothing about whether today
         // has been logged, and clearing on it would dismiss a nudge that is still owed. It cannot cancel
         // a reminder yet to fire — see `FoodLogReminder.clearDeliveredIfAny` for why that is deliberate.
-        if dayKey == Repository.localDayKey(Date()) {
+        if dayKey == (await dietDayKey()) {
             Task { @MainActor in FoodLogReminder.clearDeliveredIfAny() }
         }
         if saveToLibrary {
@@ -483,7 +483,7 @@ extension Repository {
 
     @discardableResult
     func deleteFoodEntry(id: UUID, day: String? = nil) async -> MacroTotals {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle() else { return await foodTotals(day: dayKey) }
         _ = try? await store.deleteFoodEntry(deviceId: FoodLogStore.sourceId, id: id.uuidString)
         return await rebankFoodTotals(entries: await foodEntries(day: dayKey), day: dayKey)
@@ -492,7 +492,7 @@ extension Repository {
     /// Re-portion a logged entry (a non-positive portion deletes it), then re-derive and re-bank.
     @discardableResult
     func updateFoodEntry(id: UUID, portion: Double, day: String? = nil) async -> MacroTotals {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         let current = await foodEntries(day: dayKey)
         let next = FoodEntries.updating(current, id: id, portion: portion)
         guard let store = await storeHandle() else { return FoodEntries.total(current) }
@@ -621,7 +621,7 @@ extension Repository {
     @discardableResult
     func logWeight(kg: Double, day: String? = nil, profile: ProfileStore? = nil) async -> Bool {
         guard kg.isFinite, kg > 0 else { return false }
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle() else { return false }
         do {
             _ = try await store.upsertMetricSeries(
@@ -665,7 +665,7 @@ extension Repository {
 
     /// Today's weigh-in, if one was recorded.
     func weightToday(day: String? = nil) async -> Double? {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle() else { return nil }
         let pts = try? await store.metricSeries(deviceId: WeightLogStore.sourceId,
                                                 key: WeightLogStore.key, from: dayKey, to: dayKey)

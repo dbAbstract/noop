@@ -31,6 +31,8 @@ struct DietDetailView: View {
     @State private var energy: DietDayEnergy?
     @State private var goal: DietGoalRow?
     @State private var consumedToday: Double = 0
+    /// The diet day everything on this screen describes (`Repository.dietDayKey`): yesterday until sleep.
+    @State private var dietDay = Repository.localDayKey(Date())
     @State private var macrosToday: MacroTotals = .zero
     @State private var targets: MacroTargetSet?
     @State private var history: [DietDay] = []
@@ -271,7 +273,8 @@ struct DietDetailView: View {
 
     @ViewBuilder private var burnComparisonSection: some View {
         if let e = energy {
-            let noop = repo.days.first(where: { $0.day == Repository.localDayKey(Date()) })?.activeKcalEst
+            // The diet day this screen describes, so both burn figures are about the same day after midnight.
+            let noop = repo.days.first(where: { $0.day == dietDay })?.activeKcalEst
             VStack(alignment: .leading, spacing: NoopMetrics.gap) {
                 SectionHeader("Burn", overline: "Two estimates")
                 NoopCard {
@@ -366,13 +369,14 @@ struct DietDetailView: View {
         let t = await repo.dietTrend()
         trend = t
         proposed = repo.proposedDeficit(from: t)
-        macrosToday = await repo.foodTotals()
+        dietDay = await repo.dietDayKey()
+        macrosToday = await repo.foodTotals(day: dietDay)
         consumedToday = macrosToday.kcal
         // For the Add food sheet. Recipes compose against THIS library read, so the two cannot describe
         // different libraries.
         library = await repo.foodLibrary()
         recipes = await repo.recipes(library: library)
-        energy = await repo.refreshDietDay(profile: profile)
+        energy = await repo.refreshDietDay(day: dietDay, profile: profile)
         if let budget = energy?.budgetKcal(), let rate = goal?.proteinGPerKg {
             targets = MacroTargets.targets(budgetKcal: budget, weightKg: profile.weightKg,
                                            proteinGPerKg: rate)

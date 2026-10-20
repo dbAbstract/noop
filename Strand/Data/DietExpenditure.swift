@@ -289,9 +289,14 @@ extension Repository {
             // attributed. That under-counts a workout's steps slightly, which leaves them in NEAT at the
             // flat rate — the same conservative direction as returning 0 above, and it keeps this
             // consistent with the shipped WorkoutDetailView reading.
-            if let ticks = await strapStepTicks(from: w.start, to: w.end) {
-                total += Int((Double(ticks) / max(stepTicksPerStep, 0.5)).rounded())
-            }
+            let strap = await strapStepTicks(from: w.start, to: w.end)
+                .map { Int((Double($0) / max(stepTicksPerStep, 0.5)).rounded()) } ?? 0
+            // The phone's pedometer too, because `dailyStepsForDiet` can take the day's total from it: with
+            // the strap silent for this window (not yet offloaded, or no counter) the workout's steps would
+            // otherwise stay in NEAT AND be paid for by the workout credit. The larger of the two is
+            // removed, which can only under-credit. nil on macOS and beyond the pedometer's history.
+            let phone = await WorkoutPedometer.steps(fromSec: w.start, toSec: w.end) ?? 0
+            total += max(strap, phone)
         }
         return total
     }
@@ -469,6 +474,13 @@ extension Repository {
         return Repository.localDayKey(now.addingTimeInterval(-Double(back) * 86_400))
     }
 
+    /// `day`, or the current diet day when none is given: the default every diet and food read and write
+    /// uses, so a screen that omits the day after midnight describes the same day as one that passes it.
+    func dietDay(_ day: String?) async -> String {
+        if let day { return day }
+        return await dietDayKey()
+    }
+
     /// An instant INSIDE the current diet day, for callers that do day arithmetic from it.
     ///
     /// Returned as a Date rather than a key so a caller can step backwards from it — the food log's day
@@ -588,7 +600,7 @@ extension Repository {
     /// `profile` is passed in rather than read from an ambient store, so this stays a plain function of
     /// its inputs and can be reasoned about without knowing what else is on screen.
     func dietDayEnergy(day: String? = nil, profile: ProfileStore) async -> DietDayEnergy {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         let goal = await dietGoal(on: dayKey)
         let activity = ActivityLevel(rawValue: goal?.activityLevel ?? "") ?? .sedentary
 
@@ -637,7 +649,7 @@ extension Repository {
     /// zero would read on a chart as "you were allowed nothing that day".
     @discardableResult
     func refreshDietDay(day: String? = nil, profile: ProfileStore) async -> DietDayEnergy {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         let energy = await dietDayEnergy(day: dayKey, profile: profile)
         if let budget = energy.budgetKcal(), let store = await storeHandle() {
             _ = try? await store.upsertMetricSeries([
@@ -663,7 +675,7 @@ extension Repository {
     /// nil when no goal has ever banked a figure for that day, which a caller must render as "no budget"
     /// rather than as zero.
     func bankedBudgetKcal(day: String? = nil) async -> Double? {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle(),
               let points = try? await store.metricSeries(deviceId: DietStore.sourceId,
                                                          key: DietStore.Keys.target,
@@ -685,7 +697,7 @@ extension Repository {
     /// nil when nothing is banked — no goal, or food logging never used — and the caller then falls back to
     /// whatever it showed before.
     func bankedDietExpenditure(day: String? = nil) async -> (kcal: Double, measured: Bool)? {
-        let dayKey = day ?? Repository.localDayKey(Date())
+        let dayKey = await dietDay(day)
         guard let store = await storeHandle(),
               let points = try? await store.metricSeries(deviceId: DietStore.sourceId,
                                                          key: DietStore.Keys.expenditure,
