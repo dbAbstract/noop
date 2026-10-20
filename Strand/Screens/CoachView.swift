@@ -689,9 +689,15 @@ struct CoachView: View {
                                         // The proposal card rides UNDER its own turn rather than inside the
                                         // bubble: it is not prose, it is not selectable, and it must not be
                                         // swept up by the bubble's Copy/Share context menu.
-                                        // One card per proposed action, each confirmed independently — a
-                                        // described meal of three things should not be all-or-nothing.
-                                        ForEach(message.proposals) { proposal in
+                                        // Two or more foods in one turn are one meal: a single card with one
+                                        // Log tap (items can still be dropped). Everything else — and a lone
+                                        // food — keeps its own card.
+                                        let meal = message.proposals.filter(MealProposalCard.groups)
+                                        if meal.count >= 2 {
+                                            MealProposalCard(proposals: meal, messageId: message.id)
+                                                .frame(maxWidth: 560, alignment: .leading)
+                                        }
+                                        ForEach(message.proposals.filter { meal.count < 2 || !MealProposalCard.groups($0) }) { proposal in
                                             FoodProposalCard(proposal: proposal, messageId: message.id)
                                                 .frame(maxWidth: 560, alignment: .leading)
                                         }
