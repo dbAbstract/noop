@@ -262,7 +262,7 @@ final class NutritionDocumentTests: XCTestCase {
 
         let search = #"{"noop_food_action": {"action": "search_document", "queries": ["filet-o-fish"]}}"#
         DocumentSearchURLProtocol.bodies = []
-        DocumentSearchURLProtocol.replies = [search, search, search]
+        DocumentSearchURLProtocol.replies = Array(repeating: search, count: AICoachEngine.maxLookupRounds + 1)
         await engine.send("and a filet-o-fish")
         XCTAssertEqual(DocumentSearchURLProtocol.bodies.count, AICoachEngine.maxLookupRounds + 1)
         XCTAssertTrue(DocumentSearchURLProtocol.bodies.last?.contains("Lookups are finished") == true)
