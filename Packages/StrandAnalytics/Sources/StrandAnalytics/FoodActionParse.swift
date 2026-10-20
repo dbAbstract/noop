@@ -232,6 +232,27 @@ public enum FoodActionParse {
     /// nutrition documents and asks the model again with the rows it found, before the user sees a reply.
     /// Accepts `queries` as a list or a single `query` string.
     public static func documentSearchQueries(fromReply reply: String) -> [String] {
+        Array(strings(fromReply: reply, verbs: ["search_document", "searchdocument"], listKey: "queries",
+                      singleKey: "query", maxLength: maxSearchQueryLength).prefix(maxSearchQueries))
+    }
+
+    /// How many guide topics one `read_guide` may ask for.
+    public static let maxGuideTopics = 3
+
+    /// The topics of every `read_guide` in a reply, lowercased, in order and de-duplicated, or empty.
+    ///
+    /// Like a search, not a `FoodAction`: the app answers it with the guide text (`CoachGuide`) and asks
+    /// the model again. Accepts `topics` as a list or a single `topic` string.
+    public static func guideTopics(fromReply reply: String) -> [String] {
+        Array(strings(fromReply: reply, verbs: ["read_guide", "readguide"], listKey: "topics", singleKey: "topic",
+                      maxLength: 60).map { $0.lowercased() }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            .prefix(maxGuideTopics))
+    }
+
+    /// The trimmed, de-duplicated strings under `listKey` (or `singleKey`) of every action with one of
+    /// `verbs`. Strings shorter than two characters or longer than `maxLength` are dropped.
+    static func strings(fromReply reply: String, verbs: Set<String>, listKey: String, singleKey: String,
+                        maxLength: Int) -> [String] {
         guard reply.contains(sentinel), let objectText = objectContainingSentinel(in: reply),
               let data = objectText.data(using: .utf8),
               let outer = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -245,15 +266,15 @@ public enum FoodActionParse {
         var out: [String] = []
         for b in bodies {
             let verb = (b["action"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
-            guard verb == "search_document" || verb == "searchdocument" else { continue }
-            let raw = ((b["queries"] as? [Any]) ?? []) + [b["query"] as Any]
+            guard verbs.contains(verb) else { continue }
+            let raw = ((b[listKey] as? [Any]) ?? []) + [b[singleKey] as Any]
             for case let q as String in raw {
                 let t = q.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard t.count >= 2, t.count <= maxSearchQueryLength, !out.contains(t) else { continue }
+                guard t.count >= 2, t.count <= maxLength, !out.contains(t) else { continue }
                 out.append(t)
             }
         }
-        return Array(out.prefix(maxSearchQueries))
+        return out
     }
 
     /// The original single-action entry point, kept as the convenience it now is.

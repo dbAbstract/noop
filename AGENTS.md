@@ -259,6 +259,14 @@ The workflow has no push trigger; a direct non-release commit to `main` needs an
   default or feed it a downstream gate (recovery, illness) on thin evidence. (WHOOP 4.0 motion is
   separately too sparse to reliably stage sleep or tell in-bed from out-of-bed — see #345.)
 
+- **Coach guides are part of the code they describe (fork).** `Strand/Resources/CoachGuide/*.md` tells
+  Coach how NOOP computes what it shows; each file's `sources:` header names the code it covers. When a
+  change alters a computation, a constant, a threshold or a behaviour a guide states, update that guide in
+  the SAME commit, and add a guide when a new user-facing number ships. `CoachGuideLibraryTests` pins the
+  constants the guides quote to the live values and fails when a named source file moves; a failing pin
+  means a guide is now wrong, so fix the text rather than the pin alone. Guides state the method, never the
+  user's numbers, and stay short (under 4,000 characters) because one is sent whole.
+
 ## iOS / Android specifics worth knowing
 
 - **iOS is `NOOPiOS`**, not `Strand`. `ContentView`/`RootView` (the macOS sidebar) are excluded from

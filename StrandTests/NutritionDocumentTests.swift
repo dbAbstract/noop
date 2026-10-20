@@ -199,16 +199,16 @@ final class NutritionDocumentTests: XCTestCase {
     func testDocumentSearchTurnPoolsRowsAcrossTerms() async throws {
         let (repo, _) = try await repoWithMenu()
         let coach = AICoachEngine(repo: repo)
-        let turn = await coach.documentSearchTurn(queries: ["ダブルチーズ", "big mac", "ビッグマック"], final: false)
+        let turn = await coach.lookupTurn(queries: ["ダブルチーズ", "big mac", "ビッグマック"], topics: [], final: false)
         XCTAssertEqual(turn.keys.count, 2, "a row found by two terms is listed once")
         XCTAssertTrue(turn.text.contains("from the app, not the user"))
         XCTAssertTrue(turn.text.contains("row: ダブルチーズバーガー\t457"))
         XCTAssertTrue(turn.text.contains("row: ビッグマック\t525"))
-        XCTAssertTrue(turn.text.contains("you may search once more"))
-        let none = await coach.documentSearchTurn(queries: ["filet-o-fish"], final: true)
+        XCTAssertTrue(turn.text.contains("you may look up once more"))
+        let none = await coach.lookupTurn(queries: ["filet-o-fish"], topics: [], final: true)
         XCTAssertTrue(none.keys.isEmpty)
         XCTAssertTrue(none.text.contains("No row matched any of these terms."))
-        XCTAssertTrue(none.text.contains("Searching is finished"))
+        XCTAssertTrue(none.text.contains("Lookups are finished"))
     }
 
     /// The whole round trip: the coach searches instead of asking, the app answers with the row, and the
@@ -264,8 +264,8 @@ final class NutritionDocumentTests: XCTestCase {
         DocumentSearchURLProtocol.bodies = []
         DocumentSearchURLProtocol.replies = [search, search, search]
         await engine.send("and a filet-o-fish")
-        XCTAssertEqual(DocumentSearchURLProtocol.bodies.count, AICoachEngine.maxDocumentSearchRounds + 1)
-        XCTAssertTrue(DocumentSearchURLProtocol.bodies.last?.contains("Searching is finished") == true)
+        XCTAssertEqual(DocumentSearchURLProtocol.bodies.count, AICoachEngine.maxLookupRounds + 1)
+        XCTAssertTrue(DocumentSearchURLProtocol.bodies.last?.contains("Lookups are finished") == true)
         XCTAssertEqual(engine.messages.last?.text,
                        "I couldn't find that in your nutrition PDFs. Tell me the name as it's printed on the menu, or ask me to estimate it.")
         XCTAssertNil(engine.messages.last?.failure)

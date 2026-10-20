@@ -764,3 +764,16 @@ Owed on Android when its diet feature lands:
   SEARCH RESULTS turn (`documentSearchTurn`, at most `maxDocumentSearchRounds` per user turn), and rows
   carried on the reply (`ChatMessage.documentRowKeys`) for `documentRowCarryTurns` turns.
 
+
+## Coach guides
+
+Coach is given short guides on how NOOP computes what it shows (`Strand/Resources/CoachGuide/*.md`, parsed
+and matched by `CoachGuide`, loaded by `CoachGuideLibrary`). The topic index rides the system prompt; a
+guide's text joins the context when the user's message asks about its topic, or when Coach asks with
+`read_guide` (`FoodActionParse.guideTopics`), answered in the same lookup round trip as `search_document`.
+
+Owed on Android when its Coach diet feature lands:
+- The guide files as Android assets (the same markdown, so both platforms explain the same method), a
+  Kotlin twin of `CoachGuide` (`parse`, `asksForExplanation`, `matching`), verified by a Swift oracle over
+  `CoachGuideTests`, and the `read_guide` action with its prompt section.
+- Android-specific guide text where the Kotlin computation genuinely differs, or the guide must say so.
