@@ -13,7 +13,6 @@ import WhoopStore
 struct NutritionDocumentImportView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var repo: Repository
-    @EnvironmentObject private var coach: AICoachEngine
     @State private var chooseFile = false
     @State private var brand = ""
     @State private var market = ""
@@ -24,10 +23,8 @@ struct NutritionDocumentImportView: View {
     @State private var note: String?
     @State private var worker: Task<Void, Never>?
     @State private var stored: [NutritionDocumentRecord] = []
-    @State private var indexCounts: [String: Int] = [:]
     let onSaved: () -> Void
 
-    private var canIndex: Bool { coach.isConfigured && coach.dataConsent }
     private var ready: Bool {
         document != nil && !brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !market.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -80,11 +77,9 @@ struct NutritionDocumentImportView: View {
                     Text(document.title).font(StrandFont.subhead)
                     Text("\(document.pages.count) readable pages").font(StrandFont.caption)
                 }
-                Text(canIndex
-                     ? "Saving sends each page's text to your AI provider once, to index item names (no nutrition figures), so an English request finds a row printed in another language."
-                     : "Coach is not connected, so item names will not be indexed. Coach can still find a row when you use the name as printed on the menu.")
+                Text("The text is read and kept on this device. Coach looks items up in it when you mention the restaurant.")
                     .font(StrandFont.caption)
-                    .foregroundStyle(canIndex ? StrandPalette.textTertiary : StrandPalette.statusWarning)
+                    .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Save document") { save() }
                     .buttonStyle(NoopButtonStyle(.primary))
@@ -104,8 +99,7 @@ struct NutritionDocumentImportView: View {
                             VStack(alignment: .leading, spacing: NoopMetrics.space1) {
                                 Text(verbatim: Self.sourceLabel(doc)).font(StrandFont.subhead)
                                 Text(verbatim: doc.title).font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
-                                Text(indexCounts[doc.id].map { String(localized: "\(doc.pageCount) pages · \($0) items indexed") }
-                                     ?? String(localized: "\(doc.pageCount) pages · names not indexed"))
+                                Text("\(doc.pageCount) readable pages")
                                     .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
                             }
                             Spacer()
@@ -127,7 +121,6 @@ struct NutritionDocumentImportView: View {
 
     private func reload() async {
         stored = await repo.nutritionDocuments()
-        indexCounts = await repo.nutritionDocumentIndexCounts()
     }
 
     private func read(_ url: URL) {
@@ -148,8 +141,8 @@ struct NutritionDocumentImportView: View {
         }
     }
 
-    /// Index (when Coach is connected), then store. A page whose indexing fails is stored without entries
-    /// and covered by raw-line search; cancelling stores nothing.
+    /// Store the text read on the device. No AI call: Coach reads the menu, or searches it, when the user
+    /// mentions the restaurant (`AICoachEngine.nutritionDocumentBlock`), so an import takes seconds.
     private func save() {
         guard let document else { return }
         let brand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -159,27 +152,14 @@ struct NutritionDocumentImportView: View {
         note = nil
         worker = Task {
             defer { working = false }
-            var index: [NutritionDocumentIndexItem] = []
-            var failedPages = 0
-            if canIndex {
-                for (i, page) in document.pages.enumerated() {
-                    if Task.isCancelled { return }
-                    status = String(localized: "Indexing item names, page \(i + 1) of \(document.pages.count)…")
-                    do { index += try await coach.indexNutritionPage(page, brand: brand, market: market) }
-                    catch is CancellationError { return }
-                    catch { failedPages += 1 }
-                }
-            }
             if Task.isCancelled { return }
             status = String(localized: "Saving document…")
             do {
-                try await repo.storeNutritionDocument(document, brand: brand, market: market, index: index)
+                try await repo.storeNutritionDocument(document, brand: brand, market: market, index: [])
                 self.document = nil
                 await reload()
                 onSaved()
-                note = failedPages > 0
-                    ? String(localized: "Saved. \(failedPages) pages could not be indexed; Coach can still find their items by the name as printed.")
-                    : String(localized: "Saved. Ask Coach to log something from \(brand).")
+                note = String(localized: "Saved. Ask Coach to log something from \(brand).")
             } catch { self.error = error.localizedDescription }
         }
     }

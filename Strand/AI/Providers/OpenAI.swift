@@ -4,7 +4,13 @@ import StrandAnalytics
 struct OpenAIClient: AIProviderClient {
     /// Original GPT-5 supports minimal reasoning; later generations have different supported values.
     /// Restrict this interactive policy to known original-family IDs, preserving other model settings.
+    /// A per-request floor on the interactive effort, set by the coach for turns that must read a menu or a
+    /// lookup's results carefully: "minimal" skimmed a found row and then denied having seen it. Task-local, so
+    /// it reaches only the request the coach wraps and never another conversation.
+    @TaskLocal static var effortOverride: String?
+
     static func interactiveReasoningEffort(model: String) -> String {
+        if let effortOverride { return effortOverride }
         let id = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().split(separator: "/").last.map(String.init) ?? ""
         let original = ["gpt-5", "gpt-5-mini", "gpt-5-nano"].contains(id)
             || ["gpt-5-20", "gpt-5-mini-20", "gpt-5-nano-20"].contains(where: { id.hasPrefix($0) })

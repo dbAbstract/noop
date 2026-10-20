@@ -18,6 +18,9 @@ struct NutritionDocumentSource: Codable, Equatable, Sendable {
     var roughGuess: Bool? = nil
     var fiberListed = true
     var userAdjusted: Bool
+    /// The row printed only calories; protein, carbs and fat are Coach's estimate scaled to them. Optional so
+    /// envelopes stored before it decode.
+    var macrosEstimated: Bool? = nil
 
     var stored: String {
         let encoder = JSONEncoder()
@@ -163,25 +166,18 @@ struct NutritionDocumentRowRef: Equatable, Sendable {
     let header: String?
 
     /// The provenance a food logged from this row carries.
-    func source(fiberListed: Bool) -> NutritionDocumentSource {
+    func source(fiberListed: Bool, macrosEstimated: Bool = false) -> NutritionDocumentSource {
         NutritionDocumentSource(title: document.title, brand: document.brand, market: document.market,
                                 documentSHA256: document.sha256, page: page,
                                 evidence: String(([header, text].compactMap { $0 }).joined(separator: "\n").prefix(2000)),
-                                fiberListed: fiberListed, userAdjusted: false)
+                                fiberListed: fiberListed, userAdjusted: false,
+                                macrosEstimated: macrosEstimated ? true : nil)
     }
 
     /// How a food from this row is named in the library: brand and market first, as the eager import named
     /// them, so a saved document food says whose menu it is wherever it appears.
     func foodName(_ itemName: String) -> String {
         "\(document.brand) [\(document.market)] · \(itemName)"
-    }
-}
-
-/// Why a page could not be indexed. The document is still stored: raw-line search covers the page.
-enum NutritionDocumentIndexError: LocalizedError {
-    case notConnected
-    var errorDescription: String? {
-        String(localized: "Connect Coach and enable AI data access to index item names.")
     }
 }
 
@@ -251,6 +247,27 @@ extension Repository {
         return matches.compactMap { m in
             ref(documentId: m.documentId, page: m.page, line: m.line, documents: documents, pages: pages, index: index)
         }
+    }
+
+    /// Every row of one stored document as Coach reads a whole menu (`NutritionDocumentLookup.menuRows`), in
+    /// page and line order, each with the key a `log_document` cites. Empty for an unknown document.
+    func nutritionDocumentMenu(documentId: String) async -> [(key: String, text: String)] {
+        guard let store = await storeHandle(), let pages = try? await store.nutritionDocumentPages() else { return [] }
+        return pages.filter { $0.documentId == documentId }.sorted { $0.page < $1.page }.flatMap { page in
+            NutritionDocumentLookup.menuRows(page.text).map {
+                (NutritionDocumentLookup.rowKey(documentId: documentId, page: page.page, line: $0.line), $0.text)
+            }
+        }
+    }
+
+    /// The first two non-empty lines of a document's first page, joined: where a calorie-and-allergen list
+    /// says what its numbers are ("くら寿司アレルゲン・カロリー情報"). nil when there are none.
+    func nutritionDocumentTitleLines(documentId: String) async -> String? {
+        guard let store = await storeHandle(), let pages = try? await store.nutritionDocumentPages(),
+              let first = pages.filter({ $0.documentId == documentId }).min(by: { $0.page < $1.page }) else { return nil }
+        let lines = first.text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.prefix(2)
+        return lines.isEmpty ? nil : String(lines.joined(separator: " / ").prefix(240))
     }
 
     /// The rows named by these keys, for checking a proposal. A key matching no stored row, or matching two

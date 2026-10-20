@@ -374,8 +374,24 @@ extension FoodProposal {
             // The row must be one the app resolved (a stored document, a line that exists), and every figure
             // the model states must be PRINTED on that line. A misremembered kcal, or numbers from a row the
             // coach was not shown, become a refusal rather than a log.
-            guard let row = documentRows[Repository.normalisedRowKey(key)],
-                  NutritionDocumentLookup.figuresArePrinted(kcal: kcal, protein: protein, carbs: carbs, fat: fat,
+            guard let row = documentRows[Repository.normalisedRowKey(key)] else {
+                return proposal(.unresolved(handle: name))
+            }
+            // A calorie-only row (an allergen-and-kcal list): kcal must be printed and the row must have no room
+            // for the macros; the model's protein, carbs and fat are scaled to the printed kcal and the food is
+            // marked as carrying estimated macros. Anything else must print every figure.
+            if request.macrosEstimated {
+                guard NutritionDocumentLookup.isCalorieOnlyRow(kcal: kcal, row.text),
+                      let m = NutritionDocumentLookup.scaledMacros(kcal: kcal, protein: protein, carbs: carbs, fat: fat)
+                else { return proposal(.unresolved(handle: name)) }
+                return proposal(.documentLog(name: row.foodName(name),
+                                             servingLabel: serving.isEmpty ? defaultServingLabel : serving,
+                                             macros: MacroTotals(kcal: kcal, protein: m.protein, carbs: m.carbs,
+                                                                 fat: m.fat, fiber: 0),
+                                             portion: portion,
+                                             source: row.source(fiberListed: false, macrosEstimated: true), row: row))
+            }
+            guard NutritionDocumentLookup.figuresArePrinted(kcal: kcal, protein: protein, carbs: carbs, fat: fat,
                                                             fiber: fiber, in: row.text) else {
                 return proposal(.unresolved(handle: name))
             }

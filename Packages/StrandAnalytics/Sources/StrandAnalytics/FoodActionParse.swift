@@ -103,12 +103,17 @@ public struct FoodActionRequest: Equatable, Sendable {
     public let meal: Meal?
     /// Per-entry uncertainty; nil preserves the saved food’s existing provenance.
     public let roughGuess: Bool?
+    /// On a `documentLog`: the row prints only calories, so protein, carbs and fat are the model's estimate.
+    /// The CALLER checks the row really cannot hold them and scales them to the printed kcal.
+    public let macrosEstimated: Bool
 
-    public init(action: FoodAction, day: FoodActionDay = .today, meal: Meal? = nil, roughGuess: Bool? = nil) {
+    public init(action: FoodAction, day: FoodActionDay = .today, meal: Meal? = nil, roughGuess: Bool? = nil,
+                macrosEstimated: Bool = false) {
         self.action = action
         self.day = day
         self.meal = meal
         self.roughGuess = roughGuess
+        self.macrosEstimated = macrosEstimated
     }
 }
 
@@ -236,6 +241,15 @@ public enum FoodActionParse {
                       singleKey: "query", maxLength: maxSearchQueryLength).prefix(maxSearchQueries))
     }
 
+    /// The documents named by every `open_document` in a reply (brand or file name, as the model wrote it).
+    ///
+    /// Like a search, not a `FoodAction`: the app answers it with the document's whole menu when it is small
+    /// enough to send, and asks the model again.
+    public static func documentsToOpen(fromReply reply: String) -> [String] {
+        Array(strings(fromReply: reply, verbs: ["open_document", "opendocument"], listKey: "documents",
+                      singleKey: "document", maxLength: 120).prefix(3))
+    }
+
     /// How many guide topics one `read_guide` may ask for.
     public static let maxGuideTopics = 3
 
@@ -295,11 +309,12 @@ public enum FoodActionParse {
         switch day(from: body) {
         case .failure(let f): return .failure(f)
         case .success(let day):
+            func flag(_ key: String) -> Bool? {
+                (body[key] as? NSNumber).flatMap { CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil }
+            }
             return single(from: body).map {
-                FoodActionRequest(action: $0, day: day, meal: meal(from: body),
-                    roughGuess: (body["roughGuess"] as? NSNumber).flatMap {
-                        CFGetTypeID($0) == CFBooleanGetTypeID() ? $0.boolValue : nil
-                    })
+                FoodActionRequest(action: $0, day: day, meal: meal(from: body), roughGuess: flag("roughGuess"),
+                                  macrosEstimated: flag("macrosEstimated") ?? false)
             }
         }
     }

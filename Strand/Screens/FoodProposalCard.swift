@@ -234,7 +234,9 @@ struct FoodProposalCard: View {
                 .foregroundStyle(StrandPalette.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
-            Text("Every figure above is printed on this row. Check they sit in the right columns before logging; it will also be saved to your foods.")
+            Text(source.macrosEstimated == true
+                 ? String(localized: "Calories are printed on this row. Protein, carbs and fat are Coach's estimate, scaled to match. It will also be saved to your foods.")
+                 : String(localized: "Every figure above is printed on this row. Check they sit in the right columns before logging; it will also be saved to your foods."))
                 .font(StrandFont.caption)
                 .foregroundStyle(StrandPalette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
