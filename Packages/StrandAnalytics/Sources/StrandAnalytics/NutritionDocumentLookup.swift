@@ -57,7 +57,7 @@ public enum NutritionDocumentLookup {
 
     /// Words of two or more characters. A run of CJK text has no spaces, so it stays one word; matching it
     /// relies on containment (`score`), not on token overlap.
-    static func words(_ normalised: String) -> [String] {
+    public static func words(_ normalised: String) -> [String] {
         normalised.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 2 }
     }
 
@@ -80,7 +80,7 @@ public enum NutritionDocumentLookup {
     /// shorter request word inside a longer printed name is a real signal — サーモン in ノルウェーサーモン.
     /// For Latin words that same containment is noise ("mac" in "Teriyaki Mac Burger"), so they keep the
     /// whole-word rule.
-    static func isUnspaced(_ word: String) -> Bool {
+    public static func isUnspaced(_ word: String) -> Bool {
         word.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) || (0x3400...0x9FFF).contains($0.value)
             || (0xAC00...0xD7AF).contains($0.value) }
     }
@@ -284,6 +284,41 @@ public enum NutritionDocumentLookup {
     }
 
     public static func hasNumber(_ line: String) -> Bool { !numbers(in: line).isEmpty }
+
+    /// Whether a row prints `kcal` and has no room for protein, carbs and fat: fewer than three other numbers.
+    /// A calorie-and-allergen list (Kura's prints a name, kcal and allergen marks) is the case this admits;
+    /// a full nutrition table is not, so its macros must still be copied from the row.
+    public static func isCalorieOnlyRow(kcal: Double, _ line: String) -> Bool {
+        let printed = numbers(in: line)
+        guard kcal.isFinite, kcal > 0, printed.contains(where: { abs($0 - kcal) < 0.001 }) else { return false }
+        return printed.filter { abs($0 - kcal) >= 0.001 }.count < 3
+    }
+
+    /// Estimated protein, carbs and fat scaled so that 4/4/9 kcal per gram adds up to the printed kcal,
+    /// rounded to 0.1 g. nil when the estimate carries no energy to scale.
+    public static func scaledMacros(kcal: Double, protein: Double, carbs: Double, fat: Double)
+        -> (protein: Double, carbs: Double, fat: Double)? {
+        let energy = 4 * protein + 4 * carbs + 9 * fat
+        guard energy > 0, energy.isFinite, kcal > 0 else { return nil }
+        let f = kcal / energy
+        func r(_ x: Double) -> Double { (x * f * 10).rounded() / 10 }
+        return (r(protein), r(carbs), r(fat))
+    }
+
+    /// Marks a calorie-and-allergen table uses in its allergen columns, dropped from a menu sent to Coach.
+    static let allergenMarks: Set<Character> = ["●", "▲", "○", "◎", "△", "■", "□", "◆", "◇", "★", "☆", "✓", "✔", "×", "\u{FFFD}"]
+
+    /// The rows of a page as Coach reads a whole menu: every line that prints a figure and is not a header,
+    /// with allergen marks dropped and whitespace collapsed. `line` is the 0-based line within the page, so a
+    /// row key built from it names the stored line the figure check reads.
+    public static func menuRows(_ pageText: String) -> [(line: Int, text: String)] {
+        pageText.components(separatedBy: "\n").enumerated().compactMap { i, raw in
+            guard hasNumber(raw), !isHeader(raw) else { return nil }
+            let text = String(raw.filter { !allergenMarks.contains($0) })
+                .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            return text.count >= 2 ? (i, text) : nil
+        }
+    }
 
     /// Whether every proposed figure is printed on the row. nil fibre means "not stated" and is not checked.
     public static func figuresArePrinted(kcal: Double, protein: Double, carbs: Double, fat: Double,
