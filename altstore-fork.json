@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1060",
-          "buildVersion": "1060",
+          "version": "12.1.0.1061",
+          "buildVersion": "1061",
           "date": "2026-10-20",
-          "localizedDescription": "Let Coach search stored nutrition PDFs before asking",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1060.ipa",
-          "size": 17240302,
+          "localizedDescription": "Teach Coach how NOOP computes what it shows",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1061.ipa",
+          "size": 17272013,
           "minOSVersion": "17.0"
         }
       ]
