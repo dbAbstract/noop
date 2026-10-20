@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1061",
-          "buildVersion": "1061",
+          "version": "12.1.0.1062",
+          "buildVersion": "1062",
           "date": "2026-10-20",
-          "localizedDescription": "Teach Coach how NOOP computes what it shows",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1061.ipa",
-          "size": 17272013,
+          "localizedDescription": "Let Coach read a restaurant's whole menu and log calorie-only rows",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1062.ipa",
+          "size": 17281403,
           "minOSVersion": "17.0"
         }
       ]
