@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1059",
-          "buildVersion": "1059",
-          "date": "2026-10-19",
-          "localizedDescription": "Make past workouts one tap away on iOS",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1059.ipa",
-          "size": 17227408,
+          "version": "12.1.0.1060",
+          "buildVersion": "1060",
+          "date": "2026-10-20",
+          "localizedDescription": "Let Coach search stored nutrition PDFs before asking",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1060.ipa",
+          "size": 17240302,
           "minOSVersion": "17.0"
         }
       ]
