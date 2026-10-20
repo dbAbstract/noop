@@ -4,6 +4,37 @@ import StrandAnalytics
 import WhoopStore
 @testable import Strand
 
+/// Replies to each Coach request in turn from `replies`, recording every request body.
+private final class DocumentSearchURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var replies: [String] = []
+    nonisolated(unsafe) static var bodies: [String] = []
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if body.isEmpty, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                guard count > 0 else { break }
+                body.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        Self.bodies.append(String(decoding: body, as: UTF8.self))
+        let text = Self.replies.isEmpty ? "" : Self.replies.removeFirst()
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                                       headerFields: ["Content-Type": "text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        let chunk: [String: Any] = ["choices": [["delta": ["content": text]]]]
+        let encoded = try! JSONSerialization.data(withJSONObject: chunk)
+        client?.urlProtocol(self, didLoad: Data(("data: " + String(decoding: encoded, as: UTF8.self) + "\n\ndata: [DONE]\n\n").utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
 final class NutritionDocumentTests: XCTestCase {
     private let text = "Burger 1 item 250 kcal 12 protein 30 carbs 9 fat"
 
@@ -137,6 +168,108 @@ final class NutritionDocumentTests: XCTestCase {
         coach.messages = [ChatMessage(role: .user, text: "log a filet-o-fish")]
         let miss = await coach.nutritionDocumentBlock()
         XCTAssertTrue(miss.contains("No row matched this conversation."))
+    }
+
+    /// A row found on an earlier turn is still listed when the user confirms it, after the message that
+    /// named it has left the three-message window; a row only carried, never found again, fades.
+    @MainActor
+    func testRowsFoundOnRecentTurnsStayInTheContext() async throws {
+        let (repo, _) = try await repoWithMenu()
+        let matched = await repo.nutritionDocumentMatches(query: "big mac")
+        let key = try XCTUnwrap(matched.first?.key)
+        let coach = AICoachEngine(repo: repo)
+        var found = ChatMessage(role: .assistant, text: "One Big Mac, or the set?")
+        found.documentRowKeys = [key]
+        coach.messages = [ChatMessage(role: .user, text: "log a big mac"), found,
+                          ChatMessage(role: .user, text: "just the burger"), ChatMessage(role: .assistant, text: "Sure."),
+                          ChatMessage(role: .user, text: "actually wait"), ChatMessage(role: .assistant, text: "OK."),
+                          ChatMessage(role: .user, text: "do it then")]
+        let block = await coach.nutritionDocumentBlock()
+        XCTAssertTrue(block.contains("row: ビッグマック\t525"), block)
+
+        coach.messages += (0..<3).flatMap { _ in [ChatMessage(role: .assistant, text: "OK."),
+                                                ChatMessage(role: .user, text: "hm")] }
+        let faded = await coach.nutritionDocumentBlock()
+        XCTAssertTrue(faded.contains("No row matched this conversation."))
+    }
+
+    /// The search turn pools every term's rows, says it came from the app, and tells the coach when it has
+    /// no search left.
+    @MainActor
+    func testDocumentSearchTurnPoolsRowsAcrossTerms() async throws {
+        let (repo, _) = try await repoWithMenu()
+        let coach = AICoachEngine(repo: repo)
+        let turn = await coach.documentSearchTurn(queries: ["ダブルチーズ", "big mac", "ビッグマック"], final: false)
+        XCTAssertEqual(turn.keys.count, 2, "a row found by two terms is listed once")
+        XCTAssertTrue(turn.text.contains("from the app, not the user"))
+        XCTAssertTrue(turn.text.contains("row: ダブルチーズバーガー\t457"))
+        XCTAssertTrue(turn.text.contains("row: ビッグマック\t525"))
+        XCTAssertTrue(turn.text.contains("you may search once more"))
+        let none = await coach.documentSearchTurn(queries: ["filet-o-fish"], final: true)
+        XCTAssertTrue(none.keys.isEmpty)
+        XCTAssertTrue(none.text.contains("No row matched any of these terms."))
+        XCTAssertTrue(none.text.contains("Searching is finished"))
+    }
+
+    /// The whole round trip: the coach searches instead of asking, the app answers with the row, and the
+    /// coach's second reply becomes a document card — one user turn, two requests, no search text shown.
+    /// A coach that keeps searching is stopped after the last round with a plain answer.
+    @MainActor
+    func testCoachSearchesTheDocumentBeforeAnswering() async throws {
+        let keys = ["ai.provider", "ai.model", "ai.dataConsent", "ai.customConnected", "ai.customBaseURL",
+                    "noop.coachEnabled", FoodLogStore.enabledKey, AICoachEngine.systemPromptKey]
+        let previous = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, value) in previous {
+                if let value { UserDefaults.standard.set(value, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        UserDefaults.standard.set(true, forKey: "noop.coachEnabled")
+        UserDefaults.standard.set(true, forKey: FoodLogStore.enabledKey)
+        let (repo, _) = try await repoWithMenu(indexed: false)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DocumentSearchURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let engine = AICoachEngine(repo: repo, session: session)
+        engine.provider = .custom
+        engine.model = "test-model"
+        engine.customBaseURL = "https://coach.invalid/v1"
+        engine.customConnected = true
+        engine.dataConsent = true
+
+        let matched = await repo.nutritionDocumentMatches(query: "ビッグマック")
+        let key = try XCTUnwrap(matched.first?.key)
+        DocumentSearchURLProtocol.bodies = []
+        DocumentSearchURLProtocol.replies = [
+            #"{"noop_food_action": {"action": "search_document", "queries": ["ビッグマック", "big mac"]}}"#,
+            "Found it on your menu.\n" + #"{"noop_food_action": {"actions": [{"action": "log_document", "row": ""#
+                + key + #"", "name": "Big Mac", "servingLabel": "1 burger", "kcal": 525, "protein": 26.0, "carbs": 41.8, "fat": 28.3, "fiber": 2.6, "portion": 1}]}}"#,
+        ]
+        await engine.send("had a big mac")
+        XCTAssertNil(engine.errorText)
+        XCTAssertEqual(DocumentSearchURLProtocol.bodies.count, 2)
+        XCTAssertTrue(DocumentSearchURLProtocol.bodies[1].contains("DOCUMENT SEARCH RESULTS"))
+        XCTAssertTrue(DocumentSearchURLProtocol.bodies[1].contains(key))
+        let reply = try XCTUnwrap(engine.messages.last)
+        XCTAssertEqual(reply.text, "Found it on your menu.")
+        guard case .documentLog = reply.proposals.first?.kind else {
+            return XCTFail("expected a document card, got \(String(describing: reply.proposals.first?.kind))")
+        }
+        XCTAssertEqual(reply.documentRowKeys, [key])
+        XCTAssertEqual(engine.messages.count, 2, "the search is not a visible turn")
+
+        let search = #"{"noop_food_action": {"action": "search_document", "queries": ["filet-o-fish"]}}"#
+        DocumentSearchURLProtocol.bodies = []
+        DocumentSearchURLProtocol.replies = [search, search, search]
+        await engine.send("and a filet-o-fish")
+        XCTAssertEqual(DocumentSearchURLProtocol.bodies.count, AICoachEngine.maxDocumentSearchRounds + 1)
+        XCTAssertTrue(DocumentSearchURLProtocol.bodies.last?.contains("Searching is finished") == true)
+        XCTAssertEqual(engine.messages.last?.text,
+                       "I couldn't find that in your nutrition PDFs. Tell me the name as it's printed on the menu, or ask me to estimate it.")
+        XCTAssertNil(engine.messages.last?.failure)
+        XCTAssertFalse(engine.messages.contains { $0.failure != nil })
     }
 
     @MainActor

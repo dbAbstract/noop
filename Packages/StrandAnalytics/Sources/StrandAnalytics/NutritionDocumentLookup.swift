@@ -61,6 +61,63 @@ public enum NutritionDocumentLookup {
         normalised.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init).filter { $0.count >= 2 }
     }
 
+    /// The form names are compared in, on top of `normalise`: katakana folded to hiragana and the long-vowel
+    /// mark dropped, so ウナギ finds うなぎ and ノールウェイ comes close enough to ノルウェー for `similarity`.
+    /// Search only — figures and stored names are never read through it.
+    static func searchFold(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for s in normalise(text).unicodeScalars {
+            switch s.value {
+            case 0x30FC, 0xFF70: continue // ー, half-width ｰ
+            case 0x30A1...0x30F6: out.append(Unicode.Scalar(s.value - 0x60)!)
+            default: out.append(s)
+            }
+        }
+        return String(out)
+    }
+
+    /// Whether a word is written in a script without spaces between words (kana, kanji, hangul), where a
+    /// shorter request word inside a longer printed name is a real signal — サーモン in ノルウェーサーモン.
+    /// For Latin words that same containment is noise ("mac" in "Teriyaki Mac Burger"), so they keep the
+    /// whole-word rule.
+    static func isUnspaced(_ word: String) -> Bool {
+        word.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) || (0x3400...0x9FFF).contains($0.value)
+            || (0xAC00...0xD7AF).contains($0.value) }
+    }
+
+    /// Request terms: folded, split at spaces, punctuation and ASCII digits ("2大トロ" → "大とろ"), and with
+    /// a few filler words dropped. Spaceless runs stay whole; `score` matches them by containment.
+    static func terms(_ query: String) -> [String] {
+        searchFold(query)
+            .split(whereSeparator: { !($0.isLetter || $0.isNumber) || ($0.isASCII && $0.isNumber) })
+            .map(String.init)
+            .filter { $0.count >= 2 && !stopWords.contains($0) && !unspacedFiller.contains($0) }
+    }
+
+    /// Japanese words too common in a food request to mean anything on their own, in folded form.
+    static let unspacedFiller: Set<String> = [
+        "たべた", "食べた", "食べました", "のんだ", "飲んだ", "した", "です", "ました", "今日", "昨日", "あと", "それ",
+    ]
+
+    /// How alike two spaceless words are, 0…1: Dice overlap of their two-character pieces. "のるうぇいさもん"
+    /// (a typed ノールウェイサーモン) against "のるうぇさもん" is 0.77; against "炙りさもん" (炙りサーモン) it is 0.36.
+    static func similarity(_ a: String, _ b: String) -> Double {
+        func pairs(_ s: String) -> [String] {
+            let c = Array(s)
+            return c.count < 2 ? [] : (0..<(c.count - 1)).map { String(c[$0...$0 + 1]) }
+        }
+        let pa = pairs(a), pb = pairs(b)
+        guard !pa.isEmpty, !pb.isEmpty else { return 0 }
+        var remaining = pb
+        var shared = 0
+        for p in pa { if let i = remaining.firstIndex(of: p) { shared += 1; remaining.remove(at: i) } }
+        return Double(2 * shared) / Double(pa.count + pb.count)
+    }
+
+    /// The fuzzy-match floor for `similarity`. Typos and spelling variants sit above it; a different item
+    /// sharing one word (炙りサーモン against とろサーモン) sits below it.
+    static let similarityFloor = 0.6
+
     /// Words too common in a food request to mean anything on their own.
     static let stopWords: Set<String> = [
         "log", "logged", "had", "have", "ate", "eat", "eaten", "the", "and", "for", "with", "from", "just",
@@ -70,44 +127,94 @@ public enum NutritionDocumentLookup {
 
     // MARK: Matching
 
-    /// How well one name (or alias) matches a normalised query. 0 = no match.
+    /// A query prepared once for scoring against many names.
+    struct Query {
+        let folded: String
+        let words: Set<String>
+        /// Request terms in spaceless scripts, for partial and fuzzy matching.
+        let unspaced: [String]
+        /// Meaningful Latin request words, for `search`'s word-inside-the-name rule.
+        let latin: [String]
+        let search: Bool
+
+        init(_ text: String, search: Bool) {
+            folded = searchFold(text)
+            words = Set(NutritionDocumentLookup.words(folded))
+            let all = terms(text)
+            unspaced = all.filter(isUnspaced)
+            latin = all.filter { !isUnspaced($0) }
+            self.search = search
+        }
+    }
+
+    /// How well one name (or alias) matches a query. 0 = no match.
     ///
     /// Containment of the whole name in the query is the strong signal: "big mac" inside "log a big mac
     /// for lunch", or ビッグマック inside a request typed in Japanese. Otherwise every meaningful word of
     /// the name must appear in the query — "mac big" still matches, "big" alone does not match "Big Mac".
-    static func score(candidate: String, query: String, queryWords: Set<String>) -> Int {
-        let c = normalise(candidate)
+    ///
+    /// Spaceless request words get two weaker matches: the word inside the name (サーモン finds every
+    /// salmon row, which is what a short request means), and a near spelling (`similarity`), so a typo or a
+    /// variant transliteration still finds the row.
+    static func score(candidate: String, query: Query) -> Int {
+        let c = searchFold(candidate)
         guard c.count >= 2 else { return 0 }
-        if query.contains(c) { return 100 + c.count }
+        if query.folded.contains(c) { return 100 + c.count }
         let meaningful = words(c).filter { !stopWords.contains($0) }
-        guard !meaningful.isEmpty, meaningful.allSatisfy({ queryWords.contains($0) }) else { return 0 }
-        return 50 + meaningful.reduce(0) { $0 + $1.count }
+        if !meaningful.isEmpty, meaningful.allSatisfy({ query.words.contains($0) }) {
+            return 50 + meaningful.reduce(0) { $0 + $1.count }
+        }
+        var best = 0
+        // A search term is the food alone, so "salmon" may find "Norwegian salmon". In conversation the
+        // same rule would let "mac" in "a big mac" pull in the Teriyaki Mac Burger.
+        let allNameWords = Set(words(c))
+        if query.search, !query.latin.isEmpty, query.latin.allSatisfy({ allNameWords.contains($0) }) {
+            best = 40 + query.latin.reduce(0) { $0 + $1.count }
+        }
+        let nameWords = words(c).filter(isUnspaced)
+        for t in query.unspaced {
+            if c.contains(t) { best = max(best, 30 + t.count) }
+            let close = nameWords.map { similarity(t, $0) }.max() ?? 0
+            if close >= similarityFloor { best = max(best, 20 + Int((close * 10).rounded())) }
+        }
+        return best
+    }
+
+    /// The printed name at the start of a raw line: the text before its first figure ("ビッグマック" from
+    /// "ビッグマック\t525\t26.0…"). nil when the line opens with a number.
+    static func leadingName(_ line: String) -> String? {
+        let n = normalise(line)
+        let name = String(n.prefix { !($0.isASCII && $0.isNumber) }).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.count >= 2 ? name : nil
     }
 
     /// Rows matching `query`, best first. Indexed entries are matched on their name and aliases; pages of a
-    /// document with no index entries at all (`unindexedPages`) are matched on their raw lines, so a document
-    /// stored without an AI index still answers a request in its own language.
+    /// document with no index entries at all (`unindexedPages`) are matched on the name each line opens
+    /// with, so a document stored without an AI index still answers a request in its own language.
+    ///
+    /// `search` is for a term Coach chose to look up (`FoodActionParse.documentSearchQueries`) rather than
+    /// what the user said: the term is the food alone, so every word of it inside a longer name is a match.
     public static func match(query: String, entries: [Entry],
                              unindexedPages: [(documentId: String, page: Int, text: String)] = [],
-                             limit: Int = 8) -> [Match] {
-        let q = normalise(query)
-        let qWords = Set(words(q))
+                             search: Bool = false, limit: Int = 8) -> [Match] {
+        let q = Query(query, search: search)
         var out: [Match] = []
         for e in entries {
-            let best = ([e.name] + e.aliases).map { score(candidate: $0, query: q, queryWords: qWords) }.max() ?? 0
+            let best = ([e.name] + e.aliases).map { score(candidate: $0, query: q) }.max() ?? 0
             if best > 0 {
                 out.append(Match(documentId: e.documentId, page: e.page, line: e.line, name: e.name, score: best))
             }
         }
+        let meaningful = q.words.filter { !stopWords.contains($0) && $0.count >= 3 }
         for p in unindexedPages {
-            let meaningful = qWords.filter { !stopWords.contains($0) && $0.count >= 3 }
-            guard !meaningful.isEmpty else { continue }
-            for (i, line) in p.text.components(separatedBy: "\n").enumerated() where hasNumber(line) {
-                let l = normalise(line)
-                // Raw lines are noisier than names, so they need every meaningful query word.
-                guard meaningful.allSatisfy({ l.contains($0) }) else { continue }
-                out.append(Match(documentId: p.documentId, page: p.page, line: i, name: nil,
-                                 score: 10 + meaningful.reduce(0) { $0 + $1.count }))
+            for (i, line) in p.text.components(separatedBy: "\n").enumerated() where hasNumber(line) && !isHeader(line) {
+                // Every meaningful query word on the line also counts, which is what finds a line that opens
+                // with a number, or "cheeseburger" in "Cheeseburger Deluxe".
+                let l = searchFold(line)
+                let onLine = !meaningful.isEmpty && meaningful.allSatisfy({ l.contains($0) })
+                    ? 10 + meaningful.reduce(0) { $0 + $1.count } : 0
+                let s = max(onLine, leadingName(line).map { score(candidate: $0, query: q) } ?? 0)
+                if s > 0 { out.append(Match(documentId: p.documentId, page: p.page, line: i, name: nil, score: s)) }
             }
         }
         return Array(out.sorted {

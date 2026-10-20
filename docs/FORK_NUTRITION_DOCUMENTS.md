@@ -12,18 +12,28 @@ the document's page text (v56 `nutritionDocument` / `nutritionDocumentPage`) and
 (`nutritionDocumentIndex`). When the user asks Coach to log something:
 
 1. The app matches what the user said (their last three messages, not Coach's replies) against the index
-   and, for pages without one, against the raw lines (`NutritionDocumentLookup.match`).
+   and, for pages without one, against the name each raw line opens with (`NutritionDocumentLookup.match`).
+   Names are compared with katakana folded to hiragana and the long-vowel mark dropped (ウナギ finds
+   うなぎ); a word in a spaceless script also matches inside a longer name (サーモン finds every salmon
+   row) or as a near spelling (ノールウェイサーモン finds ノルウェーサーモン). Latin words keep the
+   whole-word rule, so "mac" in "a big mac" does not pull in the Teriyaki Mac Burger.
 2. The matched rows go into Coach's context verbatim, each with its key, its source and the nearest header
-   line above it on the page, so Coach can read which column is which.
-3. Coach proposes `log_document` with the row key and the figures as printed. The app re-reads the row from
+   line above it on the page, so Coach can read which column is which. Rows found on any of Coach's last
+   three turns are listed again, so the turn that answers "which one?" still has them.
+3. If an item has no listed row, Coach replies with a `search_document` action instead of asking: up to
+   eight terms of its own choosing (the printed form it expects, script variants, the core word, a
+   corrected typo, the English name). The app runs them in search mode, where every word of a term inside
+   a longer name also matches, and sends the rows back as an app-written turn; Coach then proposes, or asks
+   which variant. At most two searches per turn; the user sees a status line, not the search.
+4. Coach proposes `log_document` with the row key and the figures as printed. The app re-reads the row from
    the store and refuses the proposal unless kcal, protein, carbohydrate and fat (and fibre, when given) are
    all printed on that line (`NutritionDocumentLookup.figuresArePrinted`).
-4. The confirmation card shows the citation, the header and the row. That card is the review, for the one
+5. The confirmation card shows the citation, the header and the row. That card is the review, for the one
    item actually eaten. Confirming logs it and saves it to the food library with its document provenance, so
    the next request is a plain pick from saved foods.
 
 With no document for the restaurant, Coach estimates from its own knowledge with `create`. With a document
-but no matching row, Coach says so and asks for the name as printed on the menu before offering an estimate.
+but no row found even after searching, Coach says so and asks before offering an estimate.
 
 ## Reading and indexing
 
@@ -37,7 +47,8 @@ each page's text (lines numbered) plus the typed brand and market is sent to the
 asking for each menu row's printed name and up to three aliases (an English name, a romanisation, a short
 name). The reply carries no figures and none are read from it. An entry is kept only when its line exists,
 prints a number, is not a header, and contains the name as printed. Without an index, or for a page whose
-indexing failed, raw-line search still finds an item requested by the name as printed.
+indexing failed, raw-line search still finds an item by its printed name, and Coach's own search covers
+an English request.
 
 ## Limits
 

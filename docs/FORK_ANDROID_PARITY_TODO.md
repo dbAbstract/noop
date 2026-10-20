@@ -752,12 +752,15 @@ row. Confirming logs the food and saves it to the library with its document prov
 `NutritionDocumentRow` extraction and review screen are gone.
 
 Owed on Android when its diet feature lands:
-- Kotlin twin of `NutritionDocumentLookup` (normalisation, `match`, `isHeader`/`header`, `numbers`,
-  `figuresArePrinted`, row keys, `parseIndexReply`), verified by a Swift oracle over
-  `NutritionDocumentLookupTests`.
+- Kotlin twin of `NutritionDocumentLookup` (normalisation, `searchFold`, `terms`, `similarity`, `match`
+  with its `search` mode and raw-line `leadingName`, `isHeader`/`header`, `numbers`, `figuresArePrinted`,
+  row keys, `parseIndexReply`), verified by a Swift oracle over `NutritionDocumentLookupTests`.
 - Room twins of the three v56 tables (columns, PKs and the unique `sha256` as in `schema_oracle.json`,
   declared `ios_only` until then). They travel inside the SQLite file, so the `.noopbak` settings
   whitelist is unaffected.
 - The `log_document` Coach action (`FoodActionParse.documentLog`), the NUTRITION DOCUMENTS context block
   and its prompt section, the document confirmation card, and the store/list/delete screen.
+- The `search_document` round trip: `FoodActionParse.documentSearchQueries`, the app-written DOCUMENT
+  SEARCH RESULTS turn (`documentSearchTurn`, at most `maxDocumentSearchRounds` per user turn), and rows
+  carried on the reply (`ChatMessage.documentRowKeys`) for `documentRowCarryTurns` turns.
 
