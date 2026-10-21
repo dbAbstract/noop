@@ -27,14 +27,12 @@ struct WeightTodayCard: View {
 
     var body: some View {
         Group {
-            // Rides the food-logging switch rather than a toggle of its own: a weigh-in with no food log is
-            // a number with nothing to compare it against, and the engine needs both halves anyway.
-            if foodEnabled {
-                NavigationLink(value: TabRoute.weight) {
-                    card
-                }
-                .buttonStyle(.plain)
+            // Shown with or without food logging: weight is health data of its own (it prices the resting
+            // burn and feeds Fitness Age and the trend). Only the expenditure wording below needs the food log.
+            NavigationLink(value: TabRoute.weight) {
+                card
             }
+            .buttonStyle(.plain)
         }
         .task(id: "\(repo.foodSeq)-\(reloadTick)") { await reload() }
     }
@@ -85,7 +83,7 @@ struct WeightTodayCard: View {
                         .foregroundStyle(StrandPalette.textPrimary)
                     // Names the CONSEQUENCE, because "log your weight" on its own is a chore and this is
                     // the half of the calibration people skip without knowing it costs them a verdict.
-                    Text(weighInDays >= AdaptiveExpenditureEngine.minWeightReadings
+                    Text(!foodEnabled || weighInDays >= AdaptiveExpenditureEngine.minWeightReadings
                          ? String(localized: "Tap to add this morning's — the trend needs them regularly, not just often.")
                          : String(localized: "Tap to add it. NOOP needs \(AdaptiveExpenditureEngine.minWeightReadings) weigh-ins before it can work out your real expenditure — you have \(weighInDays)."))
                         .font(StrandFont.footnote)
@@ -102,7 +100,6 @@ struct WeightTodayCard: View {
     }
 
     private func reload() async {
-        guard foodEnabled else { return }
         let rows = await repo.weightHistory(days: 90)
         todayKg = rows.first(where: { $0.day == Repository.localDayKey(Date()) })?.kg
         weighInDays = rows.count

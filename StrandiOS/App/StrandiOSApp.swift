@@ -427,6 +427,8 @@ struct StrandiOSApp: App {
                     await CoachBriefScheduler.catchUpIfDue(
                         generateBrief: { await model.coach.generateBrief() },
                         detectedWake: { await model.repo.detectedWakeMinuteOfDay() })
+                    // Same pass, same reason: the wake it keys on exists only once the night has offloaded.
+                    await nudgeWeighInIfDue(model: model)
                 }
             } else if phase == .background {
                 // Re-submit on every transition because iOS may discard an old best-effort request.
@@ -465,7 +467,9 @@ struct StrandiOSApp: App {
     /// them wake, and how long ago. The decision itself is `WeighInReminder.shouldFire`, which is pure and
     /// tested — this only gathers.
     private func nudgeWeighInIfDue(model: AppModel) async {
-        guard WeighInReminder.isEnabled else { return }
+        // Only with food logging on: the nudge exists for the expenditure calibration, and weight logging
+        // without a diet should not come with a daily prompt the user never asked for.
+        guard WeighInReminder.isEnabled, UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) else { return }
         // The DIET day, so a 01:00 check before bed is still yesterday and does not nag for a weigh-in on a
         // day that has not begun.
         let today = await model.repo.dietDayKey()

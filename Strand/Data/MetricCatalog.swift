@@ -281,8 +281,8 @@ enum MetricCatalog {
     /// which already honours a measured baseline. So the day the user adopts their own measured expenditure,
     /// this tile becomes measurement-backed with no switchover to build.
     ///
-    /// Default ON, but only has any effect when food logging is on and a diet goal exists — nothing is
-    /// banked otherwise, so a user who is not dieting sees no change at all.
+    /// Default ON, with or without food logging: Today computes and banks the burn model for every day it
+    /// shows (`LiquidTodayView.load`), so the tile is the same model for a user who never logs food.
     static let preferDietExpenditureKey = "noop.preferDietExpenditure"
 
     /// #616: the calorie twin of `todayStepsMetric` — route the tapped detail to the source that MATCHES

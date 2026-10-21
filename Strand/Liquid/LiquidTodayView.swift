@@ -51,8 +51,8 @@ struct LiquidTodayView: View {
     /// Opt-in strap-first calories (default OFF — see `MetricCatalog.preferStrapCaloriesKey`). Drives
     /// `caloriesReadout`, which resolves the tile value, its detail route and its caption together.
     @AppStorage(MetricCatalog.preferStrapCaloriesKey) private var preferStrapCalories = false
-    /// Prefer the diet model's whole-day expenditure on the Calories tile. Default ON, and inert unless food
-    /// logging is on AND a goal exists — see `MetricCatalog.preferDietExpenditureKey`.
+    /// Prefer the burn model's expenditure on the Calories tile. Default ON, for everyone — see
+    /// `MetricCatalog.preferDietExpenditureKey`.
     @AppStorage(MetricCatalog.preferDietExpenditureKey) private var preferDietExpenditure = true
     /// Today's hydration total + goal (ml), resolved in `load()`. nil → the card shows "—".
     @State private var hydrationTotalML: Double?
@@ -1737,7 +1737,7 @@ struct LiquidTodayView: View {
             hydrationGoalML = nil
         }
         // Today's intake: one indexed read of the day's entry rows, on the same pass as hydration.
-        foodKcalToday = foodEnabled ? await repo.foodTotals(day: Repository.localDayKey(Date())).kcal : nil
+        foodKcalToday = foodEnabled ? await repo.foodTotals(day: await repo.dietDayKey()).kcal : nil
         // Resolve the O(days) lookups ONCE here (not on every body re-render): the selected day and the
         // readiness verdict. Both scan repo.days (up to 599 rows); doing it per-render was the stutter.
         let day = resolveDisplayDay()
@@ -1927,10 +1927,23 @@ struct LiquidTodayView: View {
         importedActiveKcalDay = (await appleA).filter { $0.day == selectedDayKey }.compactMap { $0.activeKcal }.max()
         // Read for the SHOWN day, not today, so stepping back a day moves this figure with the rest of the
         // screen rather than leaving today's number under yesterday's heading.
-        dietExpenditureDay = foodEnabled ? await repo.bankedDietExpenditure(day: selectedDayKey) : nil
-        dietBurnedSoFar = foodEnabled
-            ? await repo.burnedSoFar(day: selectedDayKey, profile: profile)
-            : nil
+        // The burn model (resting + steps + training) for everyone, not only with a diet goal: it is the
+        // most complete answer to "what did I spend" whether or not anyone is counting what they eat. TODAY is
+        // recomputed and banked on every load, because steps and workouts keep arriving. A past day reads its
+        // banked figure, else is computed WITHOUT banking: priced with today's profile, re-banking it would
+        // rewrite a diet user's historical target.
+        if selectedDayOffset == 0 {
+            let energy = await repo.refreshDietDay(day: selectedDayKey, profile: profile)
+            dietExpenditureDay = energy.expenditure.totalKcal > 0
+                ? (energy.expenditure.totalKcal, energy.usesMeasuredBaseline) : nil
+        } else if let banked = await repo.bankedDietExpenditure(day: selectedDayKey) {
+            dietExpenditureDay = banked
+        } else {
+            let energy = await repo.dietDayEnergy(day: selectedDayKey, profile: profile)
+            dietExpenditureDay = energy.expenditure.totalKcal > 0
+                ? (energy.expenditure.totalKcal, energy.usesMeasuredBaseline) : nil
+        }
+        dietBurnedSoFar = await repo.burnedSoFar(day: selectedDayKey, profile: profile)
 
         // Weight for the SELECTED day: prefers a real Apple-Health reading (today's daily, else the
         // "weight" series' newest point so a sparse-but-recent value still renders). Falls back to the
@@ -2133,8 +2146,7 @@ struct LiquidTodayView: View {
         // The diet model's whole-day figure wins when it exists, because it is the only one of the three
         // that answers "what did I spend today" across a whole day. The on-device figure's resting floor
         // accrues only over sampled intervals, so a gappy day reads below resting metabolism; Apple's is
-        // active-only. Nothing is banked unless food logging is on and a goal is set, so this branch simply
-        // does not fire for anyone else.
+        // active-only. Computed for everyone, with or without food logging (see `load`).
         if preferDietExpenditure, let diet = dietExpenditureDay {
             // SO FAR, not the whole day. The whole-day figure is a projection of what a day like this costs,
             // and showing it at 00:30 claims a day's burn that has not happened. The running total prices
