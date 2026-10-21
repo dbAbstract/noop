@@ -643,24 +643,30 @@ extension Repository {
                                  bmrKcal: expenditure.bmrKcal) != nil)
     }
 
-    /// Compute the day and bank the two derived figures, so history survives and the charts have a series.
+    /// Compute the day and bank its figures, so history survives and the charts have a series.
     ///
-    /// Only writes when a goal exists: a target with nothing to target is not a fact worth storing, and a
-    /// zero would read on a chart as "you were allowed nothing that day".
+    /// The burn (expenditure, activity, baseline source) is banked for everyone. The TARGET only when a goal
+    /// exists: a target with nothing to target is not a fact worth storing, and a zero would read on a chart
+    /// as "you were allowed nothing that day".
     @discardableResult
     func refreshDietDay(day: String? = nil, profile: ProfileStore) async -> DietDayEnergy {
         let dayKey = await dietDay(day)
         let energy = await dietDayEnergy(day: dayKey, profile: profile)
-        if let budget = energy.budgetKcal(), let store = await storeHandle() {
-            _ = try? await store.upsertMetricSeries([
-                MetricPoint(day: dayKey, key: DietStore.Keys.target, value: budget),
-                MetricPoint(day: dayKey, key: DietStore.Keys.expenditure, value: energy.expenditure.totalKcal),
-                MetricPoint(day: dayKey, key: DietStore.Keys.burnSource, value: energy.usesMeasuredBaseline ? 1 : 0),
-                // Written from the SAME assembly as the total above, so the two can never describe
-                // different days' activity.
-                MetricPoint(day: dayKey, key: DietStore.Keys.activity, value: energy.expenditure.activityKcal),
-            ], deviceId: DietStore.sourceId)
+        guard energy.expenditure.totalKcal > 0, let store = await storeHandle() else { return energy }
+        // The burn is banked with or without a goal: it is the day's expenditure whether or not anyone is
+        // dieting, and the history it builds is what the Calories detail and the measured-burn estimate read.
+        // Only the TARGET needs a goal.
+        var points = [
+            MetricPoint(day: dayKey, key: DietStore.Keys.expenditure, value: energy.expenditure.totalKcal),
+            MetricPoint(day: dayKey, key: DietStore.Keys.burnSource, value: energy.usesMeasuredBaseline ? 1 : 0),
+            // Written from the SAME assembly as the total above, so the two can never describe
+            // different days' activity.
+            MetricPoint(day: dayKey, key: DietStore.Keys.activity, value: energy.expenditure.activityKcal),
+        ]
+        if let budget = energy.budgetKcal() {
+            points.append(MetricPoint(day: dayKey, key: DietStore.Keys.target, value: budget))
         }
+        _ = try? await store.upsertMetricSeries(points, deviceId: DietStore.sourceId)
         return energy
     }
 

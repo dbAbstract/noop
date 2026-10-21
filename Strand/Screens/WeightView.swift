@@ -79,7 +79,10 @@ struct WeightView: View {
                             .foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("A daily weigh-in is half of what NOOP needs to work out your real expenditure — the food log is the other half. Same time each morning is what makes the trend readable.")
+                        // The expenditure half of the reason only applies with food logging on.
+                        Text(UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey)
+                             ? String(localized: "A daily weigh-in is half of what NOOP needs to work out your real expenditure — the food log is the other half. Same time each morning is what makes the trend readable.")
+                             : String(localized: "Same time each morning is what makes the trend readable."))
                             .font(StrandFont.footnote)
                             .foregroundStyle(StrandPalette.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)

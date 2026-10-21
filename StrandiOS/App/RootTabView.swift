@@ -779,10 +779,10 @@ private enum QuickActionSheetMetrics {
     /// One row: 38pt tile + 10pt vertical padding either side, plus the 8pt VStack spacing above it.
     static let rowHeight: CGFloat = 66
 
-    /// Food logging adds THREE rows — Log food (straight to the sheet), Open diet, and Log weight. The
-    /// weigh-in is the other half of the same calibration and rides the same switch.
+    /// Log weight is always a row; food logging adds TWO more — Log food (straight to the sheet) and Open
+    /// diet.
     static func height(foodEnabled: Bool) -> CGFloat {
-        baseHeight + (foodEnabled ? rowHeight * 3 : 0)
+        baseHeight + rowHeight + (foodEnabled ? rowHeight * 2 : 0)
     }
 }
 
@@ -830,11 +830,11 @@ private struct QuickActionSheet: View {
                     row("Log food", icon: "fork.knife", tint: StrandPalette.metricAmber) { onPick(.addFood) }
                     row("Open diet", icon: "chart.line.uptrend.xyaxis",
                         tint: StrandPalette.metricAmber) { onPick(.food) }
-                    // The weigh-in gets its own row rather than living inside the food log, where it was
-                    // obscure enough that the user never found it. It is the other half of the same
-                    // calibration and is skipped far more often, so it needs the shorter path.
-                    row("Log weight", icon: "scalemass", tint: StrandPalette.chargeColor) { onPick(.weight) }
                 }
+                // The weigh-in gets its own row rather than living inside the food log, where it was obscure
+                // enough that the user never found it. Outside the food block: weight is health data with or
+                // without food logging.
+                row("Log weight", icon: "scalemass", tint: StrandPalette.chargeColor) { onPick(.weight) }
                 row("Log journal", icon: "square.and.pencil", tint: StrandPalette.accent) { onPick(.journal) }
                 row("Breathe", icon: "wind", tint: StrandPalette.restColor) { onPick(.breathe) }
             }
