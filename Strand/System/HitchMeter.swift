@@ -118,6 +118,9 @@ final class HitchMeter {
         guard let scenario = active, lastTimestamp > 0 else { return }
         let frame = max(link.targetTimestamp - link.timestamp, 1.0 / 240)
         let elapsed = link.timestamp - lastTimestamp
+        // A gap this long is the app in the background or the screen locked (the display link stops), not
+        // a frame the screen failed to draw. The first export counted one as a 53-second hitch.
+        guard elapsed < 0.5 else { return }
         var s = stats[scenario] ?? Stats()
         s.frames += 1
         s.seconds += elapsed
