@@ -285,7 +285,7 @@ struct SettingsView: View {
             "recoveryCard": ["Recovery Charge Baseline Recalibrate Scoring", "Recovery", "Charge", "Baseline", "Recalibrate", "Scoring"],
             "hrvCard": ["HRV Continuous HRV capture Overnight only HRV window RR intervals", "HRV", "Continuous", "HRV", "capture", "Overnight", "only", "HRV", "window", "RR", "intervals"],
             "testCentreCard": ["Test Centre Diagnostics Debug Logs Troubleshooting", "Test", "Centre", "Diagnostics", "Debug", "Logs", "Troubleshooting"],
-            "experimentalCard": ["Experimental Sleep staging Live sessions Raw sensor diagnostics Puffin Oura Oxygen SpO2", "Experimental", "Sleep", "staging", "Live", "sessions", "Raw", "sensor", "diagnostics", "Puffin", "Oura", "Oxygen", "SpO2"],
+            "experimentalCard": ["Experimental Sleep staging Live sessions Raw sensor diagnostics Puffin Oura Oxygen SpO2 Liquid Today Sticky header", "Experimental", "Sleep", "staging", "Live", "sessions", "Raw", "sensor", "diagnostics", "Puffin", "Oura", "Oxygen", "SpO2", "Liquid", "Today", "Sticky", "header"],
             "backupCard": ["Backup Restore Export Import Files", "Backup", "Restore", "Export", "Import", "Files"],
             "aboutCard": ["About Version Update Help Apple Watch Privacy License", "About", "Version", "Update", "Help", "Apple", "Watch", "Privacy", "License"],
         ]

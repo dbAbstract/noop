@@ -15,10 +15,14 @@ public struct NoopTopScrim: View {
     public var fadeExtent: CGFloat
     /// The whole scrim's strength, 0…1. Lets a caller fade it in as content scrolls under.
     public var strength: Double
+    /// Liquid Glass instead of the plain material, where the OS has it (iOS 26). Everywhere else this is
+    /// the same blur-and-darken as without it.
+    public var glass: Bool
 
-    public init(fadeExtent: CGFloat = 32, strength: Double = 1) {
+    public init(fadeExtent: CGFloat = 32, strength: Double = 1, glass: Bool = false) {
         self.fadeExtent = fadeExtent
         self.strength = strength
+        self.glass = glass
     }
 
     public var body: some View {
@@ -26,9 +30,7 @@ public struct NoopTopScrim: View {
             let height = geo.size.height + fadeExtent
             // Where the chrome ends inside the extended frame: opaque above it, fading below it.
             let solid = height > 0 ? geo.size.height / height : 1
-            Rectangle().fill(.ultraThinMaterial)
-                .overlay(StrandPalette.chatScrim)
-                .environment(\.colorScheme, .dark)
+            surface
                 .frame(height: height)
                 .mask(LinearGradient(stops: [.init(color: .black, location: 0),
                                              .init(color: .black, location: solid * 0.7),
@@ -38,5 +40,27 @@ public struct NoopTopScrim: View {
         .opacity(strength)
         .ignoresSafeArea(edges: .top)
         .allowsHitTesting(false)
+    }
+
+    /// Blur plus a darkening layer. Glass carries its own tint, so it takes a lighter one.
+    @ViewBuilder private var surface: some View {
+        #if os(iOS)
+        if glass, #available(iOS 26.0, *) {
+            Rectangle().fill(.clear)
+                .glassEffect(.regular, in: Rectangle())
+                .overlay(StrandPalette.chatScrim.opacity(0.5))
+                .environment(\.colorScheme, .dark)
+        } else {
+            material
+        }
+        #else
+        material
+        #endif
+    }
+
+    private var material: some View {
+        Rectangle().fill(.ultraThinMaterial)
+            .overlay(StrandPalette.chatScrim)
+            .environment(\.colorScheme, .dark)
     }
 }

@@ -58,10 +58,12 @@ struct LiquidTodayView: View {
     /// Experimental · Liquid Today.
     @AppStorage(Self.stickyHeaderKey) private var stickyHeader = false
     static let stickyHeaderKey = "noop.liquidTodayStickyHeader"
-    /// How strongly the pinned header's scrim shows, 0…1, in quarter steps: clear at rest, so the sky reads
-    /// as before, and full once content is scrolling under the title. Quantised so a scroll only
-    /// re-renders the screen four times, not on every frame.
-    @State private var stickyScrim: Double = 0
+    /// Scroll-linked compaction of the pinned header. A class held in `@State` and NOT observed here: it
+    /// changes every frame while scrolling, and only `StickyHeaderReader` re-renders for it — the rest of
+    /// this (large) screen does not.
+    @State private var sticky = StickyHeaderState()
+    /// Height of the full pinned header, measured at rest; the scroll content reserves this much for it.
+    @State private var stickyExpandedHeight: CGFloat = 76
     /// Today's hydration total + goal (ml), resolved in `load()`. nil → the card shows "—".
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
@@ -401,6 +403,10 @@ struct LiquidTodayView: View {
                         switch section {
                         case .hero:
                             heroCard
+                                .background(GeometryReader { g in
+                                    Color.clear.preference(key: StickyHeroTopKey.self,
+                                                           value: g.frame(in: .named(Self.pullSpace)).minY)
+                                })
                             if chargeLegacyRRGap { ChargeLegacyRRGapNote() }
                         case .diet: DietBudgetCard(overlineHeader: true)
                         case .weight: WeightTodayCard()
@@ -436,9 +442,7 @@ struct LiquidTodayView: View {
                     Color.clear.frame(height: 90) // floating tab-bar clearance
                 }
                 .padding(.horizontal, NoopMetrics.screenHPadding)
-                // Sit the title lower into the sky, not jammed under the status bar. With the sticky header
-                // the title is in the inset above, so the scroll content only needs a small gap.
-                .padding(.top, stickyHeader ? 6 : 30)
+                .padding(.top, 30) // sit the title lower into the sky, not jammed under the status bar
             }
             #if os(macOS)
             // Keep the phone-shaped column readable + centred on the wide mac detail pane. The sky is a
@@ -459,19 +463,36 @@ struct LiquidTodayView: View {
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         #endif
         .onPreferenceChange(PullOffsetKey.self) { handlePull($0) }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .onPreferenceChange(StickyHeroTopKey.self) { top in
+            // Where the Charge/Effort/Rest card sits at rest, less the compact bar: the scroll over which
+            // the header compacts, so it is compact exactly as the card reaches it.
+            sticky.heroTop(top, compactBarBottom: 4 + NoopMetrics.compactControlSize * 0.9 + 8)
+        }
+        .overlay(alignment: .top) {
             if stickyHeader {
-                headerRow
-                    .padding(.horizontal, NoopMetrics.screenHPadding)
-                    .padding(.top, 6)
-                    .padding(.bottom, 10)
-                    #if os(macOS)
-                    .frame(maxWidth: 680)
-                    .frame(maxWidth: .infinity)
-                    #endif
-                    // Clear over the sky at rest; blurs and darkens as content scrolls under the title.
-                    .background { NoopTopScrim(strength: stickyScrim) }
-                    .animation(.easeOut(duration: 0.18), value: stickyScrim)
+                StickyHeaderReader(state: sticky) { p in
+                    headerRow(progress: p)
+                        .background(GeometryReader { g in
+                            // Measured only at rest: that is the space the scroll content keeps for it.
+                            Color.clear.preference(key: StickyHeaderHeightKey.self, value: p == 0 ? g.size.height : 0)
+                        })
+                        .padding(.horizontal, NoopMetrics.screenHPadding)
+                        // From where the title sits in the sky (30, as the scroll content's top padding) up
+                        // to a slim margin under the status bar.
+                        .padding(.top, 30 - 26 * p)
+                        .padding(.bottom, 8)
+                        #if os(macOS)
+                        .frame(maxWidth: 680)
+                        .frame(maxWidth: .infinity)
+                        #endif
+                        // Clear over the sky at rest; liquid glass that fades out below the bar as content
+                        // scrolls under it.
+                        .background { NoopTopScrim(strength: Double(p), glass: true) }
+                }
+                .onPreferenceChange(StickyHeaderHeightKey.self) { h in
+                    guard h > 0, abs(h - stickyExpandedHeight) > 0.5 else { return }
+                    stickyExpandedHeight = h
+                }
             }
         }
         // The sky is a FIXED full-bleed backdrop drawn behind the scroll content, edge-to-edge under the
@@ -590,11 +611,7 @@ struct LiquidTodayView: View {
     /// Arm the refresh once the pull passes the threshold; FIRE it when the finger releases (the pull
     /// springs back toward zero). Guarded so it can't double-fire or re-trigger mid-refresh.
     private func handlePull(_ y: CGFloat) {
-        if stickyHeader {
-            // Scrolled distance is the negative offset; the scrim is full after 48 pt of content under it.
-            let next = (min(1, max(0, -y) / 48) * 4).rounded() / 4
-            if next != stickyScrim { stickyScrim = next }
-        }
+        if stickyHeader { sticky.scrolled(to: max(0, -y)) }
         let nextPullY = max(0, y)
         // Normal upward scrolling keeps reporting negative offsets. Avoid invalidating the whole
         // dashboard for every such frame when the visible pull indicator is already at zero.
@@ -635,7 +652,13 @@ struct LiquidTodayView: View {
     private var scene: some View {
         VStack(alignment: .leading, spacing: 0) {
             // With the sticky header on, the row is drawn pinned above the scroll view instead (see `body`).
-            if !stickyHeader { headerRow }
+            if !stickyHeader {
+                headerRow()
+            } else {
+                // The pinned header is drawn over the scroll view; this keeps its place so the screen at rest
+                // is laid out exactly as with the experiment off.
+                Color.clear.frame(height: stickyExpandedHeight)
+            }
             // Subtle NOOP wordmark in the sky between header and hero. Perfectly centred (a letter row has
             // no trailing tracking gap the way `Text(...).tracking()` does), with a tap easter egg.
             // #today-layout: the hero + Start-session row moved OUT of the scene into the reorderable
@@ -648,8 +671,12 @@ struct LiquidTodayView: View {
     }
 
     /// The day title and the trailing controls. Part of the scrolling sky normally; pinned over the scroll
-    /// view, on a fading scrim, when the sticky-header experiment is on.
-    private var headerRow: some View {
+    /// view when the sticky-header experiment is on, where it compacts as content scrolls under it.
+    ///
+    /// `progress` 0 is the full header — exactly what the flag-off screen draws. Towards 1 the big title fades
+    /// and folds away by the halfway point, the weekday and date lines give way to one short line, and the
+    /// controls shrink slightly: 1 is the compact bar, reached as the Charge/Effort/Rest card meets it.
+    private func headerRow(progress p: CGFloat = 0) -> some View {
         ZStack(alignment: .topTrailing) {
             Button { showDayPicker = true } label: {
                 VStack(alignment: .leading, spacing: 2) {
@@ -657,22 +684,39 @@ struct LiquidTodayView: View {
                         .font(StrandFont.rounded(28))
                         .foregroundStyle(StrandPalette.textPrimary)
                         .shadow(color: .black.opacity(0.4), radius: 10, y: 1)
+                        .opacity(Double(max(0, 1 - p * 2)))
+                        .collapsingHeight(min(1, p * 2))
                     // Weekday and date on separate lines. One line had to hold "Wednesday, 1 October"
                     // AND any trailing chip, inside a width already reduced by the header controls'
                     // fade reserve — so the chip was the first thing clipped. Two short lines fit
                     // where one long one could not.
-                    if let weekdayLine {
-                        Text(weekdayLine)
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textSecondary)
-                            .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
-                    }
-                    HStack(spacing: NoopMetrics.space2) {
-                        Text(dateOnlyLine)
-                            .font(StrandFont.caption)
-                            .foregroundStyle(StrandPalette.textSecondary)
-                            .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
-                        DevBuildBadge()
+                    ZStack(alignment: .topLeading) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let weekdayLine {
+                                Text(weekdayLine)
+                                    .font(StrandFont.caption)
+                                    .foregroundStyle(StrandPalette.textSecondary)
+                                    .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                            }
+                            HStack(spacing: NoopMetrics.space2) {
+                                Text(dateOnlyLine)
+                                    .font(StrandFont.caption)
+                                    .foregroundStyle(StrandPalette.textSecondary)
+                                    .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                                DevBuildBadge()
+                            }
+                        }
+                        .opacity(Double(1 - p))
+                        .collapsingHeight(p)
+                        // The compact bar's one line. Absent at rest, so progress 0 is the full header exactly.
+                        if p > 0 {
+                            Text(compactDateLine)
+                                .font(StrandFont.subhead)
+                                .foregroundStyle(StrandPalette.textPrimary)
+                                .lineLimit(1)
+                                .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                                .opacity(Double(p))
+                        }
                     }
                 }
                 .contentShape(Rectangle())
@@ -731,6 +775,7 @@ struct LiquidTodayView: View {
                 .nativeLiquidGlassHeaderButton()
                 .accessibilityLabel("Customize Today")
             }
+            .scaleEffect(1 - 0.1 * p, anchor: .topTrailing)
             .background(
                 GeometryReader { proxy in
                     Color.clear.preference(
@@ -2377,6 +2422,12 @@ struct LiquidTodayView: View {
     ///
     /// #1013: a locale-aware field template rather than a fixed "d MMMM" pattern, so both the month names
     /// and the field ORDER follow the user's locale instead of being forced to English order.
+    /// The compact sticky header's single line: "Wed, 21 Oct", in the user's locale and field order.
+    private var compactDateLine: String {
+        selectedLogicalDay.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)
+            .locale(AppLanguage.activeLocale))
+    }
+
     private var dateOnlyLine: String {
         selectedLogicalDay.formatted(.dateTime.day().month(.wide).locale(AppLanguage.activeLocale))
     }
@@ -2409,6 +2460,71 @@ private struct LiquidHeartRateCardFrameKey: PreferenceKey {
 }
 
 /// Carries the Today scroll's top overscroll offset up to the view for the custom liquid pull-to-refresh.
+/// The sticky header's compaction, 0 (full) … 1 (compact), from the scroll offset. A reference type so the
+/// Today screen can write it every frame without invalidating its own body; `StickyHeaderReader` observes it.
+final class StickyHeaderState: ObservableObject {
+    @Published private(set) var progress: CGFloat = 0
+    /// Scroll over which the header compacts. Seeded, then measured from the hero card at rest.
+    private var travel: CGFloat = 120
+    private var lastScrolled: CGFloat = 0
+
+    func scrolled(to distance: CGFloat) {
+        lastScrolled = distance
+        let next = min(1, distance / max(travel, 1))
+        // Sub-pixel churn is not worth a re-render; the ends are always written so it settles exactly.
+        if abs(next - progress) >= 0.004 || (next == 0 && progress != 0) || (next == 1 && progress != 1) {
+            progress = next
+        }
+    }
+
+    /// Record the hero card's top while the screen is at rest (mid-scroll readings would move the target).
+    func heroTop(_ top: CGFloat, compactBarBottom: CGFloat) {
+        guard lastScrolled < 0.5 else { return }
+        travel = max(40, top - compactBarBottom)
+    }
+}
+
+/// Re-renders only its content when the sticky header's progress changes.
+private struct StickyHeaderReader<Content: View>: View {
+    @ObservedObject var state: StickyHeaderState
+    let content: (CGFloat) -> Content
+    var body: some View { content(state.progress) }
+}
+
+private struct StickyHeaderHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct StickyHeroTopKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Shrink a view's height towards zero from the top, keeping its natural height as the start. `fraction`
+/// 0 leaves it untouched (unclipped, so shadows still spill); 1 folds it away.
+private struct CollapsingHeight: ViewModifier {
+    let fraction: CGFloat
+    @State private var natural: CGFloat?
+
+    func body(content: Content) -> some View {
+        content
+            .fixedSize(horizontal: false, vertical: true)
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { natural = g.size.height }
+                    .onChangeCompat(of: g.size.height) { natural = $0 }
+            })
+            .frame(height: fraction > 0 ? natural.map { $0 * (1 - fraction) } : nil, alignment: .top)
+            // Inset outwards at rest so a text shadow is not cut; tight once folding.
+            .clipShape(Rectangle().inset(by: fraction > 0 ? 0 : -24))
+    }
+}
+
+private extension View {
+    func collapsingHeight(_ fraction: CGFloat) -> some View { modifier(CollapsingHeight(fraction: fraction)) }
+}
+
 private struct PullOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
