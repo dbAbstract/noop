@@ -76,6 +76,20 @@ struct ChatMessage: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A reply while it streams: which turn it belongs to and its text so far.
+///
+/// Kept out of `AICoachEngine.messages` until the reply is final. Publishing `messages` on every chunk
+/// re-evaluated the whole Coach screen ten times a second — header, transcript, cards and composer — when
+/// only one bubble was changing. The streaming bubble observes this alone.
+@MainActor
+final class StreamingReply: ObservableObject {
+    @Published private(set) var messageId: UUID?
+    @Published var text = ""
+
+    func begin(id: UUID) { messageId = id; text = "" }
+    func end() { messageId = nil; text = "" }
+}
+
 // MARK: - Secure key storage (Keychain)
 
 /// Keychain Services wrapper for the user's API key. Uses a generic-password item under a fixed
@@ -217,6 +231,9 @@ final class AICoachEngine: ObservableObject {
     private var initialBriefTask: Task<Void, Never>?
     private var persistenceTask: Task<Void, Never>?
     private(set) var lastRequestDiagnostics: [String: String] = [:]
+    /// The reply arriving right now. Deliberately not `@Published` on the engine: only the streaming bubble
+    /// observes it, so a chunk every 80 ms redraws that bubble instead of the whole Coach screen.
+    let streaming = StreamingReply()
 
     @Published var sending = false
     private var preparingSend = false
@@ -1147,11 +1164,14 @@ final class AICoachEngine: ObservableObject {
         pendingChartImage = nil
 
         // K1: Stream the reply. Append a placeholder assistant message, then mutate its text as
-        // chunks arrive by replacing the last element in `messages`. The transcript re-renders on
-        // each update (SwiftUI binds to `messages`). On error mid-stream, keep the partial text and
-        // append a "(stream interrupted)" marker — never a crash.
+        // chunks arrive into `streaming`, which only the streaming bubble observes; `messages` changes once,
+        // when the reply is final. On error mid-stream, keep the partial text and append a
+        // "(stream interrupted)" marker — never a crash.
         let placeholder = ChatMessage(role: .assistant, text: "")
         appendMessage(placeholder)
+        // Deltas go to `streaming`, not to `messages`, until the reply is final (see `StreamingReply`).
+        streaming.begin(id: placeholder.id)
+        defer { streaming.end() }
         var accumulated = ""
         var lastStreamUpdate = ContinuousClock.now
 
@@ -1175,16 +1195,10 @@ final class AICoachEngine: ObservableObject {
                     let now = ContinuousClock.now
                     guard lastStreamUpdate.duration(to: now) >= .milliseconds(80) else { return }
                     lastStreamUpdate = now
-                    // Replace the last message's text with the accumulated stream so far. Routed through
-                    // `displayText` so a proposal block is hidden WHILE IT ARRIVES — otherwise the user
-                    // watches raw JSON type itself across the screen at the exact moment the feature works.
-                    if let lastIdx = self.messages.indices.last,
-                       self.messages[lastIdx].role == .assistant {
-                        self.messages[lastIdx] = ChatMessage(
-                            id: placeholder.id, role: .assistant,
-                            text: CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
-                        )
-                    }
+                    // The accumulated stream so far, routed through `displayText` so a proposal block is hidden
+                    // WHILE IT ARRIVES — otherwise the user watches raw JSON type itself across the screen at
+                    // the exact moment the feature works.
+                    self.streaming.text = CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
                 }
                 }
                 guard lookupRounds < Self.maxLookupRounds else { break }
@@ -1195,11 +1209,8 @@ final class AICoachEngine: ObservableObject {
                 let toOpen = searchAllowed ? FoodActionParse.documentsToOpen(fromReply: accumulated) : []
                 guard !queries.isEmpty || !topics.isEmpty || !toOpen.isEmpty else { break }
                 lookupRounds += 1
-                if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
-                    messages[lastIdx] = ChatMessage(id: placeholder.id, role: .assistant,
-                                                    text: queries.isEmpty && toOpen.isEmpty ? String(localized: "Looking that up…")
-                                                        : String(localized: "Searching your nutrition PDFs…"))
-                }
+                streaming.text = queries.isEmpty && toOpen.isEmpty ? String(localized: "Looking that up…")
+                    : String(localized: "Searching your nutrition PDFs…")
                 let found = await lookupTurn(queries: queries, topics: topics, documents: toOpen,
                                              final: lookupRounds == Self.maxLookupRounds)
                 searchedRowKeys += found.keys.filter { !searchedRowKeys.contains($0) }
@@ -1343,6 +1354,8 @@ final class AICoachEngine: ObservableObject {
         let prefix = "Today's brief\n\n"
         let placeholder = ChatMessage(role: .assistant, text: prefix)
         appendMessage(placeholder)
+        streaming.begin(id: placeholder.id)
+        defer { streaming.end() }
         var accumulated = ""
         var lastStreamUpdate = ContinuousClock.now
 
@@ -1354,15 +1367,9 @@ final class AICoachEngine: ObservableObject {
                 let now = ContinuousClock.now
                 guard lastStreamUpdate.duration(to: now) >= .milliseconds(80) else { return }
                 lastStreamUpdate = now
-                if let lastIdx = self.messages.indices.last,
-                   self.messages[lastIdx].role == .assistant {
-                    self.messages[lastIdx] = ChatMessage(
-                        // Same hide-while-streaming treatment the chat path gets, so a block the model
-                        // emits anyway never types itself out in front of the user.
-                        id: placeholder.id, role: .assistant,
-                        text: prefix + CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
-                    )
-                }
+                // Same hide-while-streaming treatment the chat path gets, so a block the model emits anyway
+                // never types itself out in front of the user.
+                self.streaming.text = prefix + CoachDietAction.displayText(FoodActionParse.displayText(accumulated))
             }
             let clean = CoachDietAction.strippingAction(from: FoodActionParse.strippingAction(from: accumulated))
                 .trimmingCharacters(in: .whitespacesAndNewlines)

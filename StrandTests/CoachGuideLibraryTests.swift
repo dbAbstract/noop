@@ -231,5 +231,7 @@ final class CoachGuideLibraryTests: XCTestCase {
         XCTAssertTrue(CoachGuideURLProtocol.bodies[1].contains("No guide for: no-such-topic"))
         XCTAssertEqual(engine.messages.last?.text, "Your weeks read uncertain because every day was tagged rough.")
         XCTAssertEqual(engine.messages.count, 2)
+        XCTAssertNil(engine.streaming.messageId, "the stream hands over to messages and clears")
+        XCTAssertEqual(engine.streaming.text, "")
     }
 }

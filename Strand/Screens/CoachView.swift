@@ -18,6 +18,31 @@ private struct CoachMarkdown: View, Equatable {
     }
 }
 
+/// The assistant bubble while its reply streams in. Observes only `StreamingReply`, so the Coach screen is not
+/// re-evaluated for every chunk; drawn exactly like a finished assistant bubble (same Markdown theme, inset
+/// and width), and replaced by the finished one when the reply lands. No context menu until then.
+private struct StreamingBubble: View {
+    @ObservedObject var reply: StreamingReply
+
+    var body: some View {
+        let text = reply.text
+        let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let id = reply.messageId, !visible.isEmpty, visible != "Today's brief" {
+            HStack {
+                CoachMarkdown(text: text, messageId: id)
+                    .equatable()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, NoopMetrics.chatTextInset)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: 620, alignment: .leading)
+                Spacer(minLength: 8)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Coach is replying: \(text)")
+        }
+    }
+}
+
 /// Reduce scroll geometry to the one fact the UI needs before publishing a preference.
 private struct CoachEndSentinelKey: PreferenceKey {
     static var defaultValue = true
@@ -683,7 +708,11 @@ struct CoachView: View {
                                         //
                                         // Also catches a reply that is nothing but an action block mid-stream:
                                         // `displayText` hides the JSON, so the bubble would be empty for real.
-                                        if !isEmptyPlaceholder(message) {
+                                        if message.id == coach.streaming.messageId, isEmptyPlaceholder(message) {
+                                            // The reply arriving now: its own view observes the stream, so a
+                                            // chunk redraws this bubble and nothing else on the screen.
+                                            StreamingBubble(reply: coach.streaming)
+                                        } else if !isEmptyPlaceholder(message) {
                                             bubble(message)
                                         }
                                         // The proposal card rides UNDER its own turn rather than inside the
