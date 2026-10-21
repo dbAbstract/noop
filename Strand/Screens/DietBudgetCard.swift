@@ -36,6 +36,26 @@ struct DietBudgetCard: View {
         energy?.budgetKcal().map { $0 - consumed }
     }
 
+    /// Label the card with the Liquid Today overline ("DIET", like KEY METRICS and WORKOUTS) rather than the
+    /// classic dashboard's section title. The card draws its own label because it renders nothing at all
+    /// with food logging off, and a label drawn by the host would then sit over an empty slot.
+    private let overlineHeader: Bool
+
+    init(overlineHeader: Bool = false) {
+        self.overlineHeader = overlineHeader
+    }
+
+    @ViewBuilder private var header: some View {
+        if overlineHeader {
+            Text("DIET").font(StrandFont.overline).tracking(1.6).foregroundStyle(StrandPalette.textTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 2)
+                .padding(.top, 4)
+        } else {
+            SectionHeader("Diet")
+        }
+    }
+
     var body: some View {
         Group {
             if foodEnabled {
@@ -60,8 +80,8 @@ struct DietBudgetCard: View {
     // MARK: - No goal yet
 
     private var setGoalPrompt: some View {
-        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Diet")
+        VStack(alignment: .leading, spacing: overlineHeader ? 8 : NoopMetrics.gap) {
+            header
             NoopCard {
                 VStack(alignment: .leading, spacing: NoopMetrics.space3) {
                     Text("Set a goal weight and a timeline, and NOOP works out what to eat each day from what you actually burn.")
@@ -81,8 +101,8 @@ struct DietBudgetCard: View {
     // MARK: - The budget
 
     private var budgetCard: some View {
-        VStack(alignment: .leading, spacing: NoopMetrics.gap) {
-            SectionHeader("Diet")
+        VStack(alignment: .leading, spacing: overlineHeader ? 8 : NoopMetrics.gap) {
+            header
             NavigationLink(value: TabRoute.diet) {
                 NoopCard(tint: tint) {
                     VStack(alignment: .leading, spacing: NoopMetrics.space3) {

@@ -606,12 +606,9 @@ struct CoachView: View {
                 .padding(.horizontal, NoopMetrics.screenHPadding)
                 .padding(.top, 4)
                 .padding(.bottom, 10)
-                .background {
-                    Rectangle().fill(.ultraThinMaterial)
-                        .overlay(StrandPalette.chatScrim)
-                        .environment(\.colorScheme, .dark)
-                        .ignoresSafeArea(edges: .top)
-                }
+                // Blurred and darkened behind the header, fading out below it rather than ending in an edge:
+                // with an edge it read as a translucent toolbar instead of the chat dimming under the header.
+                .background { NoopTopScrim() }
         }
         // On the inset chain rather than inside the content, so the keyboard lifts the composer AND
         // shortens the transcript together. Inside the scroll content, a growing field slides under the keyboard —
