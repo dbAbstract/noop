@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1065",
-          "buildVersion": "1065",
+          "version": "12.1.0.1067",
+          "buildVersion": "1067",
           "date": "2026-10-21",
-          "localizedDescription": "Keep diet out of Coach when food logging is off",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1065.ipa",
-          "size": 17305605,
+          "localizedDescription": "Polish Today and Coach chrome: DIET overline, edgeless scrim, sticky header",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1067.ipa",
+          "size": 17319164,
           "minOSVersion": "17.0"
         }
       ]
