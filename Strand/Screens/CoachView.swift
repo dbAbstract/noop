@@ -598,6 +598,9 @@ struct CoachView: View {
     private var chatLayout: some View {
         // Insets keep the fixed chrome outside the transcript's scrollable area.
         transcript
+        // Dropped-frame counts by scenario, for the Coach export (`HitchMeter`).
+        .onAppear { HitchMeter.shared.screenAppeared() }
+        .onDisappear { HitchMeter.shared.screenDisappeared() }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: NoopMetrics.space2) {
                 connectedHeader
@@ -812,6 +815,7 @@ struct CoachView: View {
                         // taller viewport and stops short.
                         .onChangeCompat(of: composerFocused) { focused in
                             guard focused else { return }
+                            HitchMeter.shared.keyboardRising()
                             Task { @MainActor in
                                 await Task.yield()
                                 scrollToEnd(proxy)
@@ -823,7 +827,8 @@ struct CoachView: View {
                         // A yield first: the typing indicator is inserted in the same update that flips
                         // `sending`, so scrolling immediately targets a row that does not exist yet and lands
                         // short — leaving "thinking" under the keyboard, which is what the user saw.
-                        .onChangeCompat(of: coach.sending) { _ in
+                        .onChangeCompat(of: coach.sending) { sending in
+                            HitchMeter.shared.streaming(sending)
                             Task { @MainActor in
                                 await Task.yield()
                                 scrollToEnd(proxy)
