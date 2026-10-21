@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1068",
-          "buildVersion": "1068",
+          "version": "12.1.0.1069",
+          "buildVersion": "1069",
           "date": "2026-10-21",
-          "localizedDescription": "Compact the sticky Today header as content scrolls under it",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1068.ipa",
-          "size": 17330754,
+          "localizedDescription": "Measure dropped frames on the Coach screen, carried in the export",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1069.ipa",
+          "size": 17337970,
           "minOSVersion": "17.0"
         }
       ]
