@@ -2,6 +2,7 @@
 topic: macro-targets
 title: Protein, fat and carbohydrate targets
 keywords: macros, protein, protein target, fat, carbs, carbohydrate, grams, g/kg
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/MacroTargets.swift
 ---
 The day's calorie budget is divided into three parts:

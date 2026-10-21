@@ -2,6 +2,7 @@
 topic: diet-goal
 title: Diet goals, deficits and safe pace
 keywords: goal, target weight, timeline, deficit, how fast, lose weight, pace, safe, aggressive, bmi
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/DietGoal.swift
 ---
 A goal is a target weight and a timeline in whole months. The daily deficit follows from it:

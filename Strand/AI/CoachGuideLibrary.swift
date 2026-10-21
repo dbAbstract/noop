@@ -22,7 +22,8 @@ enum CoachGuideLibrary {
 
     /// The protocol and topic index appended to the interactive system prompt. Static text, so it does not
     /// vary between turns, and it carries no user data, so it is sent with or without data consent.
-    static var promptSection: String {
+    static func promptSection(includingDiet: Bool) -> String {
+        let guides = offered(includingDiet: includingDiet)
         guard !guides.isEmpty else { return "" }
         return """
         HOW NOOP WORKS. NOOP ships guides explaining how each of its numbers is computed and what it can and \
@@ -37,9 +38,14 @@ enum CoachGuideLibrary {
     }
 
     /// The guides a message asks about, for the context, or "" when it asks about none.
-    static func contextBlock(for message: String) -> String {
+    static func contextBlock(for message: String, includingDiet: Bool) -> String {
         guard CoachGuide.asksForExplanation(message) else { return "" }
-        return block(CoachGuide.matching(message, in: guides))
+        return block(CoachGuide.matching(message, in: offered(includingDiet: includingDiet)))
+    }
+
+    /// The guides Coach is offered: all of them, or without the diet ones while food logging is off.
+    static func offered(includingDiet: Bool) -> [CoachGuide] {
+        includingDiet ? guides : guides.filter { !$0.diet }
     }
 
     /// Guides as the context and the `read_guide` reply list them.

@@ -2,6 +2,7 @@
 topic: rough-estimates
 title: Rough-estimate tags on food
 keywords: rough, rough guess, rough estimate, rough tag, eyeballed
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/AdaptiveExpenditureEngine.swift, Packages/StrandAnalytics/Sources/StrandAnalytics/WeeklyDietReview.swift
 ---
 A rough tag says the AMOUNT eaten is uncertain (an eyeballed portion, a restaurant meal, a recalled

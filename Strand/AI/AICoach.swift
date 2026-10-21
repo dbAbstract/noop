@@ -338,7 +338,16 @@ final class AICoachEngine: ObservableObject {
     Format replies in simple Markdown, chat-sized: short paragraphs, **bold** for key numbers, \
     bullet or numbered lists for plans, ### headings only when structure genuinely helps, and a \
     small table only for a week-ahead plan. No code blocks.
+    """
 
+    /// How the coach logs food and weigh-ins, the actions it may propose, and how it reads the diet context.
+    ///
+    /// Not part of `defaultSystemPrompt` (the persona the user can edit) because it is only true when food
+    /// logging is on: `interactiveSystemPrompt` appends it then, and leaves it out for someone who never logs
+    /// food, who would otherwise pay for ~15,000 characters of instructions about a feature they do not use
+    /// on every message. Appended only when the prompt does not already teach it (`carriesFoodProtocol`), so
+    /// a custom prompt copied from the old default (which included this text) is not given it twice.
+    static let foodProtocol = """
     LOGGING FOOD AND WEIGHT. When food context appears above, the user logs by TELLING YOU, and you are \
     the main way they do it. Take the work off them: read what they ate, work out the macros, and hand back \
     something to confirm. End the reply with one action block and nothing after it:
@@ -518,28 +527,29 @@ final class AICoachEngine: ObservableObject {
 
     /// Planning protocol travels with interactive requests without rewriting the user's prompt editor.
     var interactiveSystemPrompt: String {
-        let base = systemPrompt
-        let withDiet = base.contains(CoachDietAction.sentinel) ? base : base + "\n\n" + Self.dietProtocol
-        let guide = CoachGuideLibrary.promptSection
-        return guide.isEmpty ? withDiet : withDiet + "\n\n" + guide
+        var prompt = systemPrompt
+        // Food and diet instructions only when food logging is on (see `foodProtocol`).
+        if Self.foodLoggingOn {
+            if !Self.carriesFoodProtocol(prompt) { prompt += "\n\n" + Self.foodProtocol }
+            if !prompt.contains(CoachDietAction.sentinel) { prompt += "\n\n" + Self.dietProtocol }
+        }
+        let guide = CoachGuideLibrary.promptSection(includingDiet: Self.foodLoggingOn)
+        if !guide.isEmpty, !prompt.contains("GUIDE TOPICS:") { prompt += "\n\n" + guide }
+        return prompt
     }
 
-    /// True when a CUSTOM prompt is stored that does not teach the food-logging protocol.
-    ///
-    /// The protocol lives in `defaultSystemPrompt`, and a stored override replaces that wholesale — so a
-    /// user who edited their prompt before this feature existed keeps a coach that will discuss food
-    /// cheerfully and never once propose logging any. The failure is completely silent from the outside:
-    /// the coach answers, the answer is sensible, and no card ever appears.
-    ///
-    /// Surfaced so the settings screen can say so, rather than leaving it to be deduced. Detected by the
-    /// sentinel rather than by comparing against the default, because a prompt that has been edited AND
-    /// carries the protocol is perfectly fine and must not be nagged about.
-    var customPromptMissesFoodProtocol: Bool {
-        let stored = UserDefaults.standard.string(forKey: Self.systemPromptKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let stored, !stored.isEmpty else { return false }
-        return !stored.contains(FoodActionParse.sentinel)
+    /// Whether a prompt already teaches food logging: the protocol's heading, or a food action it lists. Not
+    /// the bare sentinel, which the guide index's `read_guide` example also carries.
+    static func carriesFoodProtocol(_ prompt: String) -> Bool {
+        prompt.contains("LOGGING FOOD AND WEIGHT") || prompt.contains("\"action\": \"log\"")
     }
+
+    /// Whether food logging is switched on, read fresh like the prompt itself.
+    static var foodLoggingOn: Bool { UserDefaults.standard.bool(forKey: FoodLogStore.enabledKey) }
+
+    /// Always false now: the food protocol is appended by `interactiveSystemPrompt` whenever food logging is
+    /// on, so a custom prompt can no longer leave it out. Kept for the conversation export's field.
+    var customPromptMissesFoodProtocol: Bool { false }
 
     /// The user's stored prompt override, or the default when nothing custom is set. The UI binds its
     /// editor to this: writing persists the override; writing a blank string clears it (back to default).
@@ -1105,7 +1115,7 @@ final class AICoachEngine: ObservableObject {
         freshOpenDocumentIds = []
         let snapshot = dataConsent ? await buildFullContextSnapshot() : (text: noConsentNote, references: [:])
         var context = snapshot.text
-        let guideBlock = CoachGuideLibrary.contextBlock(for: trimmed)
+        let guideBlock = CoachGuideLibrary.contextBlock(for: trimmed, includingDiet: Self.foodLoggingOn)
         if !guideBlock.isEmpty { context += "\n\n" + guideBlock }
         let requestedWeek = CoachDietReviewHistory.requestedWeek(trimmed)
         var reviewedWeek: String?
@@ -1717,7 +1727,16 @@ final class AICoachEngine: ObservableObject {
     /// nil for the ordinary conversational turn, which is most of them.
     func resolveProposals(in reply: String,
                           recentFoods: [String: FoodDigestEntry]) async -> [FoodProposal] {
-        guard case .success(let requests) = FoodActionParse.actions(fromReply: reply) else { return [] }
+        guard case .success(let parsed) = FoodActionParse.actions(fromReply: reply) else { return [] }
+        // With food logging off the coach is not taught to log food, but a model can still emit an action;
+        // only a weigh-in or a played time (neither of which is food) may become a card then.
+        let requests = Self.foodLoggingOn ? parsed : parsed.filter {
+            switch $0.action {
+            case .weight, .workoutPlayedTime: return true
+            default: return false
+            }
+        }
+        guard !requests.isEmpty else { return [] }
         let library = await repo.foodLibrary()
         let recipeIds = await repo.recipeItemIds()
         // The user's own recent weight, which is the only thing that can tell a 160 kg measurement from a

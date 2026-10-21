@@ -2,6 +2,7 @@
 topic: nutrition-pdfs
 title: Restaurant nutrition PDFs
 keywords: pdf, nutrition pdf, menu, restaurant, document, row, kura, mcdonald
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/NutritionDocumentLookup.swift, Strand/Data/NutritionDocument.swift, docs/FORK_NUTRITION_DOCUMENTS.md
 ---
 The user can import a restaurant's nutrition PDF (Food → Nutrition PDFs). Nothing is extracted into the

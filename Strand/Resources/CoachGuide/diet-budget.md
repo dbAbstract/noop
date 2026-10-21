@@ -2,6 +2,7 @@
 topic: diet-budget
 title: The daily calorie budget and expenditure
 keywords: budget, calories left, kcal left, expenditure, tdee, burn, bmr, neat, steps, deficit today, how many calories, calorie target, maintenance
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/CalorieTarget.swift, Packages/StrandAnalytics/Sources/StrandAnalytics/StepNeat.swift, Strand/Data/DietExpenditure.swift, Packages/StrandAnalytics/Sources/StrandAnalytics/DietDayBoundary.swift
 ---
 The budget is what may be eaten today: today's expenditure minus the goal's daily deficit. It is never
