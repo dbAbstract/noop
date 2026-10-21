@@ -2,6 +2,7 @@
 topic: weekly-reports
 title: Weekly diet reports, balance and alignment
 keywords: weekly report, week review, balance, alignment, consistent, mismatch, uncertain, calories in, calories out
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/WeeklyDietReview.swift, Strand/Data/WeeklyDietReports.swift
 ---
 Each Monday–Sunday report sums calories in and estimated calories out for the days that have them;

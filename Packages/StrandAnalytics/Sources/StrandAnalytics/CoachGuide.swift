@@ -30,9 +30,13 @@ public struct CoachGuide: Equatable, Sendable {
     /// Repository-relative paths of the code the guide describes.
     public let sources: [String]
     public let body: String
+    /// The guide explains the diet feature (`diet: true` in the header), so it is offered only while food
+    /// logging is on.
+    public let diet: Bool
 
-    public init(topic: String, title: String, keywords: [String], sources: [String], body: String) {
+    public init(topic: String, title: String, keywords: [String], sources: [String], body: String, diet: Bool = false) {
         self.topic = topic; self.title = title; self.keywords = keywords; self.sources = sources; self.body = body
+        self.diet = diet
     }
 
     /// Read a guide file, or nil when it has no header or lacks a topic, title or body.
@@ -54,7 +58,7 @@ public struct CoachGuide: Equatable, Sendable {
         guard let topic = fields["topic"], !topic.isEmpty, let title = fields["title"], !title.isEmpty,
               !body.isEmpty else { return nil }
         return CoachGuide(topic: topic, title: title, keywords: list("keywords").map { $0.lowercased() },
-                          sources: list("sources"), body: body)
+                          sources: list("sources"), body: body, diet: fields["diet"]?.lowercased() == "true")
     }
 
     /// Whether a message asks how or why rather than reporting something: a question mark, or a question

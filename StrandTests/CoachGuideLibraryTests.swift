@@ -166,15 +166,29 @@ final class CoachGuideLibraryTests: XCTestCase {
 
     @MainActor
     func testOnlyAQuestionAboutATopicPutsItsGuideInTheContext() {
-        let asked = CoachGuideLibrary.contextBlock(for: "how is my charge calculated?")
+        let asked = CoachGuideLibrary.contextBlock(for: "how is my charge calculated?", includingDiet: true)
         XCTAssertTrue(asked.hasPrefix("HOW NOOP WORKS"))
         XCTAssertTrue(asked.contains("## charge:"))
-        XCTAssertEqual(CoachGuideLibrary.contextBlock(for: "had 2 eggs, 10g butter"), "")
-        XCTAssertEqual(CoachGuideLibrary.contextBlock(for: "what's up?"), "", "a question about no topic adds nothing")
-        let prompt = CoachGuideLibrary.promptSection
+        XCTAssertEqual(CoachGuideLibrary.contextBlock(for: "had 2 eggs, 10g butter", includingDiet: true), "")
+        XCTAssertEqual(CoachGuideLibrary.contextBlock(for: "what's up?", includingDiet: true), "",
+                       "a question about no topic adds nothing")
+        let prompt = CoachGuideLibrary.promptSection(includingDiet: true)
         XCTAssertTrue(prompt.contains("GUIDE TOPICS:\n- baselines: "))
         XCTAssertTrue(prompt.contains("\"action\": \"read_guide\""))
         XCTAssertTrue(AICoachEngine(repo: Repository(deviceId: "guide-prompt")).interactiveSystemPrompt.contains("GUIDE TOPICS:"))
+    }
+
+    /// With food logging off, Coach is not offered the diet guides: neither in the index nor for a question.
+    func testDietGuidesAreOfferedOnlyWithFoodLogging() {
+        let diet = Set(CoachGuideLibrary.guides.filter(\.diet).map(\.topic))
+        XCTAssertEqual(diet, ["diet-budget", "workout-credit", "macro-targets", "diet-goal", "measured-burn",
+                              "weekly-reports", "rough-estimates", "nutrition-pdfs"])
+        let off = CoachGuideLibrary.promptSection(includingDiet: false)
+        XCTAssertTrue(off.contains("- charge: "))
+        XCTAssertFalse(off.contains("- diet-budget: "))
+        XCTAssertEqual(CoachGuideLibrary.contextBlock(for: "why is my budget so low?", includingDiet: false), "")
+        XCTAssertTrue(CoachGuideLibrary.contextBlock(for: "why is my budget so low?", includingDiet: true)
+            .contains("## diet-budget:"))
     }
 
     /// The round trip: Coach asks for a guide instead of answering from general knowledge, the app sends the

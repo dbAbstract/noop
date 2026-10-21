@@ -2,6 +2,7 @@
 topic: measured-burn
 title: Measured burn and deficit recalibration
 keywords: measured burn, calibration, calibrated, adaptive, metabolism, real tdee, intake-derived, recalibrate, adjust deficit, true expenditure
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/AdaptiveExpenditureEngine.swift, Packages/StrandAnalytics/Sources/StrandAnalytics/CalorieTarget.swift, Strand/Data/DietTrend.swift
 ---
 NOOP can read the user's real average expenditure back out of what they logged and how their weight

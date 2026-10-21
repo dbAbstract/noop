@@ -2,6 +2,7 @@
 topic: workout-credit
 title: How workouts count in the diet budget
 keywords: workout calories, workout credit, recorded kcal, counted kcal, played time, bench, futsal, soccer, basketball, intermittent, burned
+diet: true
 sources: Packages/StrandAnalytics/Sources/StrandAnalytics/WorkoutBudgetCredit.swift, Packages/StrandAnalytics/Sources/StrandAnalytics/SportEnergy.swift, Strand/Data/DietExpenditure.swift
 ---
 A workout shows two numbers: what was RECORDED, and what the budget COUNTS. Counted is usually lower, for
