@@ -54,6 +54,14 @@ struct LiquidTodayView: View {
     /// Prefer the burn model's expenditure on the Calories tile. Default ON, for everyone — see
     /// `MetricCatalog.preferDietExpenditureKey`.
     @AppStorage(MetricCatalog.preferDietExpenditureKey) private var preferDietExpenditure = true
+    /// Experimental: pin the day title and controls above the scroll view (default OFF). Settings →
+    /// Experimental · Liquid Today.
+    @AppStorage(Self.stickyHeaderKey) private var stickyHeader = false
+    static let stickyHeaderKey = "noop.liquidTodayStickyHeader"
+    /// How strongly the pinned header's scrim shows, 0…1, in quarter steps: clear at rest, so the sky reads
+    /// as before, and full once content is scrolling under the title. Quantised so a scroll only
+    /// re-renders the screen four times, not on every frame.
+    @State private var stickyScrim: Double = 0
     /// Today's hydration total + goal (ml), resolved in `load()`. nil → the card shows "—".
     @State private var hydrationTotalML: Double?
     @State private var hydrationGoalML: Int?
@@ -394,7 +402,7 @@ struct LiquidTodayView: View {
                         case .hero:
                             heroCard
                             if chargeLegacyRRGap { ChargeLegacyRRGapNote() }
-                        case .diet: DietBudgetCard()
+                        case .diet: DietBudgetCard(overlineHeader: true)
                         case .weight: WeightTodayCard()
                         case .liveSession: if liveSessionsBeta { liveSessionStartRow }
                         case .synthesis: synthesisSection
@@ -428,7 +436,9 @@ struct LiquidTodayView: View {
                     Color.clear.frame(height: 90) // floating tab-bar clearance
                 }
                 .padding(.horizontal, NoopMetrics.screenHPadding)
-                .padding(.top, 30) // sit the title lower into the sky, not jammed under the status bar
+                // Sit the title lower into the sky, not jammed under the status bar. With the sticky header
+                // the title is in the inset above, so the scroll content only needs a small gap.
+                .padding(.top, stickyHeader ? 6 : 30)
             }
             #if os(macOS)
             // Keep the phone-shaped column readable + centred on the wide mac detail pane. The sky is a
@@ -449,6 +459,21 @@ struct LiquidTodayView: View {
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         #endif
         .onPreferenceChange(PullOffsetKey.self) { handlePull($0) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if stickyHeader {
+                headerRow
+                    .padding(.horizontal, NoopMetrics.screenHPadding)
+                    .padding(.top, 6)
+                    .padding(.bottom, 10)
+                    #if os(macOS)
+                    .frame(maxWidth: 680)
+                    .frame(maxWidth: .infinity)
+                    #endif
+                    // Clear over the sky at rest; blurs and darkens as content scrolls under the title.
+                    .background { NoopTopScrim(strength: stickyScrim) }
+                    .animation(.easeOut(duration: 0.18), value: stickyScrim)
+            }
+        }
         // The sky is a FIXED full-bleed backdrop drawn behind the scroll content, edge-to-edge under the
         // status bar. A ScrollView background does not scroll with the content, so pulling down never
         // moves the sky (the exact behaviour the scaffold uses on the classic Today).
@@ -565,6 +590,11 @@ struct LiquidTodayView: View {
     /// Arm the refresh once the pull passes the threshold; FIRE it when the finger releases (the pull
     /// springs back toward zero). Guarded so it can't double-fire or re-trigger mid-refresh.
     private func handlePull(_ y: CGFloat) {
+        if stickyHeader {
+            // Scrolled distance is the negative offset; the scrim is full after 48 pt of content under it.
+            let next = (min(1, max(0, -y) / 48) * 4).rounded() / 4
+            if next != stickyScrim { stickyScrim = next }
+        }
         let nextPullY = max(0, y)
         // Normal upward scrolling keeps reporting negative offsets. Avoid invalidating the whole
         // dashboard for every such frame when the visible pull indicator is already at zero.
@@ -604,102 +634,8 @@ struct LiquidTodayView: View {
 
     private var scene: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                Button { showDayPicker = true } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dayTitle)
-                            .font(StrandFont.rounded(28))
-                            .foregroundStyle(StrandPalette.textPrimary)
-                            .shadow(color: .black.opacity(0.4), radius: 10, y: 1)
-                        // Weekday and date on separate lines. One line had to hold "Wednesday, 1 October"
-                        // AND any trailing chip, inside a width already reduced by the header controls'
-                        // fade reserve — so the chip was the first thing clipped. Two short lines fit
-                        // where one long one could not.
-                        if let weekdayLine {
-                            Text(weekdayLine)
-                                .font(StrandFont.caption)
-                                .foregroundStyle(StrandPalette.textSecondary)
-                                .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
-                        }
-                        HStack(spacing: NoopMetrics.space2) {
-                            Text(dateOnlyLine)
-                                .font(StrandFont.caption)
-                                .foregroundStyle(StrandPalette.textSecondary)
-                                .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
-                            DevBuildBadge()
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(dayTitle). Tap to pick a day, swipe to change day.")
-                .popover(isPresented: $showDayPicker) {
-                    DatePicker("", selection: dayPickerBinding, in: ...Repository.logicalDay(Date()),
-                               displayedComponents: [.date])
-                        .datePickerStyle(.graphical)
-                        .labelsHidden()
-                        .padding(12)
-                        .frame(minWidth: 320, minHeight: 360)
-                        .liquidPopoverAdaptation()
-                }
-                // Long names fade beneath the trailing controls while an expanded transient control
-                // participates in layout and pushes its preceding siblings left. The reserve is the
-                // cluster's MEASURED width, not a constant: a constant is only ever right for the exact
-                // set of controls it was written against, and this row has already gained one (Customize,
-                // #1207) since. Measuring also means the fade tracks the sync capsule as it expands,
-                // which is the push-left behaviour rather than a separate approximation of it.
-                .headerTrailingControlFadeMask(reserving: headerControlsWidth)
-                HStack(spacing: headerClusterSpacing) {
-                    // Profile pic (the one set in Settings) → opens Settings, matching the classic Today.
-                    Button { showSettings = true } label: {
-                        Color.clear.frame(
-                            width: NoopMetrics.compactControlSize,
-                            height: NoopMetrics.compactControlSize
-                        )
-                    }
-                    .nativeLiquidGlassHeaderButton()
-                    .overlay {
-                        GeometryReader { proxy in
-                            let diameter = min(proxy.size.width, proxy.size.height)
-                            ProfileAvatarView(imageData: profile.avatarImageData, size: diameter)
-                                .frame(width: diameter, height: diameter)
-                                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                        }
-                        .allowsHitTesting(false)
-                    }
-                    .nativeLiquidGlassPhotoFinish()
-                    .accessibilityLabel("Profile and settings")
-                    LiquidAddButton()
-                    LiquidBatteryButton()
-                    // One entry point for section order/visibility and both nested card editors.
-                    Button { customizationDestination = .today } label: {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(StrandPalette.textPrimary)
-                            .frame(
-                                width: NoopMetrics.compactControlSize,
-                                height: NoopMetrics.compactControlSize
-                            )
-                    }
-                    .nativeLiquidGlassHeaderButton()
-                    .accessibilityLabel("Customize Today")
-                }
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: HeaderControlsWidthKey.self,
-                            value: proxy.size.width
-                        )
-                    }
-                )
-                .zIndex(1)
-            }
-            .onPreferenceChange(HeaderControlsWidthKey.self) { measured in
-                // Ignore sub-point churn so a rounding wobble cannot re-render the mask every frame.
-                guard measured > 0, abs(measured - headerControlsWidth) > 0.5 else { return }
-                headerControlsWidth = measured
-            }
+            // With the sticky header on, the row is drawn pinned above the scroll view instead (see `body`).
+            if !stickyHeader { headerRow }
             // Subtle NOOP wordmark in the sky between header and hero. Perfectly centred (a letter row has
             // no trailing tracking gap the way `Text(...).tracking()` does), with a tap easter egg.
             // #today-layout: the hero + Start-session row moved OUT of the scene into the reorderable
@@ -708,6 +644,107 @@ struct LiquidTodayView: View {
             LiquidWordmark()
                 .padding(.top, 30)
                 .padding(.bottom, 10)
+        }
+    }
+
+    /// The day title and the trailing controls. Part of the scrolling sky normally; pinned over the scroll
+    /// view, on a fading scrim, when the sticky-header experiment is on.
+    private var headerRow: some View {
+        ZStack(alignment: .topTrailing) {
+            Button { showDayPicker = true } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(dayTitle)
+                        .font(StrandFont.rounded(28))
+                        .foregroundStyle(StrandPalette.textPrimary)
+                        .shadow(color: .black.opacity(0.4), radius: 10, y: 1)
+                    // Weekday and date on separate lines. One line had to hold "Wednesday, 1 October"
+                    // AND any trailing chip, inside a width already reduced by the header controls'
+                    // fade reserve — so the chip was the first thing clipped. Two short lines fit
+                    // where one long one could not.
+                    if let weekdayLine {
+                        Text(weekdayLine)
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                            .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                    }
+                    HStack(spacing: NoopMetrics.space2) {
+                        Text(dateOnlyLine)
+                            .font(StrandFont.caption)
+                            .foregroundStyle(StrandPalette.textSecondary)
+                            .shadow(color: .black.opacity(0.35), radius: 8, y: 1)
+                        DevBuildBadge()
+                    }
+                }
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(dayTitle). Tap to pick a day, swipe to change day.")
+            .popover(isPresented: $showDayPicker) {
+                DatePicker("", selection: dayPickerBinding, in: ...Repository.logicalDay(Date()),
+                           displayedComponents: [.date])
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding(12)
+                    .frame(minWidth: 320, minHeight: 360)
+                    .liquidPopoverAdaptation()
+            }
+            // Long names fade beneath the trailing controls while an expanded transient control
+            // participates in layout and pushes its preceding siblings left. The reserve is the
+            // cluster's MEASURED width, not a constant: a constant is only ever right for the exact
+            // set of controls it was written against, and this row has already gained one (Customize,
+            // #1207) since. Measuring also means the fade tracks the sync capsule as it expands,
+            // which is the push-left behaviour rather than a separate approximation of it.
+            .headerTrailingControlFadeMask(reserving: headerControlsWidth)
+            HStack(spacing: headerClusterSpacing) {
+                // Profile pic (the one set in Settings) → opens Settings, matching the classic Today.
+                Button { showSettings = true } label: {
+                    Color.clear.frame(
+                        width: NoopMetrics.compactControlSize,
+                        height: NoopMetrics.compactControlSize
+                    )
+                }
+                .nativeLiquidGlassHeaderButton()
+                .overlay {
+                    GeometryReader { proxy in
+                        let diameter = min(proxy.size.width, proxy.size.height)
+                        ProfileAvatarView(imageData: profile.avatarImageData, size: diameter)
+                            .frame(width: diameter, height: diameter)
+                            .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    }
+                    .allowsHitTesting(false)
+                }
+                .nativeLiquidGlassPhotoFinish()
+                .accessibilityLabel("Profile and settings")
+                LiquidAddButton()
+                LiquidBatteryButton()
+                // One entry point for section order/visibility and both nested card editors.
+                Button { customizationDestination = .today } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(StrandPalette.textPrimary)
+                        .frame(
+                            width: NoopMetrics.compactControlSize,
+                            height: NoopMetrics.compactControlSize
+                        )
+                }
+                .nativeLiquidGlassHeaderButton()
+                .accessibilityLabel("Customize Today")
+            }
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: HeaderControlsWidthKey.self,
+                        value: proxy.size.width
+                    )
+                }
+            )
+            .zIndex(1)
+        }
+        .onPreferenceChange(HeaderControlsWidthKey.self) { measured in
+            // Ignore sub-point churn so a rounding wobble cannot re-render the mask every frame.
+            guard measured > 0, abs(measured - headerControlsWidth) > 0.5 else { return }
+            headerControlsWidth = measured
         }
     }
 

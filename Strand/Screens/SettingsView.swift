@@ -2029,6 +2029,7 @@ struct SettingsView: View {
     /// Opt-in liquid Today redesign (default ON in this build). Off falls back to the
     /// classic dashboard immediately, no rebuild. Same data either way.
     @AppStorage("noop.liquidTodayEnabled") private var liquidTodayEnabled = true
+    @AppStorage(LiquidTodayView.stickyHeaderKey) private var liquidTodayStickyHeader = false
     private var liquidTodayCard: some View {
         SettingsSection(
             icon: "drop.fill",
@@ -2047,6 +2048,19 @@ struct SettingsView: View {
                     .font(StrandFont.caption)
                     .foregroundStyle(StrandPalette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
+                if liquidTodayEnabled {
+                    Toggle(isOn: $liquidTodayStickyHeader) {
+                        Text("Sticky header")
+                            .font(StrandFont.subhead)
+                            .foregroundStyle(StrandPalette.textPrimary)
+                    }
+                    .toggleStyle(.switch)
+                    .tint(StrandPalette.accent)
+                    Text("Keeps the day title and controls pinned at the top while you scroll, over a scrim that fades in as content passes under them.")
+                        .font(StrandFont.caption)
+                        .foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
