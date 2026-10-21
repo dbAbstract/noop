@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1064",
-          "buildVersion": "1064",
-          "date": "2026-10-20",
-          "localizedDescription": "Show a described meal as one card with one Log tap",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1064.ipa",
-          "size": 17304399,
+          "version": "12.1.0.1065",
+          "buildVersion": "1065",
+          "date": "2026-10-21",
+          "localizedDescription": "Keep diet out of Coach when food logging is off",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1065.ipa",
+          "size": 17305605,
           "minOSVersion": "17.0"
         }
       ]
