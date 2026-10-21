@@ -298,6 +298,9 @@ extension AICoachEngine {
             dataConsent: dataConsent, onDeviceSignals: includeOnDeviceSignals,
             hasCustomPrompt: hasCustomSystemPrompt,
             customPromptMissesFoodProtocol: customPromptMissesFoodProtocol,
-            errorText: errorText, isSending: sending, requestDiagnostics: lastRequestDiagnostics, generatedAt: Date())
+            errorText: errorText, isSending: sending,
+            // The Coach screen's dropped-frame counts ride along, so a "feels slow" export carries numbers.
+            requestDiagnostics: lastRequestDiagnostics.merging(HitchMeter.shared.summary) { a, _ in a },
+            generatedAt: Date())
     }
 }
