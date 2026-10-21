@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1069",
-          "buildVersion": "1069",
+          "version": "12.1.0.1070",
+          "buildVersion": "1070",
           "date": "2026-10-21",
-          "localizedDescription": "Measure dropped frames on the Coach screen, carried in the export",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1069.ipa",
-          "size": 17337970,
+          "localizedDescription": "Ignore background gaps in the Coach hitch meter",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1070.ipa",
+          "size": 17338609,
           "minOSVersion": "17.0"
         }
       ]
