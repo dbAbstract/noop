@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1067",
-          "buildVersion": "1067",
+          "version": "12.1.0.1068",
+          "buildVersion": "1068",
           "date": "2026-10-21",
-          "localizedDescription": "Polish Today and Coach chrome: DIET overline, edgeless scrim, sticky header",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1067.ipa",
-          "size": 17319164,
+          "localizedDescription": "Compact the sticky Today header as content scrolls under it",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1068.ipa",
+          "size": 17330754,
           "minOSVersion": "17.0"
         }
       ]
