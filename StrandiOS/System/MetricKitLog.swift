@@ -85,9 +85,11 @@ final class MetricKitLog: NSObject, MXMetricManagerSubscriber {
             if let s = c.signal { bits.append("signal \(s)") }
             if let r = c.terminationReason, !r.isEmpty { bits.append(r) }
             out.append(line("crash", bits.isEmpty ? "no detail" : bits.joined(separator: ", ")))
+            out += MetricKitLine.stack(c.callStackTree.jsonRepresentation())
         }
         for h in p.hangDiagnostics ?? [] {
             out.append(line("hang", MetricKitLine.duration(h.hangDuration.converted(to: .seconds).value)))
+            out += MetricKitLine.stack(h.callStackTree.jsonRepresentation())
         }
         for c in p.cpuExceptionDiagnostics ?? [] {
             out.append(line("CPU exception", "\(MetricKitLine.duration(c.totalCPUTime.converted(to: .seconds).value)) "

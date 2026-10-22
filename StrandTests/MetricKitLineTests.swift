@@ -46,4 +46,43 @@ final class MetricKitLineTests: XCTestCase {
         XCTAssertEqual(MetricKitLine.bytes(180 * 1_048_576), "180 MB")
         XCTAssertEqual(MetricKitLine.bytes(1_536 * 1_048_576), "1.5 GB")
     }
+
+    // MARK: Call stacks (fork)
+
+    private func frame(_ name: String, _ offset: Int, samples: Int = 1, _ sub: [[String: Any]] = []) -> [String: Any] {
+        ["binaryName": name, "binaryUUID": "UUID-\(name)", "offsetIntoBinaryTextSegment": offset,
+         "sampleCount": samples, "address": 0, "subFrames": sub]
+    }
+
+    private func tree(_ stacks: [[String: Any]]) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["callStackPerThread": true, "callStacks": stacks])
+    }
+
+    /// A watchdog kill names the attributed thread, and the main thread (first) when that is another one.
+    func testACrashStackNamesTheAttributedThreadAndTheMainThread() {
+        let main: [String: Any] = ["threadAttributed": false,
+                                   "callStackRootFrames": [frame("NOOP", 0x1a2b, [frame("SwiftUI", 0x40, [frame("UIKitCore", 0x8)])])]]
+        let other: [String: Any] = ["threadAttributed": true, "callStackRootFrames": [frame("libsystem_kernel.dylib", 0x10)]]
+        XCTAssertEqual(MetricKitLine.stack(tree([main, other])), [
+            "MetricKit stack (thread 1, attributed): libsystem_kernel.dylib+0x10",
+            "MetricKit stack (thread 0): NOOP+0x1a2b < SwiftUI+0x40 < UIKitCore+0x8",
+            "MetricKit binaries: NOOP UUID-NOOP, SwiftUI UUID-SwiftUI, UIKitCore UUID-UIKitCore, "
+                + "libsystem_kernel.dylib UUID-libsystem_kernel.dylib",
+        ])
+    }
+
+    /// An aggregated hang tree branches; the path most samples took is the one that was stuck.
+    func testAHangTreeFollowsTheHeaviestPathAndCapsTheFrames() {
+        let stack: [String: Any] = ["threadAttributed": true, "callStackRootFrames": [
+            frame("NOOP", 1, samples: 2),
+            frame("NOOP", 2, samples: 9, [frame("NOOP", 3, samples: 1), frame("GRDB", 4, samples: 8, [frame("libsqlite3.dylib", 5, samples: 8)])]),
+        ]]
+        XCTAssertEqual(MetricKitLine.stack(tree([stack]), limit: 2).first,
+                       "MetricKit stack (thread 0, attributed): NOOP+0x2 < GRDB+0x4 … 1 more")
+    }
+
+    func testAnUnreadableTreeAddsNoLines() {
+        XCTAssertEqual(MetricKitLine.stack(Data("nope".utf8)), [])
+        XCTAssertEqual(MetricKitLine.stack(tree([])), [])
+    }
 }
