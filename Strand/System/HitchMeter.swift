@@ -36,6 +36,8 @@ final class HitchMeter {
     }
 
     private(set) var stats: [Scenario: Stats] = [:]
+    /// Which transcript the screen was drawn with ("uikit" or "swiftui"), so two exports compare like with like.
+    var transcript: String?
     private var active: Scenario?
     private var lastTimestamp: CFTimeInterval = 0
     private var transient: Task<Void, Never>?
@@ -74,6 +76,7 @@ final class HitchMeter {
                                                       s.frames, s.hitches, percent, s.hitchSeconds * 1000,
                                                       s.worstSeconds * 1000, s.seconds)
         }
+        if !out.isEmpty, let transcript { out["perf.transcript"] = transcript }
         return out
     }
 

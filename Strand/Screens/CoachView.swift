@@ -3,46 +3,6 @@ import MarkdownUI
 import StrandDesign
 import StrandAnalytics
 
-/// Skip parsing unchanged replies when streaming or repository updates redraw the transcript.
-private struct CoachMarkdown: View, Equatable {
-    let text: String
-    let messageId: UUID
-
-    var body: some View {
-        Markdown(CoachMarkdownCache.shared.content(for: text, messageId: messageId))
-            .markdownTheme(.strand)
-    }
-
-    static func == (lhs: CoachMarkdown, rhs: CoachMarkdown) -> Bool {
-        lhs.text == rhs.text && lhs.messageId == rhs.messageId
-    }
-}
-
-/// The assistant bubble while its reply streams in. Observes only `StreamingReply`, so the Coach screen is not
-/// re-evaluated for every chunk; drawn exactly like a finished assistant bubble (same Markdown theme, inset
-/// and width), and replaced by the finished one when the reply lands. No context menu until then.
-private struct StreamingBubble: View {
-    @ObservedObject var reply: StreamingReply
-
-    var body: some View {
-        let text = reply.text
-        let visible = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let id = reply.messageId, !visible.isEmpty, visible != "Today's brief" {
-            HStack {
-                CoachMarkdown(text: text, messageId: id)
-                    .equatable()
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, NoopMetrics.chatTextInset)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: 620, alignment: .leading)
-                Spacer(minLength: 8)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Coach is replying: \(text)")
-        }
-    }
-}
-
 /// Reduce scroll geometry to the one fact the UI needs before publishing a preference.
 private struct CoachEndSentinelKey: PreferenceKey {
     static var defaultValue = true
@@ -67,6 +27,7 @@ struct CoachView: View {
     /// K8: used by "Save to Journal" — saves the coach advice as a journal entry with the text
     /// in the notes field, so it appears alongside other journal entries in Insights.
     @EnvironmentObject var repo: Repository
+    @EnvironmentObject private var profile: ProfileStore
 
     @State private var composerReset = 0
     /// Pending key text in the setup card (never persisted here, handed to `setKey`).
@@ -91,10 +52,18 @@ struct CoachView: View {
     /// Changes only when the transcript crosses the jump-button visibility threshold.
     @State private var isAtEnd = true
     @State private var didScrollToInitialMessage = false
+    #if os(iOS)
+    /// FORK-LOCAL: the UIKit transcript, on unless turned off in Coach settings.
+    @AppStorage(CoachView.uikitTranscriptKey) private var uikitTranscriptOn = true
+    @State private var transcriptHandle = CoachTranscriptHandle()
+    #endif
     @State private var coachEntryReady = false
     /// Name for the transcript's coordinate space, so the sentinel reports a position relative to the
     /// scroll view rather than to the screen.
     private static let transcriptSpace = "coach.transcript"
+
+    /// FORK-LOCAL: whether iOS draws the transcript with UIKit (`CoachTranscriptCollection`), default on.
+    static let uikitTranscriptKey = "noop.coachUIKitTranscript"
 
     /// Sentinel tag for the "Custom…" entry in the model Picker.
     private let customModelTag = "__custom__"
@@ -624,7 +593,10 @@ struct CoachView: View {
         // Insets keep the fixed chrome outside the transcript's scrollable area.
         transcript
         // Dropped-frame counts by scenario, for the Coach export (`HitchMeter`).
-        .onAppear { HitchMeter.shared.screenAppeared() }
+        .onAppear {
+            HitchMeter.shared.transcript = usesUIKitTranscript ? "uikit" : "swiftui"
+            HitchMeter.shared.screenAppeared()
+        }
         .onDisappear { HitchMeter.shared.screenDisappeared() }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: NoopMetrics.space2) {
@@ -677,9 +649,13 @@ struct CoachView: View {
             if coach.messages.isEmpty {
                 ScrollView {
                     if coach.sending || !coach.initialEntryResolved {
-                        typingIndicator.padding(NoopMetrics.screenHPadding)
+                        CoachTypingIndicator().padding(NoopMetrics.screenHPadding)
                     } else { emptyTranscript.padding(NoopMetrics.screenHPadding) }
                 }
+            } else if usesUIKitTranscript {
+                #if os(iOS)
+                uikitTranscript
+                #endif
             } else {
                 GeometryReader { viewport in
                     ScrollViewReader { proxy in
@@ -690,57 +666,12 @@ struct CoachView: View {
                             // block of text; the gap is what separates who is speaking now that the
                             // assistant's side has no card to do it.
                             LazyVStack(alignment: .leading, spacing: 20) {
-                                ForEach(Array(coach.messages.enumerated()), id: \.element.id) { index, message in
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        // A coach conversation runs the length of a day, so two adjacent
-                                        // bubbles can be six hours apart with nothing on screen to say so.
-                                        // The threshold lives in `ChatTimeSeparator`, tested, because "is
-                                        // this a pause or a break" is the entire design of the feature.
-                                        if ChatTimeSeparator.needsSeparator(
-                                            previousSentAt: index > 0 ? coach.messages[index - 1].sentAt : nil,
-                                            sentAt: message.sentAt) {
-                                            timeSeparator(message.sentAt)
-                                        }
-                                        // An assistant turn with no text yet is the STREAMING PLACEHOLDER —
-                                        // `send` appends it so deltas have somewhere to land. Drawn, it is an
-                                        // empty bubble sitting above "Coach is thinking…", which is two things
-                                        // on screen for one state. The typing indicator IS its visual.
-                                        //
-                                        // Also catches a reply that is nothing but an action block mid-stream:
-                                        // `displayText` hides the JSON, so the bubble would be empty for real.
-                                        if message.id == coach.streaming.messageId, isEmptyPlaceholder(message) {
-                                            // The reply arriving now: its own view observes the stream, so a
-                                            // chunk redraws this bubble and nothing else on the screen.
-                                            StreamingBubble(reply: coach.streaming)
-                                        } else if !isEmptyPlaceholder(message) {
-                                            bubble(message)
-                                        }
-                                        // The proposal card rides UNDER its own turn rather than inside the
-                                        // bubble: it is not prose, it is not selectable, and it must not be
-                                        // swept up by the bubble's Copy/Share context menu.
-                                        // Two or more foods in one turn are one meal: a single card with one
-                                        // Log tap (items can still be dropped). Everything else — and a lone
-                                        // food — keeps its own card.
-                                        let meal = message.proposals.filter(MealProposalCard.groups)
-                                        if meal.count >= 2 {
-                                            MealProposalCard(proposals: meal, messageId: message.id)
-                                                .frame(maxWidth: 560, alignment: .leading)
-                                        }
-                                        ForEach(message.proposals.filter { meal.count < 2 || !MealProposalCard.groups($0) }) { proposal in
-                                            FoodProposalCard(proposal: proposal, messageId: message.id)
-                                                .frame(maxWidth: 560, alignment: .leading)
-                                        }
-                                        if let proposal = message.dietProposal {
-                                            CoachDietProposalCard(proposal: proposal, messageId: message.id)
-                                        }
-                                        if let failure = message.failure {
-                                            retryRow(message: message, reason: failure)
-                                        }
-                                    }
-                                    .id(message.id)
+                                ForEach(transcriptRows, id: \.message.id) { row in
+                                    transcriptRow(row)
+                                    .id(row.message.id)
                                 }
                                 if coach.sending {
-                                    typingIndicator.id("typing")
+                                    CoachTypingIndicator().id("typing")
                                 }
                                 // Observe the jump threshold during deceleration without publishing each scroll position.
                                 GeometryReader { geo in
@@ -774,36 +705,7 @@ struct CoachView: View {
                         //
                         // The outer geometry reader supplies the viewport used by the sentinel.
                         .overlay(alignment: .bottom) {
-                            GeometryReader { _ in
-                                // A tolerance, not an equality: the sentinel sits a point or two past the
-                                // fold at rest, and a strict test would pin the button on permanently.
-                                let atEnd = isAtEnd
-                                VStack {
-                                    Spacer(minLength: 0)
-                                    if !atEnd {
-                                        Button {
-                                            scrollToEnd(proxy)
-                                        } label: {
-                                            Image(systemName: "arrow.down")
-                                                .font(.system(size: 15, weight: .semibold))
-                                                .foregroundStyle(StrandPalette.textPrimary)
-                                                .frame(width: 34, height: 34)
-                                                .contentShape(Circle())
-                                        }
-                                        .nativeLiquidGlassButtonChrome(fallback: {
-                                            Circle().fill(StrandPalette.surfaceRaised)
-                                        })
-                                        .padding(.bottom, 10)
-                                        .transition(.scale.combined(with: .opacity))
-                                        .accessibilityLabel(String(localized: "Jump to newest"))
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                                // The animation lives on the BUTTON, not on the scroll view. Applied to the
-                                // scroll view it attached an implicit animation to that whole subtree, so
-                                // every change inside the transcript had to go through it.
-                                .animation(.snappy(duration: 0.18), value: atEnd)
-                            }
+                            jumpToNewestButton { scrollToEnd(proxy) }
                         }
                         .onPreferenceChange(CoachEndSentinelKey.self) { atEnd in
                             if isAtEnd != atEnd { isAtEnd = atEnd }
@@ -869,33 +771,97 @@ struct CoachView: View {
         }
     }
 
-    /// A failed turn carries its own reason and its own retry.
+    /// The jump-to-newest control, shown only when the newest message is NOT on screen.
     ///
-    /// Attached to the MESSAGE rather than shown as a banner, because a banner says "something failed" and
-    /// this says "this one did, press here". The alternative the user was left with was copying their own
-    /// text out and pasting it back — which they did five times, each one re-sending a longer history.
-    @ViewBuilder
-    private func retryRow(message: ChatMessage, reason: String) -> some View {
-        HStack {
-            Spacer(minLength: 48)
-            VStack(alignment: .trailing, spacing: 6) {
-                Text(reason)
-                    .font(StrandFont.caption)
-                    .foregroundStyle(StrandPalette.statusWarning)
-                    .multilineTextAlignment(.trailing)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    Task { await coach.retry(messageId: message.id) }
-                } label: {
-                    Label("Send again", systemImage: "arrow.clockwise")
-                        .font(StrandFont.footnote)
+    /// Always-visible would be a button that does nothing most of the time; this is a long transcript where
+    /// the proposal cards awaiting a tap are always at the bottom. Both transcripts overlay it at their
+    /// bottom edge and feed `isAtEnd`.
+    private func jumpToNewestButton(_ jump: @escaping () -> Void) -> some View {
+        GeometryReader { _ in
+            // A tolerance, not an equality: the end sits a point or two past the fold at rest, and a strict
+            // test would pin the button on permanently.
+            let atEnd = isAtEnd
+            VStack {
+                Spacer(minLength: 0)
+                if !atEnd {
+                    Button(action: jump) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(StrandPalette.textPrimary)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Circle())
+                    }
+                    .nativeLiquidGlassButtonChrome(fallback: {
+                        Circle().fill(StrandPalette.surfaceRaised)
+                    })
+                    .padding(.bottom, 10)
+                    .transition(.scale.combined(with: .opacity))
+                    .accessibilityLabel(String(localized: "Jump to newest"))
                 }
-                .buttonStyle(NoopButtonStyle(.secondary))
-                .disabled(coach.sending)
             }
-            .frame(maxWidth: 520, alignment: .trailing)
+            .frame(maxWidth: .infinity)
+            // The animation lives on the BUTTON, not on the scroll view. Applied to the scroll view it
+            // attached an implicit animation to that whole subtree, so every change inside the transcript
+            // had to go through it.
+            .animation(.snappy(duration: 0.18), value: atEnd)
         }
     }
+
+    /// One row per turn, for whichever transcript is on screen.
+    private var transcriptRows: [CoachTranscriptRow.Model] {
+        CoachTranscriptRow.Model.rows(coach.messages, streamingId: coach.streaming.messageId, sending: coach.sending)
+    }
+
+    private func transcriptRow(_ row: CoachTranscriptRow.Model) -> CoachTranscriptRow {
+        CoachTranscriptRow(model: row, streaming: coach.streaming,
+                           onRetry: { id in Task { await coach.retry(messageId: id) } },
+                           onSaveAdvice: saveAdvice)
+    }
+
+    /// iOS draws the transcript with a UIKit collection view unless the Coach setting turns it off; macOS
+    /// always uses the SwiftUI one.
+    private var usesUIKitTranscript: Bool {
+        #if os(iOS)
+        uikitTranscriptOn
+        #else
+        false
+        #endif
+    }
+
+    #if os(iOS)
+    /// The UIKit transcript (`CoachTranscriptCollection`). Spans up under the header so the chat dims beneath
+    /// its scrim as the SwiftUI one does; the top safe area (status bar plus header) becomes its content
+    /// inset. The bottom edge is not ignored, so it still ends at the composer and shrinks with the keyboard.
+    private var uikitTranscript: some View {
+        GeometryReader { geo in
+            CoachTranscriptUIKit(
+                rows: transcriptRows,
+                typing: coach.sending,
+                topInset: geo.safeAreaInsets.top,
+                handle: transcriptHandle,
+                coach: coach, repo: repo, profile: profile,
+                makeRow: { transcriptRow($0) },
+                onAtEndChange: { atEnd in if isAtEnd != atEnd { isAtEnd = atEnd } },
+                onTap: { composerFocused = false })
+            .ignoresSafeArea(.container, edges: .top)
+        }
+        .overlay(alignment: .bottom) {
+            jumpToNewestButton { transcriptHandle.scrollToEnd(animated: true) }
+        }
+        .onChangeCompat(of: composerFocused) { focused in
+            guard focused else { return }
+            HitchMeter.shared.keyboardRising()
+            transcriptHandle.scrollToEnd(animated: true)
+        }
+        .onChangeCompat(of: coach.messages.count) { _ in
+            transcriptHandle.scrollToEnd(animated: true)
+        }
+        .onChangeCompat(of: coach.sending) { sending in
+            HitchMeter.shared.streaming(sending)
+            transcriptHandle.scrollToEnd(animated: true)
+        }
+    }
+    #endif
 
     private var emptyTranscript: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -908,143 +874,6 @@ struct CoachView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-    }
-
-    /// An assistant turn with nothing to show yet.
-    ///
-    /// Only ever true for the ASSISTANT: a user bubble with empty text cannot happen (`send` rejects a
-    /// blank question), and treating one as a placeholder would silently hide a real turn.
-    private func isEmptyPlaceholder(_ message: ChatMessage) -> Bool {
-        message.role == .assistant
-            && (message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || message.text == "Today's brief\n\n")
-    }
-
-    @ViewBuilder
-    private func bubble(_ message: ChatMessage) -> some View {
-        switch message.role {
-        case .user:
-            HStack {
-                Spacer(minLength: 48)
-                Text(message.text)
-                    .font(StrandFont.body)
-                    .foregroundStyle(StrandPalette.surfaceBase)
-                    .textSelection(.enabled)
-                    .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(StrandPalette.accent, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .frame(maxWidth: 520, alignment: .trailing)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("You said: \(message.text)")
-        case .assistant:
-            // LLM replies arrive as Markdown (bold, lists, headings, tables), rendered with the
-            // chat-bubble-sized Strand theme. User bubbles stay verbatim `Text` so typed `*`/`#` never
-            // turn into surprise formatting.
-            //
-            // NO SURFACE BEHIND THE REPLY. The assistant's text is the bulk of this screen and it used to
-            // sit on a frosted card, which cost it horizontal room, boxed long answers into a column
-            // inside a column, and spent the app's strongest visual signal on the one thing that is
-            // always present. Flat on the page, it reads as prose.
-            //
-            // Authorship survives the change because the USER's bubble keeps its fill: one side tinted
-            // and the other bare is all the distinction a two-party transcript needs, and it is the
-            // arrangement every chat app converges on.
-            //
-            // The LOG / NEW FOOD proposal cards keep their surface, and that contrast now MEANS
-            // something — a card is where there is a decision to make, rather than decoration prose
-            // happened to be wearing too.
-            //
-            // K8: context menu (long-press / right-click) with Copy, Share, and Save actions.
-            HStack {
-                CoachMarkdown(text: message.text, messageId: message.id)
-                    .equatable()
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                    // Padding with NO background, which looks like a no-op and is not. The context menu
-                    // draws its long-press highlight around this view's bounds, and with the bounds flush
-                    // to the glyphs the rounded highlight clipped the corner characters. The card used to
-                    // supply this inset; removing the card removed it too.
-                    .padding(.horizontal, NoopMetrics.chatTextInset)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: 620, alignment: .leading)
-                    // K8: Copy / Share / Save context menu on assistant replies.
-                    .contextMenu {
-                        Button {
-                            #if os(macOS)
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(message.text, forType: .string)
-                            #else
-                            UIPasteboard.general.string = message.text
-                            #endif
-                        } label: {
-                            Label("Copy", systemImage: "doc.on.doc")
-                        }
-                        ShareLink(item: message.text) {
-                            Label("Share", systemImage: "square.and.arrow.up")
-                        }
-                        Button {
-                            saveAdvice(message.text)
-                        } label: {
-                            Label("Save to Journal", systemImage: "square.and.pencil")
-                        }
-                    }
-                // Narrower than the user side's 48: with no fill there is no shape to break up, so the
-                // text may use nearly the full column, which is the point of removing the card.
-                Spacer(minLength: 8)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Coach said: \(message.text)")
-        }
-    }
-
-    /// A centred date/time divider between turns separated by a real gap.
-    ///
-    /// Spells the day out only when it is not today: "10:54" alone is unambiguous within a day and the
-    /// word "Today" in front of every divider in a one-day conversation is noise. Yesterday is named;
-    /// anything older carries its date, because by the third day back a weekday name is no easier to
-    /// place than the date itself.
-    private func timeSeparator(_ sentAt: Int) -> some View {
-        let date = Date(timeIntervalSince1970: TimeInterval(sentAt))
-        let bucket = ChatTimeSeparator.dayBucket(
-            messageEpochDay: Self.localEpochDay(date),
-            todayEpochDay: Self.localEpochDay(Date()))
-        let time = date.formatted(date: .omitted, time: .shortened)
-        let text: String
-        switch bucket {
-        case .today:     text = time
-        case .yesterday: text = String(localized: "Yesterday") + " " + time
-        case .earlier:   text = date.formatted(date: .abbreviated, time: .omitted) + " " + time
-        }
-        return HStack {
-            Spacer(minLength: 0)
-            Text(text)
-                .font(StrandFont.micro)
-                .foregroundStyle(StrandPalette.textTertiary)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
-        .accessibilityLabel(text)
-    }
-
-    /// Local days since 1970, matching the app's day-key convention.
-    static func localEpochDay(_ date: Date) -> Int {
-        let start = Calendar.current.startOfDay(for: date)
-        return Int((start.timeIntervalSince1970 / 86_400).rounded(.down))
-    }
-
-    private var typingIndicator: some View {
-        HStack(spacing: NoopMetrics.space2) {
-            Text("Coach is thinking…")
-                .font(StrandFont.caption)
-                .foregroundStyle(StrandPalette.textSecondary)
-            ProgressView().controlSize(.small).tint(StrandPalette.accent)
-        }
-        .padding(.horizontal, NoopMetrics.chatTextInset)
-        .padding(.vertical, NoopMetrics.space2)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Coach is thinking")
     }
 
     private func errorBanner(_ message: String) -> some View {
