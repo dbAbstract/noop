@@ -408,9 +408,6 @@ jobs:
           BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
           SIZE="$(/usr/bin/stat -f%z "$IPA")"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${IPA}"
-          # The triggering commit's subject is the most honest "what changed" available here; a generic
-          # line would tell the reader on the phone nothing.
-          SUBJECT="$(git log -1 --pretty=%s)"
           rm -rf srccheck
 
           # REBASE BEFORE EDITING, NOT AFTER. This used to edit, commit, then `pull --rebase`, which
@@ -428,12 +425,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
 
-          jq --arg v "$SHORT" --arg b "$BUILD" --arg d "$(date -u +%Y-%m-%d)" --arg desc "$SUBJECT" \
-             --arg url "$URL" --argjson size "$SIZE" --arg bundle "$BUNDLE" \
+          # Patch notes: every PR merged since the build the source last described, which SideStore shows as
+          # "What's new" with the build number at the top, so the phone says which build it is offering and
+          # what is in it. The built commit is recorded beside the version (`commit`, a key SideStore ignores)
+          # so the next build knows where these notes stop. Read AFTER the rebase, so it is the published file.
+          PREV="$(jq -r '.apps[0].versions[0].commit // empty' altstore-fork.json)"
+          NOTES="$(Tools/fork-build-notes.sh "$BUILD" "$GITHUB_SHA" "$PREV")"
+          echo "$NOTES"
+
+          jq --arg v "$SHORT" --arg b "$BUILD" --arg d "$(date -u +%Y-%m-%d)" --arg desc "$NOTES" \
+             --arg url "$URL" --argjson size "$SIZE" --arg bundle "$BUNDLE" --arg commit "$GITHUB_SHA" \
              '.apps[0].bundleIdentifier = $bundle
               | .apps[0].versions = [{
                   version: $v, buildVersion: $b, date: $d, localizedDescription: $desc,
-                  downloadURL: $url, size: $size, minOSVersion: "17.0"
+                  downloadURL: $url, size: $size, minOSVersion: "17.0", commit: $commit
                 }]' altstore-fork.json > altstore-fork.json.tmp
           mv altstore-fork.json.tmp altstore-fork.json
 
