@@ -348,6 +348,7 @@ jobs:
           zip -qr "$IPA" Payload
           gh release upload "${{ needs.meta.outputs.tag }}" "$IPA" --repo "$GITHUB_REPOSITORY" --clobber
           echo "IPA_NAME=$IPA" >> "$GITHUB_ENV"
+          echo "IOS_BUILD=$BUILD" >> "$GITHUB_ENV"
 
           # Unique names mean assets accumulate on the rolling release, which the old overwrite-in-place
           # naming never had to think about. Keep the newest few so a phone pinned to a slightly stale
@@ -362,6 +363,22 @@ jobs:
               echo "pruning old asset: $a"
               gh release delete-asset "${{ needs.meta.outputs.tag }}" "$a" --repo "$GITHUB_REPOSITORY" --yes || true
             done
+
+      # FORK-LOCAL: keep this build's debug symbols. The shipped binary is stripped (see the build step), so a
+      # MetricKit call stack from the phone (`MetricKitLine.stack`) is only `NOOP+0x…` offsets; `atos` turns them
+      # into function names against the dSYM of the SAME build, which nothing kept before. An Actions artifact
+      # rather than a release asset: it is for whoever debugs, not for installing.
+      - name: Zip dSYMs
+        run: |
+          cd build/dd/Build/Products/Release-iphoneos
+          ls -d *.dSYM
+          zip -qr "$GITHUB_WORKSPACE/NOOP-ios-dSYM-${IOS_BUILD}.zip" *.dSYM
+      - name: Keep dSYMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: NOOP-ios-dSYM-${{ env.IOS_BUILD }}
+          path: NOOP-ios-dSYM-${{ env.IOS_BUILD }}.zip
+          retention-days: 90
 
       # FORK-LOCAL: point the SideStore source at the build that was just published, and commit it back to
       # the serve branch. Without this the loop stops one step short — the IPA is new, the JSON still
