@@ -20,13 +20,14 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1073",
-          "buildVersion": "1073",
+          "version": "12.1.0.1074",
+          "buildVersion": "1074",
           "date": "2026-10-22",
-          "localizedDescription": "Merge pull request #14 from dbAbstract/coach/uikit-transcript",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1073.ipa",
-          "size": 17372171,
-          "minOSVersion": "17.0"
+          "localizedDescription": "Build 1074 (8cf43c00)\n\n• SideStore: per-build patch notes (#15)",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1074.ipa",
+          "size": 17372113,
+          "minOSVersion": "17.0",
+          "commit": "8cf43c00531b97360e6ba077188aeb3461f32b12"
         }
       ]
     }
