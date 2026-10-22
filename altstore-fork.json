@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1070",
-          "buildVersion": "1070",
-          "date": "2026-10-21",
-          "localizedDescription": "Ignore background gaps in the Coach hitch meter",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1070.ipa",
-          "size": 17338609,
+          "version": "12.1.0.1071",
+          "buildVersion": "1071",
+          "date": "2026-10-22",
+          "localizedDescription": "Merge pull request #12 from dbAbstract/sync/upstream-2026-10-22",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1071.ipa",
+          "size": 17341351,
           "minOSVersion": "17.0"
         }
       ]
