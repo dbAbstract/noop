@@ -20,12 +20,12 @@
       "screenshotURLs": [],
       "versions": [
         {
-          "version": "12.1.0.1071",
-          "buildVersion": "1071",
+          "version": "12.1.0.1072",
+          "buildVersion": "1072",
           "date": "2026-10-22",
-          "localizedDescription": "Merge pull request #12 from dbAbstract/sync/upstream-2026-10-22",
-          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1071.ipa",
-          "size": 17341351,
+          "localizedDescription": "Merge pull request #13 from dbAbstract/diag/metrickit-stacks",
+          "downloadURL": "https://github.com/dbAbstract/noop/releases/download/testing-latest/NOOP-ios-unsigned-v12.1.0-1072.ipa",
+          "size": 17344538,
           "minOSVersion": "17.0"
         }
       ]
