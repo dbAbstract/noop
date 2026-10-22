@@ -30,6 +30,9 @@ struct CoachSettingsView: View {
     /// The coach-instructions editor, collapsed until asked for.
     @State private var promptExpanded: Bool = false
     @State private var promptDraft: String = ""
+    #if os(iOS)
+    @AppStorage(CoachView.uikitTranscriptKey) private var uikitTranscript = true
+    #endif
 
     var body: some View {
         // Literals, not String(localized:): `title`/`subtitle` are LocalizedStringKey, which converts
@@ -59,6 +62,9 @@ struct CoachSettingsView: View {
             if coach.dataConsent && coach.provider == .gemini { multimodalChartBar }
             systemPromptBar
             morningBriefBar
+            #if os(iOS)
+            transcriptBar
+            #endif
         }
         // Opening this screen is the moment a stale catalogue is worth refreshing: a key exists here by
         // definition, and the picker above is about to be read. Rate-limited and silent on failure.
@@ -230,6 +236,33 @@ struct CoachSettingsView: View {
             }
         }
     }
+
+    #if os(iOS)
+    /// FORK-LOCAL: which engine draws the chat. On by default; off is the SwiftUI transcript it replaced, kept so
+    /// the two can be compared (a Coach export records which one was in use) or the old one restored.
+    private var transcriptBar: some View {
+        NoopCard(padding: 14, tint: StrandPalette.chargeColor) {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .foregroundStyle(uikitTranscript ? StrandPalette.accent : StrandPalette.textTertiary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Fast chat scrolling")
+                        .font(StrandFont.subhead).foregroundStyle(StrandPalette.textPrimary)
+                    Text(uikitTranscript
+                         ? "On: the conversation is drawn with UIKit, which reuses rows and keeps the newest message in view."
+                         : "Off: the original SwiftUI conversation view.")
+                        .font(StrandFont.footnote).foregroundStyle(StrandPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Toggle("", isOn: $uikitTranscript)
+                    .labelsHidden().toggleStyle(.switch).tint(StrandPalette.accent)
+                    .accessibilityLabel("Fast chat scrolling")
+            }
+        }
+    }
+    #endif
 
     /// Editable system prompt, the instructions that frame the coach. Collapsed by default; expanding
     /// reveals a TextEditor bound to the engine (edits persist to UserDefaults and take effect on the
